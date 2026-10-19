@@ -4,6 +4,33 @@ All notable changes to openHLSW are listed here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## [v0.1.2] - 2026-10-19
+
+### Added
+- Players (Half-Life 1 and Source): right-click → Copy now offers **Steam ID**
+  (`STEAM_X:Y:Z`), **Steam ID3** (`[U:1:N]`), **Steam ID64** and the **Steam Profile URL**,
+  converted from whatever form the server reports in `status`; bots and LAN players have no
+  Steam account, so those entries are greyed out.
+- Players: right-click → **Open Steam Profile** opens the player's Steam community page in
+  the default browser.
+- Windows: the `.msi` is now a real setup wizard – welcome, license, **choice of the
+  installation folder** (updates offer the previous folder), progress and a **finish page**
+  with "Launch openHLSW" instead of closing silently.
+
+### Changed
+- Tahoma, the font of the original HLSW, on every system: Windows uses its own, Linux and
+  macOS use Microsoft's Tahoma if installed and otherwise the bundled Tahoma clone of the
+  Wine project (LGPL-2.1-or-later, shown under ? → License).
+- Cleaner layout: text in input fields is vertically centred, list rows and headers are a
+  little taller, more room above the menu bar and at the window edges.
+- GitHub release notes contain only the changes of the released version instead of the
+  whole changelog.
+
+### Fixed
+- Sharper, evenly spaced text: fonts use light hinting (horizontal strokes and baseline on
+  whole pixels, letter widths as designed) instead of full hinting, which squeezed the
+  letters, left uneven gaps ("Rem ove") and made the text look blurry.
+
 ## [v0.1.1] - 2026-10-19
 
 ### Fixed
@@ -174,7 +201,7 @@ written in Rust
   stored in `%APPDATA%\openHLSW\config.json` (Linux: `~/.config/openHLSW/config.json`).
 - `openhlsw-cli`: query Source, GoldSrc and GameSpy 2 servers and run RCON commands from
   the command line.
-- GitHub Actions build (`ci/github-build.yml`, to be copied to `.github/workflows/build.yml`),
+- GitHub Actions build (`.github/workflows/build.yml`),
   run for every `v*` tag: Linux `.tar.gz`, `.deb`, `.rpm` and Windows `.zip`, `.msi` for
   x86, x86_64 and arm64, macOS `.dmg` and `.tar.gz` for Apple silicon (app bundle with icon,
   ad-hoc signed); a GitHub release with all packages; Linux desktop entry and icon.

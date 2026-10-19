@@ -1,6 +1,6 @@
 [package]
 name = "openhlsw"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"
@@ -30,7 +30,7 @@ ico = "0.6"
 png = "0.18"
 winresource = "0.1"
 
-# --- Linux packages (built by the GitHub workflow ci/github-build.yml) --------------------------
+# --- Linux packages (built by the GitHub workflow .github/workflows/build.yml) ----------------
 
 [package.metadata.deb]
 maintainer = "openHLSW contributors <https://github.com/DennisPohlmann/openHLSW>"
