@@ -1,10 +1,17 @@
 <!--
-  MSI installer for openHLSW (WiX Toolset v5).
+  MSI installer for openHLSW (WiX Toolset v5) with the classic setup wizard:
+  Welcome → License (GPL-3.0) → Destination folder (changeable) → Install → Finished
+  (with "Launch openHLSW").
+
   Built by the GitHub workflow (.github/workflows/build.yml):
-    wix build -arch x64|x86|arm64 -d Version=0.1.0 -d RepoDir=<repository> -d BinDir=<dir with the .exe files>
+    wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
+    wix build -arch x64|x86|arm64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext
+              -d Version=0.1.0 -d RepoDir=<repository> -d BinDir=<dir with the .exe files>
+              -d LicenseRtf=<LICENSE converted to .rtf>
               packaging/windows/openhlsw.wxs -o openhlsw.msi
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="openHLSW"
            Manufacturer="openHLSW"
            Version="$(var.Version)"
@@ -15,7 +22,17 @@
 
     <Icon Id="AppIcon" SourceFile="$(var.RepoDir)\assets\openhlsw.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/DennisPohlmann/openHLSW" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/DennisPohlmann/openHLSW/issues" />
+
+    <!-- Updates offer the folder of the previous installation. -->
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch Id="PreviousInstallFolder"
+                      Root="HKLM"
+                      Key="Software\openHLSW"
+                      Name="InstallDir"
+                      Type="raw" />
+    </Property>
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="openHLSW" />
@@ -24,7 +41,7 @@
 
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component>
-        <File Source="$(var.BinDir)\openhlsw.exe" KeyPath="yes">
+        <File Id="OpenHlswExe" Source="$(var.BinDir)\openhlsw.exe" KeyPath="yes">
           <Shortcut Name="openHLSW"
                     Description="Game server browser and RCON admin tool"
                     Directory="ProgramMenuFolder"
@@ -48,10 +65,38 @@
       <Component>
         <File Source="$(var.RepoDir)\assets\games\NOTICE.txt" Name="GAME-ICONS-NOTICE.txt" />
       </Component>
+      <Component>
+        <RegistryValue Root="HKLM"
+                       Key="Software\openHLSW"
+                       Name="InstallDir"
+                       Type="string"
+                       Value="[INSTALLFOLDER]"
+                       KeyPath="yes" />
+      </Component>
     </ComponentGroup>
 
     <Feature Id="Main" Title="openHLSW">
       <ComponentGroupRef Id="AppFiles" />
     </Feature>
+
+    <!-- Setup wizard: welcome, license, destination folder, progress, finished. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+
+    <!-- "Launch openHLSW" check box on the last page (ticked by default). -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch openHLSW" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#OpenHlswExe]" />
+    <CustomAction Id="LaunchApplication"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixShellExec"
+                  Impersonate="yes" />
+    <UI>
+      <Publish Dialog="ExitDialog"
+               Control="Finish"
+               Event="DoAction"
+               Value="LaunchApplication"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+    </UI>
   </Package>
 </Wix>

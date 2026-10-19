@@ -136,16 +136,31 @@ jobs:
           Remove-Item -Recurse -Force $dir
 
       - name: Install WiX
-        run: dotnet tool install --global wix --version 5.0.2
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
+
+      - name: License page for the installer (LICENSE as .rtf)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          $text = Get-Content LICENSE -Raw
+          $text = $text -replace '\\', '\\' -replace '\{', '\{' -replace '\}', '\}'
+          $text = $text -replace "`r?`n", "\par`r`n"
+          "{\rtf1\ansi\deff0{\fonttbl{\f0 Tahoma;}}\fs16`r`n$text}" |
+            Set-Content -Encoding ascii build\License.rtf
 
       - name: Package .msi
         shell: pwsh
         run: |
           $name = "openhlsw-v${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
           wix build -arch ${{ matrix.wix_arch }} `
+            -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext `
             -d Version=${{ steps.version.outputs.version }} `
             -d RepoDir="$PWD" `
             -d BinDir="$PWD\target\${{ matrix.target }}\release" `
+            -d LicenseRtf="$PWD\build\License.rtf" `
             packaging\windows\openhlsw.wxs -o "dist\$name.msi"
           Remove-Item -Force -ErrorAction SilentlyContinue "dist\$name.wixpdb"
 
