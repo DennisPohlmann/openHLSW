@@ -157,7 +157,8 @@ creates a GitHub release with all packages; the release text is that version's s
 `CHANGELOG.md`. Linux builds use [cross](https://github.com/cross-rs/cross) (old glibc,
 so the binaries run on older distributions too), `.deb` / `.rpm` are made with `cargo-deb` /
 `cargo-generate-rpm` (settings in `Cargo.toml`), the `.msi` with WiX 5
-(`packaging/windows/openhlsw.wxs`). The Linux packages install a desktop entry and icon
+(`packaging/windows/openhlsw.wxs`) as a setup wizard: license, choice of the installation
+folder, progress and a finish page with "Launch openHLSW". The Linux packages install a desktop entry and icon
 (`packaging/linux/`). The macOS app bundle (`packaging/macos/Info.plist`) is only ad-hoc
 signed, not notarized: on the first start, right-click the app → Open (or run
 `xattr -dr com.apple.quarantine /Applications/openHLSW.app`).
@@ -238,6 +239,8 @@ openHLSW is free software: you can redistribute it and/or modify it under the te
 The game icons in `assets/games/` are **not** covered by this license: they show logos and
 artwork of the respective games, all rights belong to their owners, see
 [`assets/games/NOTICE.txt`](assets/games/NOTICE.txt). The country flags are public domain
-(`assets/FLAGS-LICENSE.txt`). openHLSW is not affiliated with the original HLSW or with any
+(`assets/FLAGS-LICENSE.txt`). On Linux and macOS without Microsoft's Tahoma, openHLSW uses
+the bundled Tahoma clone of the Wine project (LGPL-2.1-or-later, `assets/fonts/NOTICE.txt`).
+openHLSW is not affiliated with the original HLSW or with any
 game publisher. The license and these notices are also shown in the program under
 **? → License**.

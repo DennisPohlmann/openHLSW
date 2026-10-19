@@ -49,8 +49,8 @@ const OFFLINE_AFTER: Duration = Duration::from_secs(10);
 const CHAT_MAX_LINES: usize = 1000;
 /// Samples kept for the ping graph (about two minutes at the default interval).
 const PING_HISTORY: usize = 300;
-const ROW_HEIGHT: f32 = 15.0;
-const HEADER_HEIGHT: f32 = 18.0;
+const ROW_HEIGHT: f32 = 17.0;
+const HEADER_HEIGHT: f32 = 20.0;
 
 // --------------------------------------------------------------------------
 // Server state
@@ -780,6 +780,8 @@ const COPYRIGHT_HOLDER: &str = "the openHLSW contributors";
 const LICENSE_TEXT: &str = include_str!("../LICENSE");
 const GAME_ICONS_NOTICE: &str = include_str!("../assets/games/NOTICE.txt");
 const FLAGS_NOTICE: &str = include_str!("../assets/FLAGS-LICENSE.txt");
+const FONT_NOTICE: &str = include_str!("../assets/fonts/NOTICE.txt");
+const LGPL_TEXT: &str = include_str!("../assets/fonts/LGPL-2.1.txt");
 
 /// Joins the hard-wrapped lines of a notice file into paragraphs that wrap with the window.
 fn unwrap_paragraphs(text: &str) -> String {
@@ -811,12 +813,20 @@ fn license_view(ui: &mut Ui) {
         ui.heading("Country flags");
         ui.label(unwrap_paragraphs(FLAGS_NOTICE));
         ui.add_space(8.0);
+        ui.heading("Tahoma font (Wine)");
+        ui.label(unwrap_paragraphs(FONT_NOTICE));
+        egui::CollapsingHeader::new("GNU Lesser General Public License v2.1 (full text)")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(RichText::new(LGPL_TEXT).monospace().size(11.0));
+            });
+        ui.add_space(8.0);
         ui.heading("Other components");
         ui.label(
             "openHLSW is built with Rust libraries (egui/eframe, serde and others) under the MIT \
              and/or Apache-2.0 licenses, and egui's bundled fonts (Ubuntu Font Licence, \
-             SIL Open Font License, MIT). Text is otherwise drawn with the fonts installed on \
-             your system. Server locations come from ip-api.com.",
+             SIL Open Font License, MIT). Fallback fonts for other scripts come from your \
+             system. Server locations come from ip-api.com.",
         );
         ui.add_space(8.0);
         egui::CollapsingHeader::new("GNU General Public License v3.0 (full text)")
@@ -2327,9 +2337,16 @@ impl eframe::App for OpenHlswApp {
 
         let chrome = Frame::new()
             .fill(p.window)
-            .inner_margin(Margin::symmetric(4, 2));
+            .inner_margin(Margin::symmetric(6, 3));
+        // A little more room above the menu, so it does not stick to the window edge.
+        let menu_frame = Frame::new().fill(p.window).inner_margin(Margin {
+            left: 6,
+            right: 6,
+            top: 5,
+            bottom: 3,
+        });
         egui::Panel::top("menu")
-            .frame(chrome)
+            .frame(menu_frame)
             .show(ui, |ui| self.menu_bar(ui, &mut actions));
         egui::Panel::top("toolbar")
             .frame(chrome)
@@ -2727,6 +2744,7 @@ impl OpenHlswApp {
             let input = ui
                 .add(
                     TextEdit::singleline(&mut self.address_input)
+                        .align(egui::Align2::LEFT_CENTER)
                         .hint_text(hint)
                         .desired_width(ui.available_width() - 40.0),
                 )
@@ -2779,6 +2797,7 @@ impl OpenHlswApp {
                 ui.label("Password:");
                 ui.add(
                     TextEdit::singleline(&mut self.join_password)
+                        .align(egui::Align2::LEFT_CENTER)
                         .password(self.hide_join_password)
                         .desired_width(110.0),
                 )
@@ -2792,6 +2811,7 @@ impl OpenHlswApp {
                 let search = ui
                     .add(
                         TextEdit::singleline(&mut self.search)
+                            .align(egui::Align2::LEFT_CENTER)
                             .hint_text("Name, map, address")
                             .desired_width(160.0),
                     )
@@ -3011,7 +3031,7 @@ impl OpenHlswApp {
                     .spacing([8.0, 5.0])
                     .show(ui, |ui| {
                         let pw = ui.add(
-                            TextEdit::singleline(&mut s.rcon_password)
+                            TextEdit::singleline(&mut s.rcon_password).align(egui::Align2::LEFT_CENTER)
                                 .password(*hide)
                                 .desired_width(105.0),
                         ).with_edit_menu();
@@ -3203,6 +3223,7 @@ impl OpenHlswApp {
                     let resp = ui
                         .add(
                             TextEdit::singleline(input)
+                                .align(egui::Align2::LEFT_CENTER)
                                 .id_salt("console_input_field")
                                 .font(TextStyle::Monospace)
                                 .hint_text(
@@ -3470,7 +3491,11 @@ impl OpenHlswApp {
                     Dialog::NewList(name) | Dialog::ListProperties(name) => {
                         ui.label("Name:");
                         let r = ui
-                            .add(TextEdit::singleline(name).desired_width(340.0))
+                            .add(
+                                TextEdit::singleline(name)
+                                    .align(egui::Align2::LEFT_CENTER)
+                                    .desired_width(340.0),
+                            )
                             .with_edit_menu();
                         // Check Enter before re-requesting focus (request_focus resets lost_focus).
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
@@ -3514,19 +3539,24 @@ impl OpenHlswApp {
                             .show(ui, |ui| {
                                 ui.label("IP/Port:");
                                 ui.add(
-                                    TextEdit::singleline(&mut draft.address).desired_width(260.0),
+                                    TextEdit::singleline(&mut draft.address)
+                                        .align(egui::Align2::LEFT_CENTER)
+                                        .desired_width(260.0),
                                 )
                                 .with_edit_menu();
                                 ui.end_row();
                                 ui.label("Comment:");
                                 ui.add(
-                                    TextEdit::singleline(&mut draft.comment).desired_width(260.0),
+                                    TextEdit::singleline(&mut draft.comment)
+                                        .align(egui::Align2::LEFT_CENTER)
+                                        .desired_width(260.0),
                                 )
                                 .with_edit_menu();
                                 ui.end_row();
                                 ui.label("Rcon password:");
                                 ui.add(
                                     TextEdit::singleline(&mut draft.rcon_password)
+                                        .align(egui::Align2::LEFT_CENTER)
                                         .password(true)
                                         .desired_width(260.0),
                                 )
@@ -3550,7 +3580,11 @@ impl OpenHlswApp {
                     Dialog::SetId(id, text) => {
                         ui.label("New ID (position in the server list):");
                         let r = ui
-                            .add(TextEdit::singleline(text).desired_width(120.0))
+                            .add(
+                                TextEdit::singleline(text)
+                                    .align(egui::Align2::LEFT_CENTER)
+                                    .desired_width(120.0),
+                            )
                             .with_edit_menu();
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                         if !enter {
@@ -3568,7 +3602,11 @@ impl OpenHlswApp {
                     Dialog::ChangeRule(id, key, value) => {
                         ui.label(format!("New value of {key}:"));
                         let r = ui
-                            .add(TextEdit::singleline(value).desired_width(340.0))
+                            .add(
+                                TextEdit::singleline(value)
+                                    .align(egui::Align2::LEFT_CENTER)
+                                    .desired_width(340.0),
+                            )
                             .with_edit_menu();
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                         if !enter {
@@ -3630,6 +3668,7 @@ impl OpenHlswApp {
                     let resp = ui
                         .add(
                             TextEdit::singleline(input)
+                                .align(egui::Align2::LEFT_CENTER)
                                 .id_salt("chat_input_field")
                                 .hint_text("Message to all players (rcon say)")
                                 .desired_width((ui.available_width() - 60.0).max(100.0)),
@@ -3727,6 +3766,7 @@ impl OpenHlswApp {
                 ui.label("Steam ID or IP:");
                 ui.add(
                     TextEdit::singleline(ban_input)
+                        .align(egui::Align2::LEFT_CENTER)
                         .hint_text("STEAM_1:0:123 / 1.2.3.4")
                         .desired_width(230.0),
                 )
@@ -3966,7 +4006,11 @@ impl OpenHlswApp {
                 .resizable(false)
                 .show(ctx, |ui| {
                     let r = ui
-                        .add(TextEdit::singleline(text).desired_width(260.0))
+                        .add(
+                            TextEdit::singleline(text)
+                                .align(egui::Align2::LEFT_CENTER)
+                                .desired_width(260.0),
+                        )
                         .with_edit_menu();
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                     if !enter {
@@ -5026,6 +5070,7 @@ fn info_panel(
                     let r = ui
                         .add(
                             TextEdit::singleline(&mut s.comment)
+                                .align(egui::Align2::LEFT_CENTER)
                                 .id_salt("info_comment")
                                 .hint_text("add a note for this server")
                                 .desired_width(ui.available_width() - 8.0),
@@ -5054,6 +5099,7 @@ fn trace_view(
         let r = ui
             .add(
                 TextEdit::singleline(&mut trace.target)
+                    .align(egui::Align2::LEFT_CENTER)
                     .hint_text("IP address or host name")
                     .desired_width(ui.available_width() - 90.0),
             )
@@ -5585,6 +5631,7 @@ fn filter_bar(
         ui.label("Filter:");
         ui.add(
             TextEdit::singleline(text)
+                .align(egui::Align2::LEFT_CENTER)
                 .id_salt(id)
                 .hint_text(hint)
                 .desired_width(200.0),

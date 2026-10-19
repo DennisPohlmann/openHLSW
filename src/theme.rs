@@ -258,7 +258,7 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         ]
         .into();
         let s = &mut style.spacing;
-        s.item_spacing = egui::vec2(6.0, 3.0);
+        s.item_spacing = egui::vec2(6.0, 4.0);
         s.button_padding = egui::vec2(6.0, 2.0);
         s.interact_size = egui::vec2(20.0, 18.0);
         s.icon_width = 13.0;
@@ -270,8 +270,6 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     });
 }
 
-/// Uses Tahoma (HLSW's font) if the system has it, otherwise a close substitute.
-/// The bundled egui fonts stay as fallbacks for missing glyphs.
 /// Light hinting (like FreeType's "slight" and ClearType's vertical-only grid fitting):
 /// horizontal strokes and the baseline snap to whole pixels, so small UI text is sharp,
 /// while glyph widths stay as designed. Full hinting also squeezes glyphs horizontally,
@@ -290,6 +288,13 @@ fn crisp(mut data: FontData) -> FontData {
     data
 }
 
+/// Tahoma clone from the Wine project (LGPL-2.1-or-later, see `assets/fonts/NOTICE.txt`).
+#[cfg(not(windows))]
+static BUNDLED_TAHOMA: &[u8] = include_bytes!("../assets/fonts/tahoma.ttf");
+
+/// Uses Tahoma (HLSW's font): the system's on Windows and where installed, otherwise the
+/// bundled Wine Tahoma.
+/// The bundled egui fonts stay as fallbacks for missing glyphs.
 pub fn install_fonts(ctx: &egui::Context) {
     let candidates: &[&str] = if cfg!(windows) {
         &[
@@ -300,19 +305,12 @@ pub fn install_fonts(ctx: &egui::Context) {
         &[
             "/System/Library/Fonts/Supplemental/Tahoma.ttf",
             "/Library/Fonts/Tahoma.ttf",
-            "/System/Library/Fonts/Supplemental/Verdana.ttf",
-            "/System/Library/Fonts/Supplemental/Arial.ttf",
         ]
     } else {
         &[
             "/usr/share/fonts/truetype/msttcorefonts/tahoma.ttf",
             "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
             "/usr/share/fonts/TTF/tahoma.ttf",
-            "/usr/share/wine/fonts/tahoma.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         ]
     };
     let mono_candidates: &[&str] = if cfg!(windows) {
@@ -396,6 +394,20 @@ pub fn install_fonts(ctx: &egui::Context) {
         candidates,
         FontFamily::Proportional,
     );
+    // No Microsoft Tahoma installed (Linux, some macOS): use the bundled Tahoma clone from
+    // the Wine project, so the UI looks like HLSW everywhere.
+    #[cfg(not(windows))]
+    if !fonts.font_data.contains_key("system-ui") {
+        fonts.font_data.insert(
+            "system-ui".to_owned(),
+            crisp(FontData::from_static(BUNDLED_TAHOMA)).into(),
+        );
+        fonts
+            .families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .insert(0, "system-ui".to_owned());
+    }
     add_first(
         &mut fonts,
         "system-mono",

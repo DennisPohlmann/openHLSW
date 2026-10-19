@@ -1,0 +1,13 @@
+tahoma.ttf in this folder is the Tahoma replacement font of the Wine project
+(https://www.winehq.org), taken from Wine 9.0 (wine/fonts/tahoma.sfd).
+
+Copyright (c) Wine project authors (see https://gitlab.winehq.org/wine/wine/-/blob/master/AUTHORS)
+
+It is licensed under the GNU Lesser General Public License, version 2.1 or (at your
+option) any later version - see LGPL-2.1.txt in this folder. The font source is available
+from the Wine project at https://gitlab.winehq.org/wine/wine/-/tree/master/fonts.
+
+openHLSW embeds it on Linux and macOS when Microsoft's Tahoma is not installed, so the
+user interface looks like the original HLSW. On Windows the system's Tahoma is used.
+"Tahoma" is a trademark of Microsoft Corporation; this font is an independent
+re-implementation and is not affiliated with Microsoft.
