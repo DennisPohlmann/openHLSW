@@ -30,9 +30,11 @@ use openhlsw::address::ServerAddress;
 use openhlsw::steamid::SteamId;
 
 use crate::config::{self, Config, SavedList, SavedServer};
+use crate::discover;
 use crate::flags::Flags;
 use crate::game_icons::{self, GameIcons};
 use crate::geo::{self, GeoInfo};
+use crate::iddb::{self, IdDb, IdEntry, IdKind};
 use crate::settings::{
     DialogResult, OnConnect, Settings, SettingsDialog, SettingsTab, SoundEvent, StartupSelection,
 };
@@ -67,6 +69,8 @@ struct Server {
     id: ServerId,
     address: ServerAddress,
     comment: String,
+    /// Extra start parameters for Connect (Server Properties).
+    params: String,
     info: Option<ServerInfo>,
     ping: Option<u32>,
     /// Ping per info query, `None` for a timeout (drawn as a red bar).
@@ -101,6 +105,7 @@ struct Server {
     last_rules: Option<Instant>,
     bans: Vec<BanEntry>,
     ban_selected: Option<usize>,
+    ban_filter: String,
     maps: Vec<String>,
     map_selected: Option<String>,
     /// Shown in the Change Level tab ("Loading…", "42 maps", errors).
@@ -191,6 +196,7 @@ impl Server {
             id,
             address,
             comment: String::new(),
+            params: String::new(),
             info: None,
             ping: None,
             ping_history: VecDeque::new(),
@@ -216,6 +222,7 @@ impl Server {
             last_rules: None,
             bans: Vec::new(),
             ban_selected: None,
+            ban_filter: String::new(),
             maps: Vec::new(),
             map_selected: None,
             maps_status: String::new(),
@@ -637,8 +644,19 @@ enum Action {
     Add,
     Refresh(ServerId),
     RefreshAll,
+    /// Asks first ("Delete … ?"), then `RemoveConfirmed`.
     Remove(ServerId),
+    RemoveConfirmed(ServerId),
+    /// Connect with HLSW's checks (password needed, waiting for a free slot).
     Connect(ServerId),
+    /// Connect although the server wants a password and none is entered.
+    ConnectAnyway(ServerId),
+    /// Connect right away (no checks).
+    ConnectNow(ServerId),
+    /// Stop waiting for a free slot.
+    CancelWait,
+    /// Select the next server of the Find window (F3).
+    FindNext,
     CopyText(String),
     /// Opens a web page in the default browser.
     OpenUrl(String),
@@ -648,6 +666,13 @@ enum Action {
     DeleteList,
     RenameList(String),
     ImportList,
+    /// Server list: add the servers of Steam's favorites / history.
+    ImportSteamFavorites,
+    /// File → Advanced.
+    ClearGeoCache,
+    ResetAllPings,
+    /// Server list: broadcast for servers in the LAN.
+    LanSearch,
     ExportList,
     MultiInsert(String),
     MoveToList(ServerId, String),
@@ -670,13 +695,32 @@ enum Action {
     ClearConsole(ServerId),
     SwitchTab(Tab),
     FetchBans(ServerId),
+    /// Open the Global Player ID Database Editor, optionally on an ID.
+    OpenIdDb(Option<String>),
+    /// Player menu: add the player to the ID database, then set the type (`Some`) or open
+    /// the editor on it (`None`).
+    IdDbSetKind {
+        id: String,
+        name: String,
+        kind: Option<IdKind>,
+    },
+    IdDbImport,
+    IdDbExport,
+    /// Ban list: mark the banned IDs of the server as banned in the ID database.
+    BansToIdDb(ServerId),
+    /// Ban list: ban all IDs marked as banned in the ID database on the server.
+    BansFromIdDb(ServerId),
+    /// Rcon command on the ban list (write / reload), then re-fetch.
+    BanCommand(ServerId, &'static str),
     FetchMaps(ServerId),
     Unban(ServerId),
     AddBan {
         id: ServerId,
         ip: bool,
     },
+    /// Asks first ("Change level to …?"), then `ChangeLevelConfirmed`.
     ChangeLevel(ServerId, String),
+    ChangeLevelConfirmed(ServerId, String),
     Say(ServerId),
     StartLog {
         id: ServerId,
@@ -860,12 +904,24 @@ enum Dialog {
     SetId(ServerId, String),
     /// Server, cvar, new value.
     ChangeRule(ServerId, String, String),
+    /// Yes/No question before an action.
+    Confirm(Confirm),
+}
+
+/// Questions HLSW asks before doing something.
+#[derive(Clone)]
+enum Confirm {
+    DeleteServer(ServerId),
+    ChangeLevel(ServerId, String),
+    /// The server is password protected and no password is entered.
+    ConnectNoPassword(ServerId),
 }
 
 #[derive(Clone)]
 struct ServerPropsDraft {
     address: String,
     comment: String,
+    params: String,
     rcon_password: String,
     save_password: bool,
 }
@@ -904,6 +960,8 @@ pub struct OpenHlswApp {
     paused_for_game: bool,
     console_input_id: Option<egui::Id>,
     console_autoscroll: bool,
+    /// Find bar of the Rcon console.
+    console_find: Option<ConsoleFind>,
     address_input: String,
     add_game: AddGame,
     search: String,
@@ -930,6 +988,95 @@ pub struct OpenHlswApp {
     show_about: bool,
     show_license: bool,
     editing_comment: Option<(ServerId, String)>,
+    /// "Connecting..." window: server we wait on for a free slot, since when.
+    waiting: Option<(ServerId, Instant)>,
+    /// Filter properties window open.
+    show_filter: bool,
+    /// Find player / rule window.
+    find: Option<Find>,
+    /// Global Player ID Database.
+    iddb: IdDb,
+    iddb_dirty: bool,
+    iddb_saved: Instant,
+    /// Global Player ID Database Editor window.
+    iddb_editor: Option<IdDbEditor>,
+    /// Running LAN search.
+    lan_search: Option<Receiver<std::io::Result<Vec<SocketAddr>>>>,
+}
+
+/// Find bar of the Rcon console.
+#[derive(Default)]
+struct ConsoleFind {
+    text: String,
+    /// Current hit (index into all hits of the shown lines).
+    pos: usize,
+    focus: bool,
+    /// Scroll to the current hit on the next frame.
+    scroll: bool,
+}
+
+/// Byte ranges of `needle` in `hay`, ignoring ASCII case.
+fn find_ascii_ci(hay: &str, needle: &str) -> Vec<std::ops::Range<usize>> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let h = hay.to_ascii_lowercase();
+    let n = needle.to_ascii_lowercase();
+    h.match_indices(&n).map(|(i, m)| i..i + m.len()).collect()
+}
+
+/// State of the Global Player ID Database Editor.
+#[derive(Default)]
+struct IdDbEditor {
+    selected: Option<String>,
+    filter: String,
+    hide_auto: bool,
+    id: String,
+    kind: IdKind,
+    names: String,
+    comment: String,
+    banned: bool,
+    message: String,
+}
+
+impl IdDbEditor {
+    fn select(&mut self, db: &IdDb, id: &str) {
+        let key = iddb::normalize(id).unwrap_or_else(|| id.trim().to_string());
+        let e = db.entries.get(&key).cloned().unwrap_or_default();
+        self.selected = Some(key.clone());
+        self.id = key;
+        self.kind = e.kind;
+        self.names = e.names_text();
+        self.comment = e.comment;
+        self.banned = e.banned;
+        self.message.clear();
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FindKind {
+    Player,
+    Rule,
+}
+
+/// "Find → Player / Rule": searches all servers of the list.
+struct Find {
+    kind: FindKind,
+    text: String,
+    /// Index of the last selected result (F3 goes on from here).
+    pos: Option<usize>,
+    focus: bool,
+}
+
+impl Find {
+    fn new(kind: FindKind) -> Self {
+        Self {
+            kind,
+            text: String::new(),
+            pos: None,
+            focus: true,
+        }
+    }
 }
 
 impl OpenHlswApp {
@@ -984,6 +1131,7 @@ impl OpenHlswApp {
             paused_for_game: false,
             console_input_id: None,
             console_autoscroll: true,
+            console_find: None,
             address_input: String::new(),
             add_game: AddGame::default(),
             search: String::new(),
@@ -1013,6 +1161,14 @@ impl OpenHlswApp {
             show_about: false,
             show_license: false,
             editing_comment: None,
+            waiting: None,
+            show_filter: false,
+            iddb: IdDb::load(),
+            iddb_dirty: false,
+            iddb_saved: Instant::now(),
+            iddb_editor: None,
+            lan_search: None,
+            find: None,
         };
 
         app.add_saved_servers(&config.servers);
@@ -1044,6 +1200,7 @@ impl OpenHlswApp {
             let id = self.alloc_id();
             let mut server = Server::new(id, address, &self.notifier);
             server.comment = saved.comment.clone();
+            server.params = saved.params.clone();
             server.last_connected = saved.last_connected.clone();
             server.info = saved.info.clone();
             server.last_seen = saved
@@ -1067,6 +1224,7 @@ impl OpenHlswApp {
             address: s.address.to_string(),
             rcon_password: s.save_password.then(|| s.rcon_password.clone()),
             comment: s.comment.clone(),
+            params: s.params.clone(),
             last_connected: s.last_connected.clone(),
             info: s.info.clone(),
             last_seen: s.last_seen.map(|t| t.to_rfc3339()),
@@ -1332,14 +1490,33 @@ impl OpenHlswApp {
         apply_log_stats(&mut s.log_players, &line);
         s.append_console(&format!("L {line}"));
         let mut sound = joined.then_some(SoundEvent::PlayerJoin);
+        let mut admin_call = None;
         if let Some(chat) = chat {
             if chat.name != "Console" {
                 sound = Some(SoundEvent::IncomingMessage);
+                if self.settings.admin_notification
+                    && let Some(text) = chat.text.trim_start().strip_prefix('@')
+                {
+                    sound = Some(SoundEvent::Notification);
+                    admin_call = Some(tr!(
+                        "{server}: {name} wrote: {text}",
+                        server = s
+                            .info
+                            .as_ref()
+                            .map(|i| i.name.clone())
+                            .unwrap_or_else(|| s.address.to_string()),
+                        name = chat.name,
+                        text = text.trim()
+                    ));
+                }
             }
             s.chat.push(chat);
             if s.chat.len() > CHAT_MAX_LINES {
                 s.chat.remove(0);
             }
+        }
+        if let Some(msg) = admin_call {
+            self.status_message = msg;
         }
         if let Some(sound) = sound {
             self.play(sound);
@@ -1354,6 +1531,24 @@ impl OpenHlswApp {
 
     /// Joins a server: game executable from "My Games" or steam://connect, then the
     /// "On Connection" action and the user's "Execute applications".
+    /// Connect like HLSW: ask when the server wants a password and none is entered, and wait
+    /// for a free slot when the server is full ("Connecting..." window).
+    fn request_connect(&mut self, id: ServerId, password_checked: bool, ctx: &egui::Context) {
+        let Some(s) = self.server(id) else { return };
+        if let Some(info) = &s.info {
+            if !password_checked && info.passworded && self.join_password.trim().is_empty() {
+                self.dialog = Some(Dialog::Confirm(Confirm::ConnectNoPassword(id)));
+                return;
+            }
+            if info.max_players > 0 && s.humans() >= info.max_players && !s.is_offline() {
+                self.waiting = Some((id, Instant::now()));
+                self.status_message = tr!("Waiting for free slot").into();
+                return;
+            }
+        }
+        self.connect(id, ctx);
+    }
+
     fn connect(&mut self, id: ServerId, ctx: &egui::Context) {
         let Some(s) = self.server(id) else { return };
         if s.address.query_port.is_some() {
@@ -1367,6 +1562,7 @@ impl OpenHlswApp {
             self.status_message = match exe {
                 Some(exe) => {
                     let mut cmd = std::process::Command::new(&exe);
+                    cmd.args(self.start_params(&game, s));
                     if let Some(dir) = std::path::Path::new(&exe).parent() {
                         cmd.current_dir(dir);
                     }
@@ -1395,21 +1591,32 @@ impl OpenHlswApp {
         let (host, port) = (s.address.host.clone(), s.address.port.to_string());
         let app_id = s.info.as_ref().map(|i| i.real_app_id());
         let password = self.join_password.trim().to_string();
+        let game_def = app_id.and_then(crate::settings::game_by_app_id);
+        // My Games parameters, player name, server parameters.
+        let mut params = self.start_params(game_def.map(|g| g.name).unwrap_or(""), s);
+        let base_params = if password.is_empty() { 2 } else { 4 };
+        params.extend(["+connect".to_string(), addr.clone()]);
+        if !password.is_empty() {
+            params.extend(["+password".to_string(), password.clone()]);
+        }
 
-        let game_exe = app_id
-            .and_then(crate::settings::game_by_app_id)
+        let game_exe = game_def
             .and_then(|g| self.settings.game_paths.get(g.name))
             .filter(|p| !p.trim().is_empty());
         let result = if let Some(exe) = game_exe {
             let mut cmd = std::process::Command::new(exe.trim());
-            cmd.args(["+connect", &addr]);
-            if !password.is_empty() {
-                cmd.args(["+password", &password]);
-            }
+            cmd.args(&params);
             if let Some(dir) = std::path::Path::new(exe.trim()).parent() {
                 cmd.current_dir(dir);
             }
             cmd.spawn().map(|_| ())
+        } else if let Some(app_id) = app_id.filter(|_| params.len() > base_params) {
+            // Extra parameters or a player name: let Steam start the game with them.
+            let args: Vec<String> = params.iter().map(|a| quote_arg(a)).collect();
+            open_url(&format!(
+                "steam://run/{app_id}//{}/",
+                args.join(" ").replace(' ', "%20").replace('"', "%22")
+            ))
         } else {
             let mut url = format!("steam://connect/{addr}");
             if !password.is_empty() {
@@ -1455,7 +1662,47 @@ impl OpenHlswApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                 self.paused_for_game = true;
             }
+            OnConnect::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
+    }
+
+    /// Start parameters for Connect: the game's (My Games), the player name, the server's.
+    /// HLSW placeholders are replaced: `<SERVERIP>`, `<SERVERPORT>`, `<SERVERADDR>`,
+    /// `<CONNECTADDRPORT>`, `<PASSWORD>`, `<RCONPASSWORD>`, `<PLAYERNAME>`, `<RULE(cvar)>`.
+    fn start_params(&self, game: &str, s: &Server) -> Vec<String> {
+        let mut out = split_args(
+            self.settings
+                .game_params
+                .get(game)
+                .map_or("", |p| p.as_str()),
+        );
+        let name = self.settings.player_name.trim();
+        if !name.is_empty() {
+            out.extend(["+name".to_string(), name.to_string()]);
+        }
+        out.extend(split_args(&s.params));
+        let addr = s.address.to_string();
+        out.into_iter()
+            .map(|arg| {
+                let mut arg = arg
+                    .replace("<SERVERIP>", &s.address.host)
+                    .replace("<SERVERPORT>", &s.address.port.to_string())
+                    .replace("<SERVERADDR>", &addr)
+                    .replace("<CONNECTADDRPORT>", &addr)
+                    .replace("<PASSWORD>", self.join_password.trim())
+                    .replace("<RCONPASSWORD>", &s.rcon_password)
+                    .replace("<PLAYERNAME>", name);
+                while let Some(start) = arg.find("<RULE(") {
+                    let Some(end) = arg[start..].find(")>") else {
+                        break;
+                    };
+                    let key = arg[start + 6..start + end].to_string();
+                    let value = s.rule(&key).unwrap_or_default().to_string();
+                    arg.replace_range(start..start + end + 2, &value);
+                }
+                arg
+            })
+            .collect()
     }
 
     fn process_events(&mut self) {
@@ -1603,6 +1850,13 @@ impl OpenHlswApp {
                             RconTag::PlayerStatus => {
                                 s.console_add(LineKind::Response, &text, true);
                                 s.status_players = parse_status_players(&text);
+                                if self.settings.iddb_auto_add {
+                                    for pl in &s.status_players {
+                                        if self.iddb.observe(&pl.steam_id, &pl.name, true) {
+                                            self.iddb_dirty = true;
+                                        }
+                                    }
+                                }
                             }
                             RconTag::KickAllStatus => {
                                 let ids = parse_status_userids(&text);
@@ -1670,6 +1924,36 @@ impl OpenHlswApp {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.lan_search
+            && let Ok(result) = rx.try_recv()
+        {
+            self.lan_search = None;
+            match result {
+                Ok(found) => {
+                    let saved: Vec<SavedServer> = found
+                        .iter()
+                        .map(|a| SavedServer {
+                            address: a.to_string(),
+                            ..Default::default()
+                        })
+                        .collect();
+                    let added = self.add_saved_servers(&saved);
+                    self.status_message = tr!(
+                        "LAN search: {count} servers found, {added} added",
+                        count = found.len(),
+                        added = added
+                    );
+                    if added > 0 {
+                        self.last_list_refresh = None;
+                        self.save_config();
+                    }
+                }
+                Err(e) => self.status_message = tr!("LAN search failed: {e}", e = e),
+            }
+        }
+        if self.iddb_dirty && self.iddb_saved.elapsed() >= Duration::from_secs(10) {
+            self.save_iddb();
+        }
         if self.paused_for_game {
             if ctx.input(|i| i.viewport().minimized) == Some(true) {
                 return; // OnConnect::MinimizeNoTraffic
@@ -1694,6 +1978,26 @@ impl OpenHlswApp {
 
         self.lookup_locations();
         self.poll_player_status(ctx);
+
+        // "Connecting...": join as soon as the full server has a free slot.
+        if let Some((id, _)) = self.waiting {
+            match self.server(id) {
+                None => self.waiting = None,
+                Some(s) => {
+                    let free = s
+                        .info
+                        .as_ref()
+                        .is_some_and(|i| i.max_players == 0 || s.humans() < i.max_players);
+                    if free && !s.is_offline() {
+                        self.waiting = None;
+                        self.play(SoundEvent::Notification);
+                        self.connect(id, ctx);
+                    } else if due && !self.settings.auto_refresh {
+                        self.refresh(id, false);
+                    }
+                }
+            }
+        }
 
         let elapsed = self.traffic.at.elapsed();
         if elapsed >= Duration::from_secs(1) {
@@ -1781,6 +2085,11 @@ impl OpenHlswApp {
             Action::Refresh(id) => self.refresh(id, true),
             Action::RefreshAll => self.refresh_all(true),
             Action::Remove(id) => {
+                if self.server(id).is_some() {
+                    self.dialog = Some(Dialog::Confirm(Confirm::DeleteServer(id)));
+                }
+            }
+            Action::RemoveConfirmed(id) => {
                 let Some(idx) = self.index_of(id) else { return };
                 let removed = self.servers.remove(idx);
                 self.status_message = tr!("Removed {address}", address = removed.address);
@@ -1792,7 +2101,28 @@ impl OpenHlswApp {
                 }
                 self.save_config();
             }
-            Action::Connect(id) => self.connect(id, ctx),
+            Action::Connect(id) => self.request_connect(id, false, ctx),
+            Action::ConnectAnyway(id) => self.request_connect(id, true, ctx),
+            Action::ConnectNow(id) => {
+                self.waiting = None;
+                self.connect(id, ctx);
+            }
+            Action::CancelWait => self.waiting = None,
+            Action::FindNext => {
+                let results = self.find_results();
+                if let Some(find) = &mut self.find
+                    && !results.is_empty()
+                {
+                    let next = find.pos.map_or(0, |p| (p + 1) % results.len());
+                    find.pos = Some(next);
+                    let (id, _) = results[next];
+                    match find.kind {
+                        FindKind::Player => self.player_filter = find.text.clone(),
+                        FindKind::Rule => self.rules_filter = find.text.clone(),
+                    }
+                    self.apply(Action::Select(id), ctx);
+                }
+            }
             Action::CopyText(text) => {
                 self.status_message = tr!("Copied {text}", text = text);
                 ctx.copy_text(text);
@@ -1844,6 +2174,73 @@ impl OpenHlswApp {
                     self.list_name = name;
                     self.save_config();
                 }
+            }
+            Action::ClearGeoCache => {
+                self.geo.clear();
+                self.geo_pending.clear();
+                geo::save_cache(&self.geo);
+                self.status_message = tr!("Location and provider cache cleared").into();
+            }
+            Action::ResetAllPings => {
+                for s in &mut self.servers {
+                    s.ping_history.clear();
+                }
+            }
+            Action::ImportSteamFavorites => {
+                let mut files = discover::steam_history_files();
+                if files.is_empty() {
+                    let Some(path) = rfd::FileDialog::new()
+                        .set_title(tr!("Import Steam Favorites"))
+                        .set_file_name("serverbrowser_hist.vdf")
+                        .add_filter("serverbrowser_hist.vdf", &["vdf"])
+                        .pick_file()
+                    else {
+                        return;
+                    };
+                    files.push(path);
+                }
+                let mut servers = Vec::new();
+                for f in &files {
+                    match discover::read_server_browser(f) {
+                        Ok(list) => servers.extend(list.into_iter().filter(|s| s.favorite)),
+                        Err(e) => {
+                            self.status_message =
+                                tr!("Could not read {path}: {e}", path = f.display(), e = e);
+                            return;
+                        }
+                    }
+                }
+                let saved: Vec<SavedServer> = servers
+                    .iter()
+                    .map(|s| SavedServer {
+                        address: s.address.clone(),
+                        comment: s.name.clone(),
+                        ..Default::default()
+                    })
+                    .collect();
+                let added = self.add_saved_servers(&saved);
+                self.status_message = tr!(
+                    "Imported {added} of {count} Steam favorites",
+                    added = added,
+                    count = saved.len()
+                );
+                if added > 0 {
+                    self.last_list_refresh = None;
+                    self.save_config();
+                }
+            }
+            Action::LanSearch => {
+                if self.lan_search.is_some() {
+                    return;
+                }
+                let (tx, rx) = std::sync::mpsc::channel();
+                let ctx = ctx.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(discover::lan_search(Duration::from_millis(1500)));
+                    ctx.request_repaint();
+                });
+                self.lan_search = Some(rx);
+                self.status_message = tr!("Searching the LAN for servers…").into();
             }
             Action::ImportList => {
                 let Some(path) = rfd::FileDialog::new()
@@ -1961,6 +2358,7 @@ impl OpenHlswApp {
                 let address = ServerAddress::parse(&draft.address);
                 if let Some(s) = self.server_mut(id) {
                     s.comment = draft.comment.trim().to_string();
+                    s.params = draft.params.trim().to_string();
                     s.save_password = draft.save_password;
                     if s.rcon_password != draft.rcon_password {
                         s.rcon_password = draft.rcon_password;
@@ -2084,6 +2482,14 @@ impl OpenHlswApp {
                     }
                 }
             }
+            Action::BanCommand(id, cmd) => {
+                if let Some(s) = self.server(id) {
+                    s.configure_rcon();
+                    s.rcon.exec(cmd, RconTag::Silent);
+                    s.rcon.exec("listid", RconTag::BanIds);
+                    s.rcon.exec("listip", RconTag::BanIps);
+                }
+            }
             Action::FetchBans(id) => {
                 if let Some(s) = self.server(id) {
                     s.configure_rcon();
@@ -2121,6 +2527,106 @@ impl OpenHlswApp {
                     self.apply(Action::FetchBans(id), ctx);
                 }
             }
+            Action::OpenIdDb(id) => {
+                let ed = self.iddb_editor.get_or_insert_with(IdDbEditor::default);
+                if let Some(id) = id {
+                    ed.select(&self.iddb, &id);
+                }
+            }
+            Action::IdDbSetKind { id, name, kind } => {
+                let Some(key) = iddb::normalize(&id) else {
+                    return;
+                };
+                let e = self.iddb.entries.entry(key.clone()).or_default();
+                e.auto = false;
+                if !e.names.contains(&name) && !name.trim().is_empty() {
+                    e.names.push(name);
+                }
+                match kind {
+                    Some(k) => e.kind = k,
+                    None => self.apply(Action::OpenIdDb(Some(key)), ctx),
+                }
+                self.save_iddb();
+            }
+            Action::IdDbImport => {
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title(tr!("Import banned.cfg"))
+                    .add_filter("banned.cfg", &["cfg", "txt"])
+                    .add_filter(tr!("All files"), &["*"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                let msg = match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        let n = self.iddb.import_banned_cfg(&text);
+                        self.save_iddb();
+                        tr!("Imported {count} banned IDs", count = n)
+                    }
+                    Err(e) => tr!("Could not read {path}: {e}", path = path.display(), e = e),
+                };
+                if let Some(ed) = &mut self.iddb_editor {
+                    ed.message = msg.clone();
+                }
+                self.status_message = msg;
+            }
+            Action::IdDbExport => {
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title(tr!("Export banned.cfg"))
+                    .set_file_name("banned.cfg")
+                    .add_filter("banned.cfg", &["cfg"])
+                    .save_file()
+                else {
+                    return;
+                };
+                let msg = match std::fs::write(&path, self.iddb.export_banned_cfg()) {
+                    Ok(()) => tr!(
+                        "Exported {count} banned IDs to {path}",
+                        count = self.iddb.banned().count(),
+                        path = path.display()
+                    ),
+                    Err(e) => tr!("Could not write {path}: {e}", path = path.display(), e = e),
+                };
+                if let Some(ed) = &mut self.iddb_editor {
+                    ed.message = msg.clone();
+                }
+                self.status_message = msg;
+            }
+            Action::BansToIdDb(id) => {
+                let Some(s) = self.servers.iter().find(|s| s.id == id) else {
+                    return;
+                };
+                let mut count = 0;
+                for b in s.bans.iter().filter(|b| !b.is_ip) {
+                    if let Some(key) = iddb::normalize(&b.ident) {
+                        let e = self.iddb.entries.entry(key).or_default();
+                        if !e.banned {
+                            e.banned = true;
+                            count += 1;
+                        }
+                    }
+                }
+                self.save_iddb();
+                self.status_message = tr!(
+                    "Added {count} bans to the Global ID Database",
+                    count = count
+                );
+            }
+            Action::BansFromIdDb(id) => {
+                let ids: Vec<String> = self.iddb.banned().map(str::to_string).collect();
+                if let Some(s) = self.server(id) {
+                    s.configure_rcon();
+                    for i in &ids {
+                        s.rcon.exec(format!("banid 0 {i}"), RconTag::Silent);
+                    }
+                    s.rcon.exec("writeid", RconTag::Silent);
+                    self.status_message = tr!(
+                        "Banned {count} IDs from the Global ID Database",
+                        count = ids.len()
+                    );
+                    self.apply(Action::FetchBans(id), ctx);
+                }
+            }
             Action::AddBan { id, ip } => {
                 let ident = self.ban_input.trim().to_string();
                 if ident.is_empty() {
@@ -2142,6 +2648,9 @@ impl OpenHlswApp {
                 }
             }
             Action::ChangeLevel(id, map) => {
+                self.dialog = Some(Dialog::Confirm(Confirm::ChangeLevel(id, map)));
+            }
+            Action::ChangeLevelConfirmed(id, map) => {
                 let kick_all = self.settings.kick_all_on_map_change;
                 if let Some(s) = self.server_mut(id) {
                     if s.rcon_password.is_empty() {
@@ -2372,6 +2881,12 @@ impl OpenHlswApp {
 }
 
 impl eframe::App for OpenHlswApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.iddb_dirty {
+            self.save_iddb();
+        }
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.process_events();
         self.tick(&ui.ctx().clone());
@@ -2448,6 +2963,7 @@ impl eframe::App for OpenHlswApp {
                             flags: self.flags.as_ref(),
                             locations: &locations,
                             needle: &needle,
+                            filter: &self.settings.filter,
                             selected: self.selected,
                             connect_on_double_click: self.settings.connect_on_double_click,
                             keep_order_on_hover: self.settings.keep_order_on_hover,
@@ -2492,6 +3008,21 @@ impl OpenHlswApp {
             if i.key_pressed(Key::F5) {
                 actions.push(Action::RefreshAll);
             }
+            if i.key_pressed(Key::F3) {
+                if self.find.is_some() {
+                    actions.push(Action::FindNext);
+                } else if let Some(f) = &mut self.console_find {
+                    f.pos += 1;
+                    f.scroll = true;
+                }
+            }
+            if i.consume_shortcut(&KeyboardShortcut::new(
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                Key::F,
+            )) {
+                self.tab = Tab::Console;
+                self.console_find.get_or_insert_with(Default::default).focus = true;
+            }
             if i.key_pressed(Key::F6)
                 && let Some(id) = selected
             {
@@ -2511,6 +3042,9 @@ impl OpenHlswApp {
             }
             if i.consume_shortcut(&ctrl(Key::F)) {
                 actions.push(Action::FocusSearch);
+            }
+            if i.consume_shortcut(&ctrl(Key::W)) {
+                actions.push(Action::OpenIdDb(None));
             }
             if i.consume_shortcut(&ctrl(Key::M)) {
                 actions.push(Action::Minimize { no_traffic: true });
@@ -2561,6 +3095,7 @@ impl OpenHlswApp {
             ServerPropsDraft {
                 address: s.map(|s| s.address.to_string()).unwrap_or_default(),
                 comment: s.map(|s| s.comment.clone()).unwrap_or_default(),
+                params: s.map(|s| s.params.clone()).unwrap_or_default(),
                 rcon_password: s.map(|s| s.rcon_password.clone()).unwrap_or_default(),
                 save_password: s.is_some_and(|s| s.save_password),
             },
@@ -2576,6 +3111,14 @@ impl OpenHlswApp {
             .collect();
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button(tr!("File"), |ui| {
+                if ui
+                    .button(tr!("Global Player ID Database Editor...\tCtrl+W"))
+                    .clicked()
+                {
+                    actions.push(Action::OpenIdDb(None));
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button(tr!("View Connect Log")).clicked() {
                     actions.push(Action::OpenDialog(Dialog::ConnectLog));
                     ui.close();
@@ -2584,6 +3127,19 @@ impl OpenHlswApp {
                     actions.push(Action::OpenAppData);
                     ui.close();
                 }
+                ui.menu_button(tr!("Advanced"), |ui| {
+                    if ui
+                        .button(tr!("Clear location and provider cache"))
+                        .clicked()
+                    {
+                        actions.push(Action::ClearGeoCache);
+                        ui.close();
+                    }
+                    if ui.button(tr!("Reset ping graphs of all servers")).clicked() {
+                        actions.push(Action::ResetAllPings);
+                        ui.close();
+                    }
+                });
                 ui.separator();
                 if ui.button(tr!("Minimize (no traffic)\tCtrl+M")).clicked() {
                     actions.push(Action::Minimize { no_traffic: true });
@@ -2630,6 +3186,21 @@ impl OpenHlswApp {
                     ui.close();
                 }
                 ui.separator();
+                if ui.button(tr!("Import Steam Favorites")).clicked() {
+                    actions.push(Action::ImportSteamFavorites);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(self.lan_search.is_none(), Button::new(tr!("Search LAN")))
+                    .on_hover_text(tr!(
+                        "Asks for servers on ports 27015-27030 in the local network"
+                    ))
+                    .clicked()
+                {
+                    actions.push(Action::LanSearch);
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button(tr!("Multi Server Insert...\tCtrl+I")).clicked() {
                     actions.push(Action::OpenDialog(Dialog::MultiInsert(String::new())));
                     ui.close();
@@ -2658,6 +3229,28 @@ impl OpenHlswApp {
                 ui.add_enabled_ui(selected.is_some(), |ui| {
                     if let Some(s) = selected.and_then(|id| self.server(id)) {
                         server_menu_items(ui, s, &other_lists, actions);
+                    }
+                });
+                ui.separator();
+                ui.menu_button(tr!("Find"), |ui| {
+                    if ui.button(tr!("Server Name\tCtrl+F")).clicked() {
+                        actions.push(Action::FocusSearch);
+                        ui.close();
+                    }
+                    if ui.button(tr!("Player...")).clicked() {
+                        self.find = Some(Find::new(FindKind::Player));
+                        ui.close();
+                    }
+                    if ui.button(tr!("Rule...")).clicked() {
+                        self.find = Some(Find::new(FindKind::Rule));
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(self.find.is_some(), Button::new(tr!("Find Next\tF3")))
+                        .clicked()
+                    {
+                        actions.push(Action::FindNext);
+                        ui.close();
                     }
                 });
             });
@@ -2693,6 +3286,9 @@ impl OpenHlswApp {
                 changed |= ui.checkbox(&mut v.rules, tr!("Rules\tCtrl+U")).changed();
                 ui.separator();
                 changed |= ui.checkbox(&mut v.password, tr!("Password")).changed();
+                changed |= ui
+                    .checkbox(&mut v.player_name, tr!("Player Name"))
+                    .changed();
                 changed |= ui.checkbox(&mut v.filter, tr!("Filter")).changed();
                 changed |= ui.checkbox(&mut v.comment, tr!("Comment")).changed();
                 ui.separator();
@@ -2764,7 +3360,15 @@ impl OpenHlswApp {
                     }
                 });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(tr!("{count} servers", count = self.servers.len()));
+                if self.settings.filter.enabled || !self.search.trim().is_empty() {
+                    ui.label(tr!(
+                        "{shown} of {count} servers",
+                        shown = self.list_order.len(),
+                        count = self.servers.len()
+                    ));
+                } else {
+                    ui.label(tr!("{count} servers", count = self.servers.len()));
+                }
             });
         });
 
@@ -2820,7 +3424,7 @@ impl OpenHlswApp {
 
         // Toolbar: buttons · Password · Search
         let view = self.settings.view.clone();
-        if !view.toolbar && !view.password && !view.filter {
+        if !view.toolbar && !view.password && !view.filter && !view.player_name {
             ui.add_space(2.0);
             return;
         }
@@ -2871,6 +3475,22 @@ impl OpenHlswApp {
                 ui.checkbox(&mut self.hide_join_password, tr!("Hide"));
                 toolbar_separator(ui, p);
             }
+            if view.player_name {
+                ui.label(tr!("Player name:"));
+                let r = ui
+                    .add(
+                        TextEdit::singleline(&mut self.settings.player_name)
+                            .align(egui::Align2::LEFT_CENTER)
+                            .hint_text(tr!("from the game"))
+                            .desired_width(110.0),
+                    )
+                    .with_edit_menu()
+                    .on_hover_text(tr!("Passed to the game on Connect (+name)"));
+                if r.lost_focus() {
+                    actions.push(Action::SaveConfig);
+                }
+                toolbar_separator(ui, p);
+            }
             if view.filter {
                 ui.label(tr!("Search:"));
                 let search = ui
@@ -2882,6 +3502,21 @@ impl OpenHlswApp {
                     )
                     .with_edit_menu();
                 self.search_id = Some(search.id);
+                if ui
+                    .checkbox(&mut self.settings.filter.enabled, tr!("Filter"))
+                    .on_hover_text(tr!("Server list filter"))
+                    .changed()
+                {
+                    actions.push(Action::SaveConfig);
+                }
+                if ui
+                    .button(tr!("Edit filter..."))
+                    .on_hover_text(tr!("Server List Filter Properties"))
+                    .clicked()
+                {
+                    self.show_filter = true;
+                    self.settings.filter.enabled = true;
+                }
                 toolbar_separator(ui, p);
             }
             if view.toolbar {
@@ -3029,6 +3664,7 @@ impl OpenHlswApp {
                         g.map(|g| g.provider().to_string()).unwrap_or_default()
                     },
                     log: s.log_players.get(&pl.name).cloned(),
+                    db: st.and_then(|x| self.iddb.get(&x.steam_id)).cloned(),
                 }
             })
             .collect();
@@ -3202,12 +3838,18 @@ impl OpenHlswApp {
                 {
                     actions.push(Action::SaveConfig);
                 }
-                let mut off = false;
-                ui.add_enabled(
-                    false,
-                    egui::Checkbox::new(&mut off, tr!("Enable Admin Notification")),
-                )
-                .on_disabled_hover_text(tr!("Not implemented yet"));
+                if ui
+                    .checkbox(
+                        &mut self.settings.admin_notification,
+                        tr!("Enable Admin Notification"),
+                    )
+                    .on_hover_text(tr!(
+                        "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)"
+                    ))
+                    .changed()
+                {
+                    actions.push(Action::SaveConfig);
+                }
             });
         });
         // Keep the panel height stable when switching tabs.
@@ -3271,7 +3913,77 @@ impl OpenHlswApp {
                         options_changed = true;
                     }
                 }
+                let finding = self.console_find.is_some();
+                if toggle_button(ui, p, "/", finding)
+                    .on_hover_text(tr!("Find\tCtrl+Shift+F, F3"))
+                    .clicked()
+                {
+                    self.console_find = if finding {
+                        None
+                    } else {
+                        Some(ConsoleFind {
+                            focus: true,
+                            ..Default::default()
+                        })
+                    };
+                }
             });
+
+        // Find bar above the console output.
+        if let Some(find) = &mut self.console_find {
+            let mut close = false;
+            egui::Panel::top("console_find")
+                .frame(Frame::new().inner_margin(Margin {
+                    bottom: 4,
+                    ..Default::default()
+                }))
+                .show_separator_line(false)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(tr!("Find:"));
+                        let r = ui
+                            .add(
+                                TextEdit::singleline(&mut find.text)
+                                    .align(egui::Align2::LEFT_CENTER)
+                                    .id_salt("console_find_field")
+                                    .desired_width(220.0),
+                            )
+                            .with_edit_menu();
+                        if find.focus {
+                            r.request_focus();
+                            find.focus = false;
+                        }
+                        if r.changed() {
+                            find.pos = 0;
+                            find.scroll = true;
+                        }
+                        if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                            find.pos += 1;
+                            find.scroll = true;
+                            find.focus = true;
+                        }
+                        if ui.input(|i| i.key_pressed(Key::Escape)) && r.has_focus() {
+                            close = true;
+                        }
+                        if ui
+                            .add(Button::new(tr!("Find Next\tF3")).min_size(egui::vec2(80.0, 18.0)))
+                            .clicked()
+                        {
+                            find.pos += 1;
+                            find.scroll = true;
+                        }
+                        if ui
+                            .add(Button::new("×").min_size(egui::vec2(20.0, 18.0)))
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
+                });
+            if close {
+                self.console_find = None;
+            }
+        }
         if options_changed {
             actions.push(Action::SaveConfig);
         }
@@ -3425,6 +4137,26 @@ impl OpenHlswApp {
         let mut text = String::new();
         let mut job = egui::text::LayoutJob::default();
         let font = TextStyle::Monospace.resolve(ui.style());
+        let needle = self
+            .console_find
+            .as_ref()
+            .map(|f| f.text.clone())
+            .unwrap_or_default();
+        // (line, hit) of every match; the current one is drawn stronger and scrolled to.
+        let mut hits: Vec<usize> = Vec::new();
+        let hit_count: usize = lines
+            .iter()
+            .map(|(l, _)| find_ascii_ci(l, &needle).len())
+            .sum();
+        let current = match &mut self.console_find {
+            Some(f) if hit_count > 0 => {
+                f.pos %= hit_count;
+                Some(f.pos)
+            }
+            _ => None,
+        };
+        let highlight = Color32::from_rgba_unmultiplied(255, 200, 0, 90);
+        let highlight_current = Color32::from_rgb(255, 170, 0);
         for (i, (line, kind)) in lines.iter().enumerate() {
             let fg = match kind {
                 LineKind::Command => p.console_cmd_fg,
@@ -3435,9 +4167,46 @@ impl OpenHlswApp {
             if i + 1 < lines.len() {
                 piece.push('\n');
             }
-            job.append(&piece, 0.0, egui::TextFormat::simple(font.clone(), fg));
+            let mut at = 0;
+            for r in find_ascii_ci(line, &needle) {
+                let is_current = current == Some(hits.len());
+                hits.push(i);
+                job.append(
+                    &piece[at..r.start],
+                    0.0,
+                    egui::TextFormat::simple(font.clone(), fg),
+                );
+                let mut f = egui::TextFormat::simple(
+                    font.clone(),
+                    if is_current { Color32::BLACK } else { fg },
+                );
+                f.background = if is_current {
+                    highlight_current
+                } else {
+                    highlight
+                };
+                job.append(&piece[r.clone()], 0.0, f);
+                at = r.end;
+            }
+            job.append(
+                &piece[at..],
+                0.0,
+                egui::TextFormat::simple(font.clone(), fg),
+            );
             text.push_str(&piece);
         }
+        let scroll_line = match &mut self.console_find {
+            Some(f) if f.scroll => {
+                f.scroll = false;
+                current.and_then(|c| hits.get(c).copied())
+            }
+            _ => None,
+        };
+        // Jumping to a hit stops the auto scroll, or it would pull the view back down.
+        if scroll_line.is_some() {
+            self.console_autoscroll = false;
+        }
+        let autoscroll = autoscroll && scroll_line.is_none();
         job.wrap.max_width = f32::INFINITY;
         let job = std::sync::Arc::new(job);
         egui::CentralPanel::default()
@@ -3492,6 +4261,19 @@ impl OpenHlswApp {
                                 }
                             }
                             ui.painter().set(bg_slot, egui::Shape::Vec(shapes));
+                            if let Some(target) = scroll_line {
+                                let mut line = 0;
+                                for row in &output.galley.rows {
+                                    if line == target {
+                                        let r = row.rect().translate(output.galley_pos.to_vec2());
+                                        ui.scroll_to_rect(r, Some(Align::Center));
+                                        break;
+                                    }
+                                    if row.ends_with_newline {
+                                        line += 1;
+                                    }
+                                }
+                            }
                         });
                 });
             });
@@ -3541,6 +4323,31 @@ impl OpenHlswApp {
             Dialog::ConnectLog => tr!("Connect Log"),
             Dialog::ChangeRule(..) => tr!("Change Value"),
             Dialog::SetId(..) => tr!("Change ID"),
+            Dialog::Confirm(Confirm::DeleteServer(_)) => tr!("Delete"),
+            Dialog::Confirm(Confirm::ChangeLevel(..)) => tr!("Change Level"),
+            Dialog::Confirm(Confirm::ConnectNoPassword(_)) => tr!("Password"),
+        };
+        let confirm_text = match &dialog {
+            Dialog::Confirm(Confirm::DeleteServer(id)) => {
+                let s = self.server(*id);
+                let addr = s.map(|s| s.address.to_string()).unwrap_or_default();
+                let name = s
+                    .and_then(|s| s.info.as_ref())
+                    .map(|i| i.name.clone())
+                    .unwrap_or_default();
+                tr!("Delete {address} {name}?", address = addr, name = name)
+            }
+            Dialog::Confirm(Confirm::ChangeLevel(_, map)) => {
+                tr!(
+                    "Change level to '{map}'?\n\nRcon Command: 'changelevel {map}'",
+                    map = map
+                )
+            }
+            Dialog::Confirm(Confirm::ConnectNoPassword(_)) => {
+                tr!("The server is password protected and none is specified.\n\nContinue?")
+                    .to_string()
+            }
+            _ => String::new(),
         };
         let list_name = self.list_name.clone();
         let connect_log = &self.connect_log;
@@ -3634,6 +4441,15 @@ impl OpenHlswApp {
                                 )
                                 .with_edit_menu();
                                 ui.end_row();
+                                ui.label(tr!("Additional parameters:"));
+                                ui.add(
+                                    TextEdit::singleline(&mut draft.params)
+                                        .align(egui::Align2::LEFT_CENTER)
+                                        .hint_text(tr!("start parameters of the game"))
+                                        .desired_width(260.0),
+                                )
+                                .with_edit_menu();
+                                ui.end_row();
                                 ui.label(tr!("Rcon password:"));
                                 ui.add(
                                     TextEdit::singleline(&mut draft.rcon_password)
@@ -3699,6 +4515,21 @@ impl OpenHlswApp {
                         let (ok, cancel) = ok_cancel(ui);
                         if ok || enter {
                             actions.push(Action::SetCvar(*id, key.clone(), value.clone()));
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::Confirm(confirm) => {
+                        ui.label(&confirm_text);
+                        let (ok, cancel) = ok_cancel(ui);
+                        if ok {
+                            actions.push(match confirm.clone() {
+                                Confirm::DeleteServer(id) => Action::RemoveConfirmed(id),
+                                Confirm::ChangeLevel(id, map) => {
+                                    Action::ChangeLevelConfirmed(id, map)
+                                }
+                                Confirm::ConnectNoPassword(id) => Action::ConnectAnyway(id),
+                            });
                             close = true;
                         }
                         close |= cancel;
@@ -3857,6 +4688,46 @@ impl OpenHlswApp {
                         actions.push(Action::Unban(id));
                     }
                 });
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(Button::new(tr!("Write")).min_size(egui::vec2(80.0, 18.0)))
+                        .on_hover_text(tr!("Save the ban lists on the server (writeid / writeip)"))
+                        .clicked()
+                    {
+                        actions.push(Action::BanCommand(id, "writeid;writeip"));
+                    }
+                    if ui
+                        .add(Button::new(tr!("Reload")).min_size(egui::vec2(80.0, 18.0)))
+                        .on_hover_text(tr!("Reload banned.cfg / listip.cfg on the server"))
+                        .clicked()
+                    {
+                        actions.push(Action::BanCommand(id, "exec banned.cfg;exec listip.cfg"));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(Button::new(tr!("To ID Database")).min_size(egui::vec2(80.0, 18.0)))
+                        .on_hover_text(tr!("Add the banned IDs to the Global ID Database"))
+                        .clicked()
+                    {
+                        actions.push(Action::BansToIdDb(id));
+                    }
+                    if ui
+                        .add(Button::new(tr!("From ID Database")).min_size(egui::vec2(80.0, 18.0)))
+                        .on_hover_text(tr!("Add all bans from Global ID Database"))
+                        .clicked()
+                    {
+                        actions.push(Action::BansFromIdDb(id));
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(tr!("Filter:"));
+                ui.add(
+                    TextEdit::singleline(&mut s.ban_filter)
+                        .align(egui::Align2::LEFT_CENTER)
+                        .desired_width(230.0),
+                )
+                .with_edit_menu();
                 ui.add_space(6.0);
                 ui.label(tr!("Steam ID or IP:"));
                 ui.add(
@@ -3893,6 +4764,12 @@ impl OpenHlswApp {
                 list_frame(ui, p, |ui| {
                     let selected = s.ban_selected;
                     let mut clicked = None;
+                    let needle = s.ban_filter.trim().to_lowercase();
+                    let shown: Vec<usize> = (0..s.bans.len())
+                        .filter(|&i| {
+                            needle.is_empty() || s.bans[i].ident.to_lowercase().contains(&needle)
+                        })
+                        .collect();
                     styled_table(ui, "bans")
                         .sense(Sense::click())
                         .column(Column::exact(20.0))
@@ -3914,8 +4791,8 @@ impl OpenHlswApp {
                             });
                         })
                         .body(|body| {
-                            body.rows(ROW_HEIGHT, s.bans.len(), |mut row| {
-                                let i = row.index();
+                            body.rows(ROW_HEIGHT, shown.len(), |mut row| {
+                                let i = shown[row.index()];
                                 let b = &s.bans[i];
                                 row.set_selected(selected == Some(i));
                                 row.col(|ui| {
@@ -4048,7 +4925,545 @@ impl OpenHlswApp {
             });
     }
 
+    /// Results of the Find window: server and a description of the hit.
+    fn find_results(&self) -> Vec<(ServerId, String)> {
+        let Some(find) = &self.find else {
+            return Vec::new();
+        };
+        let needle = find.text.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for s in &self.servers {
+            let server = s
+                .info
+                .as_ref()
+                .map(|i| i.name.clone())
+                .unwrap_or_else(|| s.address.to_string());
+            match find.kind {
+                FindKind::Player => {
+                    for p in s
+                        .players
+                        .iter()
+                        .filter(|p| p.name.to_lowercase().contains(&needle))
+                    {
+                        out.push((s.id, format!("{}  —  {server}", p.name)));
+                    }
+                }
+                FindKind::Rule => {
+                    for r in s.rules.iter().filter(|r| {
+                        r.key.to_lowercase().contains(&needle)
+                            || r.value.to_lowercase().contains(&needle)
+                    }) {
+                        out.push((s.id, format!("{} = {}  —  {server}", r.key, r.value)));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn save_iddb(&mut self) {
+        self.iddb_dirty = false;
+        self.iddb_saved = Instant::now();
+        if let Err(e) = self.iddb.save() {
+            self.status_message = tr!("Could not save the Global ID Database: {e}", e = e);
+        }
+    }
+
+    /// "Global Player ID Database Editor" (File menu, Ctrl+W).
+    fn iddb_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let Some(ed) = &mut self.iddb_editor else {
+            return;
+        };
+        let db = &mut self.iddb;
+        let mut open = true;
+        let mut changed = false;
+        egui::Window::new(tr!("Global Player ID Database Editor"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([680.0, 440.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button(tr!("Import banned.cfg...")).clicked() {
+                        actions.push(Action::IdDbImport);
+                    }
+                    if ui.button(tr!("Export banned.cfg...")).clicked() {
+                        actions.push(Action::IdDbExport);
+                    }
+                    if ui
+                        .add_enabled(ed.selected.is_some(), Button::new(tr!("Delete")))
+                        .clicked()
+                        && let Some(id) = ed.selected.take()
+                    {
+                        db.entries.remove(&id);
+                        changed = true;
+                    }
+                    ui.checkbox(&mut ed.hide_auto, tr!("Hide Auto Added"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr!("Filter:"));
+                    ui.add(
+                        TextEdit::singleline(&mut ed.filter)
+                            .align(egui::Align2::LEFT_CENTER)
+                            .hint_text(tr!("ID, name or comment"))
+                            .desired_width(240.0),
+                    )
+                    .with_edit_menu();
+                    ui.label(
+                        RichText::new(tr!("{count} entries", count = db.entries.len()))
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                });
+                ui.add_space(4.0);
+
+                // Edit form at the bottom, the list fills the rest.
+                egui::Panel::bottom("iddb_form")
+                    .show_separator_line(false)
+                    .show(ui, |ui| {
+                        ui.add_space(6.0);
+                        egui::Grid::new("iddb_form_grid")
+                            .num_columns(2)
+                            .spacing([8.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label(tr!("Global ID:"));
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        TextEdit::singleline(&mut ed.id)
+                                            .align(egui::Align2::LEFT_CENTER)
+                                            .hint_text("STEAM_0:0:11101")
+                                            .desired_width(200.0),
+                                    )
+                                    .with_edit_menu();
+                                    ui.label(tr!("Type:"));
+                                    egui::ComboBox::from_id_salt("iddb_kind")
+                                        .selected_text(crate::i18n::t(ed.kind.name()))
+                                        .show_ui(ui, |ui| {
+                                            for k in IdKind::ALL {
+                                                ui.selectable_value(
+                                                    &mut ed.kind,
+                                                    k,
+                                                    crate::i18n::t(k.name()),
+                                                );
+                                            }
+                                        });
+                                    ui.checkbox(&mut ed.banned, tr!("Banned"));
+                                });
+                                ui.end_row();
+                                ui.label(tr!("Names:"));
+                                ui.add(
+                                    TextEdit::singleline(&mut ed.names)
+                                        .align(egui::Align2::LEFT_CENTER)
+                                        .hint_text(tr!("comma separated"))
+                                        .desired_width(f32::INFINITY),
+                                )
+                                .with_edit_menu();
+                                ui.end_row();
+                                ui.label(tr!("Comment:"));
+                                ui.add(
+                                    TextEdit::singleline(&mut ed.comment)
+                                        .align(egui::Align2::LEFT_CENTER)
+                                        .desired_width(f32::INFINITY),
+                                )
+                                .with_edit_menu();
+                                ui.end_row();
+                            });
+                        ui.horizontal(|ui| {
+                            let key = iddb::normalize(&ed.id);
+                            let exists = key.as_ref().is_some_and(|k| db.entries.contains_key(k));
+                            let entry = |ed: &IdDbEditor| IdEntry {
+                                names: ed
+                                    .names
+                                    .split(',')
+                                    .map(|n| n.trim().to_string())
+                                    .filter(|n| !n.is_empty())
+                                    .collect(),
+                                kind: ed.kind,
+                                comment: ed.comment.trim().to_string(),
+                                banned: ed.banned,
+                                auto: false,
+                            };
+                            if ui
+                                .add_enabled(
+                                    key.is_some() && !exists,
+                                    Button::new(tr!("Add")).min_size(egui::vec2(80.0, 18.0)),
+                                )
+                                .clicked()
+                                && let Some(k) = key.clone()
+                            {
+                                db.entries.insert(k.clone(), entry(ed));
+                                ed.selected = Some(k.clone());
+                                ed.id = k;
+                                changed = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    exists,
+                                    Button::new(tr!("Apply")).min_size(egui::vec2(80.0, 18.0)),
+                                )
+                                .clicked()
+                                && let Some(k) = key.clone()
+                            {
+                                db.entries.insert(k.clone(), entry(ed));
+                                ed.selected = Some(k);
+                                changed = true;
+                            }
+                            if key.is_none() && !ed.id.trim().is_empty() {
+                                ui.label(
+                                    RichText::new(tr!("Not a valid Steam ID"))
+                                        .color(ui.visuals().warn_fg_color),
+                                );
+                            } else if !ed.message.is_empty() {
+                                ui.label(&ed.message);
+                            }
+                        });
+                    });
+
+                let needle = ed.filter.trim().to_lowercase();
+                let rows: Vec<(&String, &IdEntry)> = db
+                    .entries
+                    .iter()
+                    .filter(|(_, e)| !(ed.hide_auto && e.auto))
+                    .filter(|(id, e)| {
+                        needle.is_empty()
+                            || id.to_lowercase().contains(&needle)
+                            || e.names.iter().any(|n| n.to_lowercase().contains(&needle))
+                            || e.comment.to_lowercase().contains(&needle)
+                    })
+                    .collect();
+                let mut clicked = None;
+                styled_table(ui, "iddb_table")
+                    .sense(Sense::click())
+                    .column(Column::initial(150.0).at_least(130.0).clip(true))
+                    .column(Column::initial(70.0).at_least(60.0).clip(true))
+                    .column(Column::initial(200.0).at_least(160.0).clip(true))
+                    .column(Column::initial(60.0).at_least(50.0))
+                    .column(Column::remainder().at_least(80.0).clip(true))
+                    .header(HEADER_HEIGHT, |mut h| {
+                        for t in [
+                            tr!("Global ID"),
+                            tr!("Type"),
+                            tr!("Names"),
+                            tr!("Banned"),
+                            tr!("Comment"),
+                        ] {
+                            h.col(|ui| {
+                                ui.strong(t);
+                            });
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(ROW_HEIGHT, rows.len(), |mut row| {
+                            let (id, e) = rows[row.index()];
+                            row.set_selected(ed.selected.as_ref() == Some(id));
+                            let color = e.kind.color().map(|[r, g, b]| Color32::from_rgb(r, g, b));
+                            row.col(|ui| {
+                                ui.add(Label::new(id.as_str()).selectable(false));
+                            });
+                            row.col(|ui| {
+                                let t = RichText::new(crate::i18n::t(e.kind.name()));
+                                ui.add(
+                                    Label::new(match color {
+                                        Some(c) => t.color(c),
+                                        None => t,
+                                    })
+                                    .selectable(false),
+                                );
+                            });
+                            row.col(|ui| {
+                                ui.add(Label::new(e.names_text()).selectable(false));
+                            });
+                            row.col(|ui| {
+                                if e.banned {
+                                    ui.add(Label::new(tr!("Yes")).selectable(false));
+                                }
+                            });
+                            row.col(|ui| {
+                                ui.add(Label::new(e.comment.as_str()).selectable(false));
+                            });
+                            if row.response().clicked() {
+                                clicked = Some(id.clone());
+                            }
+                        });
+                    });
+                if let Some(id) = clicked {
+                    ed.select(db, &id);
+                }
+            });
+        if changed {
+            self.iddb_dirty = true;
+            self.save_iddb();
+        }
+        if !open {
+            self.iddb_editor = None;
+        }
+    }
+
+    fn find_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let results = self.find_results();
+        let Some(find) = &mut self.find else { return };
+        let mut open = true;
+        let title = match find.kind {
+            FindKind::Player => tr!("Find player"),
+            FindKind::Rule => tr!("Find rule"),
+        };
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(380.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(tr!("Find what:"));
+                    let r = ui
+                        .add(
+                            TextEdit::singleline(&mut find.text)
+                                .align(egui::Align2::LEFT_CENTER)
+                                .desired_width(200.0),
+                        )
+                        .with_edit_menu();
+                    if find.focus {
+                        r.request_focus();
+                        find.focus = false;
+                    }
+                    if r.changed() {
+                        find.pos = None;
+                    }
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        actions.push(Action::FindNext);
+                        find.focus = true;
+                    }
+                    if ui.button(tr!("Find Next\tF3")).clicked() {
+                        actions.push(Action::FindNext);
+                    }
+                });
+                ui.label(
+                    RichText::new(tr!(
+                        "{count} found in all servers of the list",
+                        count = results.len()
+                    ))
+                    .color(ui.visuals().weak_text_color()),
+                );
+                ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                    for (n, (_, text)) in results.iter().enumerate() {
+                        if ui.selectable_label(find.pos == Some(n), text).clicked() {
+                            // FindNext moves on by one: start just before this hit.
+                            find.pos = n.checked_sub(1);
+                            actions.push(Action::FindNext);
+                        }
+                    }
+                });
+            });
+        if !open {
+            self.find = None;
+        }
+    }
+
+    /// "Server List Filter Properties" (HLSW's Filter / Advanced Filter).
+    fn filter_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        use crate::filter::{PasswordFilter, Range, ServerFilter};
+        if !self.show_filter {
+            return;
+        }
+        let mut open = true;
+        let mut close = false;
+        let f = &mut self.settings.filter;
+        egui::Window::new(tr!("Server List Filter Properties"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.checkbox(&mut f.enabled, tr!("Filter on"));
+                ui.add_space(4.0);
+                ui.add_enabled_ui(f.enabled, |ui| {
+                    ui.checkbox(
+                        &mut f.hide_timeout,
+                        tr!("Hide servers that do not answer (timeout)"),
+                    );
+                    egui::Grid::new("filter_grid")
+                        .num_columns(4)
+                        .spacing([8.0, 5.0])
+                        .show(ui, |ui| {
+                            ui.label(tr!("Maximum ping:"));
+                            ui.horizontal(|ui| {
+                                ui.add(egui::DragValue::new(&mut f.max_ping).range(0..=999));
+                                ui.label(tr!("ms (0 = off)"));
+                            });
+                            ui.end_row();
+                            ui.label(tr!("Password"));
+                            egui::ComboBox::from_id_salt("filter_password")
+                                .selected_text(match f.password {
+                                    PasswordFilter::Any => tr!("Any"),
+                                    PasswordFilter::Without => tr!("Without password"),
+                                    PasswordFilter::With => tr!("With password"),
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut f.password,
+                                        PasswordFilter::Any,
+                                        tr!("Any"),
+                                    );
+                                    ui.selectable_value(
+                                        &mut f.password,
+                                        PasswordFilter::Without,
+                                        tr!("Without password"),
+                                    );
+                                    ui.selectable_value(
+                                        &mut f.password,
+                                        PasswordFilter::With,
+                                        tr!("With password"),
+                                    );
+                                });
+                            ui.end_row();
+                            for (label, value, hint) in [
+                                (tr!("Game:"), &mut f.game, tr!("e.g. cstrike, CS:S, TF2")),
+                                (tr!("Map:"), &mut f.map, tr!("e.g. de_, cs_office")),
+                                (tr!("Country:"), &mut f.country, tr!("e.g. DE, AT, CH")),
+                                (tr!("AddOns:"), &mut f.addons, tr!("e.g. AMXX, SourceMod")),
+                            ] {
+                                ui.label(label);
+                                ui.add(
+                                    TextEdit::singleline(value)
+                                        .align(egui::Align2::LEFT_CENTER)
+                                        .hint_text(hint)
+                                        .desired_width(220.0),
+                                )
+                                .with_edit_menu();
+                                ui.end_row();
+                            }
+                        });
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(tr!("Several values separated by commas; 0 = no limit."))
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    ui.add_space(4.0);
+                    egui::Grid::new("filter_ranges")
+                        .num_columns(3)
+                        .spacing([8.0, 5.0])
+                        .show(ui, |ui| {
+                            ui.label("");
+                            ui.label(tr!("min"));
+                            ui.label(tr!("max"));
+                            ui.end_row();
+                            let range = |ui: &mut Ui, label: &str, r: &mut Range| {
+                                ui.label(label);
+                                ui.add(egui::DragValue::new(&mut r.min).range(0..=9999));
+                                ui.add(egui::DragValue::new(&mut r.max).range(0..=9999));
+                                ui.end_row();
+                            };
+                            range(ui, tr!("Players:"), &mut f.players);
+                            range(ui, tr!("Slots:"), &mut f.slots);
+                            range(ui, tr!("Free Slots:"), &mut f.free_slots);
+                            range(ui, tr!("Time Limit:"), &mut f.time_limit);
+                            range(ui, tr!("Frag Limit:"), &mut f.frag_limit);
+                            range(ui, tr!("Round Limit:"), &mut f.round_limit);
+                            range(ui, tr!("Team Score:"), &mut f.team_score);
+                        });
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(Button::new(tr!("Reset")).min_size(egui::vec2(75.0, 22.0)))
+                        .clicked()
+                    {
+                        *f = ServerFilter {
+                            enabled: f.enabled,
+                            ..Default::default()
+                        };
+                    }
+                    if ui
+                        .add(Button::new(tr!("Close")).min_size(egui::vec2(75.0, 22.0)))
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+        if !open || close {
+            self.show_filter = false;
+            actions.push(Action::SaveConfig);
+        }
+    }
+
+    /// HLSW's "Connecting..." window while waiting for a free slot.
+    fn wait_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let Some((id, since)) = self.waiting else {
+            return;
+        };
+        let Some(s) = self.server(id) else { return };
+        let info = s.info.as_ref();
+        let name = info.map(|i| i.name.clone()).unwrap_or_default();
+        let map = info.map(|i| i.map.clone()).unwrap_or_default();
+        let players = s.players_text();
+        let ping = s.ping.map(|p| format!("{p} ms")).unwrap_or_default();
+        let waited = since.elapsed().as_secs();
+        let mut open = true;
+        egui::Window::new(tr!("Connecting..."))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(320.0)
+            .show(ctx, |ui| {
+                egui::Grid::new("wait_for_slot")
+                    .num_columns(2)
+                    .spacing([10.0, 4.0])
+                    .show(ui, |ui| {
+                        for (label, value) in [
+                            (tr!("Name:"), name),
+                            (tr!("Map:"), map),
+                            (tr!("Players:"), players),
+                            (tr!("Ping:"), ping),
+                            (
+                                tr!("Time:"),
+                                format!("{:02}:{:02}", waited / 60, waited % 60),
+                            ),
+                            (tr!("Status:"), tr!("Waiting for free slot").to_string()),
+                        ] {
+                            ui.label(RichText::new(label).color(ui.visuals().weak_text_color()));
+                            ui.label(value);
+                            ui.end_row();
+                        }
+                        ui.label(
+                            RichText::new(tr!("Password:")).color(ui.visuals().weak_text_color()),
+                        );
+                        ui.add(
+                            TextEdit::singleline(&mut self.join_password)
+                                .align(egui::Align2::LEFT_CENTER)
+                                .password(self.hide_join_password)
+                                .desired_width(160.0),
+                        );
+                        ui.end_row();
+                    });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(Button::new(tr!("Connect now")).min_size(egui::vec2(90.0, 22.0)))
+                        .clicked()
+                    {
+                        actions.push(Action::ConnectNow(id));
+                    }
+                    if ui
+                        .add(Button::new(tr!("Cancel")).min_size(egui::vec2(75.0, 22.0)))
+                        .clicked()
+                    {
+                        actions.push(Action::CancelWait);
+                    }
+                });
+            });
+        if !open {
+            actions.push(Action::CancelWait);
+        }
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        self.iddb_window(ctx, actions);
+        self.wait_window(ctx, actions);
+        self.filter_window(ctx, actions);
+        self.find_window(ctx, actions);
         self.menu_dialog(ctx, actions);
         self.trace_window(ctx);
         if let Some(dialog) = &mut self.settings_dialog {
@@ -4518,6 +5933,7 @@ struct ListOptions<'a> {
     /// Per server (same order as `servers`): country code, provider.
     locations: &'a [(String, String)],
     needle: &'a str,
+    filter: &'a crate::filter::ServerFilter,
     selected: Option<ServerId>,
     connect_on_double_click: bool,
     keep_order_on_hover: bool,
@@ -4535,7 +5951,10 @@ fn server_table(
     let selected = opts.selected;
     let fresh: Vec<usize> = sorted_servers(servers, opts.locations, *sort)
         .into_iter()
-        .filter(|&i| servers[i].matches(opts.needle))
+        .filter(|&i| {
+            servers[i].matches(opts.needle)
+                && filter_matches(opts.filter, &servers[i], &opts.locations[i].0)
+        })
         .collect();
     let hovered = ui.rect_contains_pointer(ui.max_rect());
     let order: Vec<usize> = if opts.keep_order_on_hover && hovered && !last_order.is_empty() {
@@ -4896,6 +6315,7 @@ fn props_dialog(s: &Server) -> Dialog {
         ServerPropsDraft {
             address: s.address.to_string(),
             comment: s.comment.clone(),
+            params: s.params.clone(),
             rcon_password: s.rcon_password.clone(),
             save_password: s.save_password,
         },
@@ -4917,10 +6337,6 @@ fn server_menu_items(ui: &mut Ui, s: &Server, other_lists: &[String], actions: &
     }
     list_menus(ui, id, other_lists, actions);
     ui.separator();
-    if ui.button(tr!("Find\tCtrl+F")).clicked() {
-        actions.push(Action::FocusSearch);
-        ui.close();
-    }
     if ui.button(tr!("Edit comment...")).clicked() {
         actions.push(Action::EditComment(id));
         ui.close();
@@ -5779,6 +7195,8 @@ struct PlayerRow {
     country_name: String,
     provider: String,
     log: Option<LogPlayer>,
+    /// Entry of the Global Player ID Database.
+    db: Option<IdEntry>,
 }
 
 #[derive(Default)]
@@ -5810,8 +7228,8 @@ const PLAYER_COLUMNS: [(&str, bool, f32, f32); 31] = [
     ("Time", true, 62.0, 50.0),
     ("ID", true, 30.0, 20.0),
     ("Global ID", true, 150.0, 60.0),
-    ("Global ID Database Names", false, 120.0, 60.0),
-    ("Global ID Database Comment", false, 120.0, 60.0),
+    ("Global ID Database Names", true, 120.0, 60.0),
+    ("Global ID Database Comment", true, 120.0, 60.0),
     ("Ping", true, 36.0, 30.0),
     ("Loss", true, 34.0, 30.0),
     ("Honor (AAO)", false, 50.0, 30.0),
@@ -5874,6 +7292,12 @@ fn player_cell(r: &PlayerRow, title: &str) -> (String, CellKey) {
         ),
         "ID" => parsed(st.map(|s| s.userid.to_string()).unwrap_or_default()),
         "Global ID" => text(st.map(|s| s.steam_id.clone()).unwrap_or_default()),
+        "Global ID Database Names" => {
+            text(r.db.as_ref().map(IdEntry::names_text).unwrap_or_default())
+        }
+        "Global ID Database Comment" => {
+            text(r.db.as_ref().map(|e| e.comment.clone()).unwrap_or_default())
+        }
         "Ping" => parsed(st.map(|s| s.ping.clone()).unwrap_or_default()),
         "Loss" => parsed(st.map(|s| s.loss.clone()).unwrap_or_default()),
         "Rate" => parsed(st.map(|s| s.rate.clone()).unwrap_or_default()),
@@ -6048,6 +7472,20 @@ fn players_table(
                         "#" => {
                             ui.label(format!("{n:02}"));
                         }
+                        "Name" => {
+                            // Global ID Database type colours the name (Friend, Lamer, …).
+                            let mut text = RichText::new(&r.player.name);
+                            if let Some([red, g, b]) = r.db.as_ref().and_then(|e| e.kind.color()) {
+                                text = text.color(Color32::from_rgb(red, g, b));
+                            }
+                            let resp =
+                                ui.add(Label::new(text).wrap_mode(fit(ui)).selectable(false));
+                            if let Some(c) = r.db.as_ref().map(|e| &e.comment)
+                                && !c.is_empty()
+                            {
+                                resp.on_hover_text(c);
+                            }
+                        }
                         _ => {
                             let text = player_cell(r, title).0;
                             ui.add(Label::new(text).wrap_mode(fit(ui)).selectable(false));
@@ -6154,6 +7592,40 @@ fn player_context_menu(
         actions.push(Action::OpenUrl(sid.profile_url()));
         ui.close();
     }
+    let in_db = r.db.is_some();
+    ui.add_enabled_ui(sid.is_some(), |ui| {
+        ui.menu_button(tr!("Global ID Database"), |ui| {
+            if ui
+                .button(tr!("Open in Global ID Database Editor..."))
+                .clicked()
+            {
+                actions.push(Action::IdDbSetKind {
+                    id: steam_id.clone(),
+                    name: r.player.name.clone(),
+                    kind: None,
+                });
+                ui.close();
+            }
+            ui.separator();
+            for k in IdKind::ALL {
+                let current = r.db.as_ref().is_some_and(|e| e.kind == k);
+                if ui
+                    .radio(
+                        current && in_db,
+                        tr!("Set to {type}", type = crate::i18n::t(k.name())),
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::IdDbSetKind {
+                        id: steam_id.clone(),
+                        name: r.player.name.clone(),
+                        kind: Some(k),
+                    });
+                    ui.close();
+                }
+            }
+        });
+    });
     ui.separator();
     if ui
         .add_enabled(data.rcon_ok, Button::new(tr!("Rcon Status Command")))
@@ -6853,6 +8325,7 @@ fn parse_server_list_file(text: &str) -> Vec<SavedServer> {
                         last_connected: None,
                         info: None,
                         last_seen: None,
+                        ..Default::default()
                     });
                 }
             }
@@ -6864,9 +8337,7 @@ fn parse_server_list_file(text: &str) -> Vec<SavedServer> {
                 address: addr.to_string(),
                 rcon_password: None,
                 comment: rest.trim().to_string(),
-                last_connected: None,
-                info: None,
-                last_seen: None,
+                ..Default::default()
             });
         }
     }
@@ -7101,6 +8572,73 @@ fn run_shell(command: &str) -> std::io::Result<()> {
 }
 
 /// Common srcds console commands and cvars for Tab completion.
+/// Whether the server list filter shows this server (`country`: two-letter code).
+fn filter_matches(f: &crate::filter::ServerFilter, s: &Server, country: &str) -> bool {
+    if !f.enabled {
+        return true;
+    }
+    let info = s.info.as_ref();
+    let short = s.game_short();
+    let game: Vec<&str> = info
+        .map(|i| vec![i.game.as_str(), i.folder.as_str(), short.as_str()])
+        .unwrap_or_default();
+    let addons = s.addons_short();
+    let rule = |key: &str| {
+        s.rule(key)
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .map(|v| v.max(0.0) as u32)
+    };
+    f.matches(&crate::filter::FilterInput {
+        offline: s.is_offline(),
+        has_info: info.is_some(),
+        ping: s.ping,
+        passworded: info.is_some_and(|i| i.passworded),
+        game: &game,
+        map: info.map_or("", |i| i.map.as_str()),
+        country,
+        addons: &addons,
+        humans: u32::from(s.humans()),
+        max_players: info.map_or(0, |i| u32::from(i.max_players)),
+        rule: &rule,
+    })
+}
+
+/// Splits a parameter line like a shell: spaces separate, "double quotes" group.
+fn split_args(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut any = false;
+    for c in line.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                any = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if any || !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+                any = false;
+            }
+            c => cur.push(c),
+        }
+    }
+    if any || !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Quotes a parameter that contains spaces (for steam://run).
+fn quote_arg(arg: &str) -> String {
+    if arg.contains(char::is_whitespace) {
+        format!("\"{arg}\"")
+    } else {
+        arg.to_string()
+    }
+}
+
 const CONSOLE_COMMANDS: &[&str] = &[
     "addip",
     "banid",

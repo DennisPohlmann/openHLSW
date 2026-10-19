@@ -55,21 +55,37 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
 - **Console** like HLSW: selectable text (mouse, Ctrl+A, Ctrl+C, right-click), time stamps,
   coloured commands/answers, switches
   C (translate log), * (hide password), F (hide answers), D (date), E (empty lines),
-  A (hide automatic commands), S (auto scroll), X (clear); history, Tab completion / Complete.
-- **Chat** (from the server log), **Ban List** (`listid`/`listip`, ban, unban),
+  A (hide automatic commands), / (find, Ctrl+Shift+F / F3), S (auto scroll), X (clear);
+  history, Tab completion / Complete.
+- **Chat** (from the server log; **Admin Notification**: messages starting with `@` play a
+  sound and show up in the status bar), **Ban List** (`listid`/`listip`, ban, unban, filter,
+  Write, Reload, to / from the Global ID Database),
   **Change Level** (`maps *` + `listmaps` + the game's stock maps, Update, Change Level,
   Kick all on map change).
 - **Trace Route** window like HLSW: per hop Ping, Ø Ping, Diff, IP, Reverse DNS, Provider and
   a ping graph, updated every second; changed routes are marked. Windows probes every hop
   with TTL limited ICMP echoes (Windows ICMP API, like HLSW); Linux uses `traceroute` /
   `tracepath` + `ping`. No admin rights are needed.
-- **Menus**: File (Connect Log, AppData folder, Minimize), Server list, Server (Connect, Copy,
-  Delete, Move/Copy to server list, Find, Properties, Trace Route), Settings (Sort Server List),
+- **Filter** (toolbar check box, "Edit filter..."): hide servers by timeout, ping, password,
+  game, map, country, AddOns, players, slots, free slots and time / frag / round limits.
+- **Find** server name (Ctrl+F), player or rule in all servers of the list, Find Next (F3).
+- **Connect** like HLSW: player name (View → Player Name, `+name`), start parameters per game
+  (Settings → My Games, right-click presets like `-novid`, `+rcon_password <RCONPASSWORD>`)
+  and per server (Properties → Additional parameters), asks for a missing password, waits for
+  a free slot on full servers and connects automatically ("Connecting..." window).
+- **Global Player ID Database** (File menu, Ctrl+W): Steam IDs with names, type (Normal,
+  Friend, Lamer, Blue, Brown – colours the player name), comment and banned flag; names are
+  added automatically from `status`; import / export `banned.cfg`; columns "Global ID
+  Database Names / Comment" in the players list. Stored in `iddb.json` next to config.json.
+- **Import Steam Favorites** and **Search LAN** (Server list menu).
+- **Menus**: File (Global Player ID Database Editor, Connect Log, AppData folder, Advanced,
+  Minimize), Server list, Server (Connect, Copy, Delete, Move/Copy to server list, Find,
+  Properties, Trace Route), Settings (Sort Server List),
   View (Rcon Section, Server List, Rules, Password, Filter, Comment, Toolbar, Status Bar,
-  Ping Graph, Skin). Keyboard shortcuts like HLSW (F5, F6, Ctrl+G/D/F/P/T/I/O/R/L/U/M).
+  Ping Graph, Skin). Keyboard shortcuts like HLSW (F3, F5, F6, Ctrl+G/D/F/P/T/I/O/R/L/U/M/W).
 - **Settings**: My Games (all HLSW games with icons, own game executable), Startup,
   Connecting, Rcon, Connections, Plugins (empty), Sounds, Misc (skin and **text size**:
-  Normal / Large / Extra large, among others).
+  Normal / Large (default) / Extra large, among others).
 - **Unicode**: names in every script (fallback fonts for symbols, CJK, Cyrillic …).
 - Servers: all Source games, **Counter-Strike 2** and all **Half-Life 1 games** (GoldSrc,
   with their own icons, e.g. CS 1.6 and Condition Zero), plus GameSpy 2 games
@@ -210,6 +226,9 @@ src/
   trace.rs             Trace Route window (tracert/traceroute + ping per hop)
   stats.rs             traffic counters (status bar)
   geo.rs               server / player location (ip-api.com, cache)
+  filter.rs            server list filter
+  iddb.rs              Global Player ID Database (iddb.json, banned.cfg)
+  discover.rs          Steam favorites (serverbrowser_hist.vdf) and LAN search
   flags.rs             country flags (assets/flags.png)
   game_icons.rs        game icons (assets/games/*.ico, atlas built by build.rs)
   config.rs            JSON settings
@@ -243,7 +262,7 @@ Protocols: [Server queries](https://developer.valvesoftware.com/wiki/Server_quer
 ## Not in yet (ideas for later)
 
 - More games/protocols (Quake 3, GameSpy 1/3, Unreal, Battlefield, TeamSpeak …)
-- Admin Notification, Change Settings Password, Select All (multi selection)
+- Change Settings Password, Select All (multi selection)
 
 ## License
 

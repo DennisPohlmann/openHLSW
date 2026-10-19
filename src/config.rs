@@ -51,7 +51,7 @@ pub struct SavedList {
     pub servers: Vec<SavedServer>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SavedServer {
     pub address: String,
     /// Only present when "Save" is checked. Stored in plain text.
@@ -59,6 +59,9 @@ pub struct SavedServer {
     pub rcon_password: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
+    /// Extra start parameters for this server (Server Properties → Additional parameters).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub params: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_connected: Option<String>,
     /// Last known server info (name, map, game, players, ...), shown while the server is

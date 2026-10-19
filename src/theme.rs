@@ -20,8 +20,9 @@ pub enum Theme {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextSize {
-    #[default]
     Normal,
+    /// Default: 115 % reads closer to HLSW's 8 pt Tahoma on today's displays.
+    #[default]
     Large,
     ExtraLarge,
 }

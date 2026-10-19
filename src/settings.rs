@@ -453,6 +453,8 @@ pub enum OnConnect {
     Minimize,
     /// Minimize and pause all server queries while minimized.
     MinimizeNoTraffic,
+    /// Close openHLSW after starting the game.
+    Quit,
 }
 
 impl OnConnect {
@@ -461,6 +463,7 @@ impl OnConnect {
             OnConnect::Nothing => tr!("Do nothing"),
             OnConnect::Minimize => tr!("Minimize openHLSW"),
             OnConnect::MinimizeNoTraffic => tr!("Minimize openHLSW (no traffic)"),
+            OnConnect::Quit => tr!("Quit openHLSW"),
         }
     }
 }
@@ -514,6 +517,17 @@ pub struct Sound {
 pub struct Settings {
     // My Games: game name -> game executable
     pub game_paths: BTreeMap<String, String>,
+    /// My Games: game name -> extra start parameters (e.g. "-novid -console").
+    pub game_params: BTreeMap<String, String>,
+    /// Player name passed to the game on Connect (`+name`), View → Player Name.
+    pub player_name: String,
+    /// Server list filter (View → Filter, "Edit filter...").
+    pub filter: crate::filter::ServerFilter,
+    /// Chat messages starting with "@" play the notification sound and are shown in the
+    /// status bar (Rcon Config → Enable Admin Notification).
+    pub admin_notification: bool,
+    /// Players with a Steam ID are added to the Global Player ID Database with their names.
+    pub iddb_auto_add: bool,
     // Startup
     pub startup: StartupSelection,
     pub startup_address: String,
@@ -597,6 +611,8 @@ pub struct ViewOptions {
     pub server_list: bool,
     pub rules: bool,
     pub password: bool,
+    /// Player name field in the toolbar.
+    pub player_name: bool,
     pub filter: bool,
     pub comment: bool,
     pub toolbar: bool,
@@ -618,6 +634,7 @@ impl Default for ViewOptions {
             server_list: true,
             rules: true,
             password: true,
+            player_name: false,
             filter: true,
             comment: true,
             toolbar: true,
@@ -648,6 +665,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             game_paths: BTreeMap::new(),
+            game_params: BTreeMap::new(),
+            player_name: String::new(),
+            filter: crate::filter::ServerFilter::default(),
+            admin_notification: false,
+            iddb_auto_add: true,
             startup: StartupSelection::LastUsed,
             startup_address: String::new(),
             on_connect: OnConnect::Nothing,
@@ -675,7 +697,7 @@ impl Default for Settings {
             keep_order_on_hover: false,
             geo_lookup: true,
             theme: Theme::Light,
-            text_size: TextSize::Normal,
+            text_size: TextSize::Large,
             font: UiFont::Arial,
             language: crate::i18n::Language::System,
             defaults_revision: 1,
@@ -721,11 +743,56 @@ const TABS: [(&str, Option<SettingsTab>); 8] = [
     ("Misc", Some(SettingsTab::Misc)),
 ];
 
+/// Start parameter presets of HLSW's "Steam" parameter list (My Games → right click).
+/// Placeholders like `<RCONPASSWORD>` are filled in on Connect.
+const PARAMETER_PRESETS: &[(&str, &str, &str)] = &[
+    ("-console", "-console", "Enables the console"),
+    ("-novid", "-novid", "Disable intro video"),
+    ("-windowed", "-windowed", "Start the game in a window"),
+    ("-fullscreen", "-fullscreen", "Start the game in fullscreen"),
+    ("-d3d", "-d3d", "Direct3D"),
+    ("-gl", "-gl", "OpenGL"),
+    (
+        "-noforcemaccel",
+        "-noforcemaccel",
+        "Disable the Windows mouse acceleration",
+    ),
+    (
+        "-noforcemparms",
+        "-noforcemparms",
+        "Disable the Windows mouse acceleration",
+    ),
+    (
+        "-noforcemspd",
+        "-noforcemspd",
+        "Disable the Windows mouse acceleration",
+    ),
+    ("-preload", "-preload", "Files will be cached at startup"),
+    ("-noaafonts", "-noaafonts", "Fonts without antialiasing"),
+    ("Set rcon_password", "+rcon_password <RCONPASSWORD>", ""),
+    ("Set rcon_address", "+rcon_address <SERVERIP>", ""),
+    ("Set rcon_port", "+rcon_port <SERVERPORT>", ""),
+    (
+        "Set rate to max",
+        "+rate <RULE(sv_maxrate)>",
+        "Set rate to sv_maxrate",
+    ),
+];
+
+/// Additional presets of HLSW's "HL" (GoldSrc) parameter list.
+const GOLDSRC_PRESETS: &[(&str, &str, &str)] = &[
+    ("-zone 4096", "-zone 4096", ""),
+    ("-nojoy", "-nojoy", ""),
+    ("-noipx", "-noipx", "Deactivates IPX protocol"),
+    ("-freq 100", "-freq 100", ""),
+];
+
 /// State of an open settings dialog: a draft that is applied on OK / Apply.
 pub struct SettingsDialog {
     pub draft: Settings,
     pub tab: SettingsTab,
-    editing_game: Option<&'static str>,
+    /// Game whose file (false) or parameters (true) are being edited.
+    editing_game: Option<(&'static str, bool)>,
     selected_app: Option<usize>,
     port_test: Option<String>,
 }
@@ -819,24 +886,27 @@ impl SettingsDialog {
 
     fn my_games(&mut self, ui: &mut Ui, p: &Palette, icons: Option<&crate::game_icons::GameIcons>) {
         let paths = &mut self.draft.game_paths;
+        let params = &mut self.draft.game_params;
         let editing = &mut self.editing_game;
         ui.allocate_ui(egui::vec2(ui.available_width(), 380.0), |ui| {
             list_frame(ui, p, |ui| {
                 styled_table(ui, "my_games")
                     .sense(Sense::click())
-                    .column(Column::initial(260.0).at_least(120.0).clip(true))
-                    .column(Column::initial(85.0))
+                    .column(Column::initial(230.0).at_least(120.0).clip(true))
+                    .column(Column::initial(80.0))
+                    .column(Column::initial(180.0).at_least(60.0).clip(true))
                     .column(Column::remainder().clip(true))
                     .header(18.0, |mut h| {
-                        h.col(|ui| {
-                            plain_header(ui, p, tr!("Game"));
-                        });
-                        h.col(|ui| {
-                            plain_header(ui, p, tr!("Server query"));
-                        });
-                        h.col(|ui| {
-                            plain_header(ui, p, tr!("File"));
-                        });
+                        for title in [
+                            tr!("Game"),
+                            tr!("Server query"),
+                            tr!("File"),
+                            tr!("Parameters"),
+                        ] {
+                            h.col(|ui| {
+                                plain_header(ui, p, title);
+                            });
+                        }
                     })
                     .body(|body| {
                         body.rows(17.0, GAMES.len(), |mut row| {
@@ -859,38 +929,88 @@ impl SettingsDialog {
                                 };
                                 ui.add(Label::new(t).selectable(false));
                             });
-                            row.col(|ui| {
-                                if *editing == Some(game.name) {
-                                    let path = paths.entry(game.name.to_string()).or_default();
-                                    let r = ui
-                                        .add(
-                                            TextEdit::singleline(path)
-                                                .hint_text(tr!(
-                                                    "path to the game .exe, empty = Steam"
-                                                ))
-                                                .desired_width(f32::INFINITY),
-                                        )
-                                        .with_edit_menu();
-                                    r.request_focus();
-                                    if r.lost_focus() {
-                                        *editing = None;
+                            let mut double_clicked = None;
+                            for (is_params, map, hint) in [
+                                (
+                                    false,
+                                    &mut *paths,
+                                    tr!("path to the game .exe, empty = Steam"),
+                                ),
+                                (true, &mut *params, tr!("e.g. -novid -console")),
+                            ] {
+                                let (_, resp) = row.col(|ui| {
+                                    if *editing == Some((game.name, is_params)) {
+                                        let value = map.entry(game.name.to_string()).or_default();
+                                        let r = ui
+                                            .add(
+                                                TextEdit::singleline(value)
+                                                    .hint_text(hint)
+                                                    .desired_width(f32::INFINITY),
+                                            )
+                                            .with_edit_menu();
+                                        r.request_focus();
+                                        if r.lost_focus() {
+                                            *editing = None;
+                                        }
+                                    } else {
+                                        let value = map.get(game.name).cloned().unwrap_or_default();
+                                        ui.add(
+                                            Label::new(value).selectable(false).wrap_mode(fit(ui)),
+                                        );
                                     }
-                                } else {
-                                    let path = paths.get(game.name).cloned().unwrap_or_default();
-                                    ui.add(Label::new(path).selectable(false).wrap_mode(fit(ui)));
+                                });
+                                if resp.double_clicked() {
+                                    double_clicked = Some(is_params);
+                                }
+                            }
+                            row.response().context_menu(|ui| {
+                                ui.menu_button(tr!("Add parameter"), |ui| {
+                                    let goldsrc =
+                                        game.app_id.is_some_and(openhlsw::a2s::is_goldsrc_app);
+                                    let extra: &[_] = if goldsrc { GOLDSRC_PRESETS } else { &[] };
+                                    for (label, value, desc) in
+                                        PARAMETER_PRESETS.iter().chain(extra)
+                                    {
+                                        let r = ui.button(*label);
+                                        let r = if desc.is_empty() {
+                                            r
+                                        } else {
+                                            r.on_hover_text(crate::i18n::t(desc))
+                                        };
+                                        if r.clicked() {
+                                            let line =
+                                                params.entry(game.name.to_string()).or_default();
+                                            if !line.split_whitespace().any(|w| {
+                                                w == value.split(' ').next().unwrap_or_default()
+                                            }) {
+                                                if !line.is_empty() {
+                                                    line.push(' ');
+                                                }
+                                                line.push_str(value);
+                                            }
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                                if ui.button(tr!("Clear parameters")).clicked() {
+                                    params.remove(game.name);
+                                    ui.close();
                                 }
                             });
-                            if row.response().double_clicked() {
-                                *editing = Some(game.name);
+                            if let Some(is_params) = double_clicked {
+                                *editing = Some((game.name, is_params));
+                            } else if row.response().double_clicked() {
+                                *editing = Some((game.name, false));
                             }
                         });
                     });
             });
         });
         paths.retain(|_, v| !v.trim().is_empty());
+        params.retain(|_, v| !v.trim().is_empty());
         ui.vertical_centered(|ui| {
             ui.label(tr!(
-                "(Double click to set the game executable. Empty = connect via Steam.)"
+                "(Double click to set the game executable or start parameters. Empty file = connect via Steam.)"
             ));
         });
     }
@@ -963,6 +1083,7 @@ impl SettingsDialog {
                         OnConnect::Nothing,
                         OnConnect::Minimize,
                         OnConnect::MinimizeNoTraffic,
+                        OnConnect::Quit,
                     ] {
                         ui.selectable_value(&mut d.on_connect, v, v.label());
                     }
@@ -1210,6 +1331,10 @@ impl SettingsDialog {
                 ui.checkbox(
                     &mut d.geo_lookup,
                     tr!("Show server location and provider (looks up server IPs at ip-api.com)"),
+                );
+                ui.checkbox(
+                    &mut d.iddb_auto_add,
+                    tr!("Automatically add player name with known Global ID to Global ID Database"),
                 );
             },
         );

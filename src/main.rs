@@ -17,10 +17,13 @@ macro_rules! tr {
 
 mod app;
 mod config;
+mod discover;
+mod filter;
 mod flags;
 mod game_icons;
 mod geo;
 mod i18n;
+mod iddb;
 mod settings;
 mod theme;
 mod trace;
