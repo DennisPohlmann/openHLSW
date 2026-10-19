@@ -785,6 +785,7 @@ const LICENSE_TEXT: &str = include_str!("../LICENSE");
 const GAME_ICONS_NOTICE: &str = include_str!("../assets/games/NOTICE.txt");
 const FLAGS_NOTICE: &str = include_str!("../assets/FLAGS-LICENSE.txt");
 const FONT_NOTICE: &str = include_str!("../assets/fonts/NOTICE.txt");
+const OFL_TEXT: &str = include_str!("../assets/fonts/OFL.txt");
 const LGPL_TEXT: &str = include_str!("../assets/fonts/LGPL-2.1.txt");
 
 /// Joins the hard-wrapped lines of a notice file into paragraphs that wrap with the window.
@@ -817,8 +818,13 @@ fn license_view(ui: &mut Ui) {
         ui.heading(tr!("Country flags"));
         ui.label(unwrap_paragraphs(FLAGS_NOTICE));
         ui.add_space(8.0);
-        ui.heading(tr!("Tahoma font (Wine)"));
+        ui.heading(tr!("Fonts"));
         ui.label(unwrap_paragraphs(FONT_NOTICE));
+        egui::CollapsingHeader::new(tr!("SIL Open Font License 1.1 (full text)"))
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(RichText::new(OFL_TEXT).monospace().size(11.0));
+            });
         egui::CollapsingHeader::new(tr!("GNU Lesser General Public License v2.1 (full text)"))
             .default_open(false)
             .show(ui, |ui| {
@@ -931,7 +937,7 @@ impl OpenHlswApp {
         let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
         let config = config::load();
         crate::i18n::set_language(config.settings.language);
-        theme::install_fonts(&cc.egui_ctx);
+        theme::install_fonts(&cc.egui_ctx, config.settings.font);
         theme::apply(&cc.egui_ctx, config.settings.theme);
         cc.egui_ctx
             .set_zoom_factor(config.settings.text_size.zoom());
@@ -2333,6 +2339,9 @@ impl OpenHlswApp {
                 }
                 if new.text_size != self.settings.text_size {
                     ctx.set_zoom_factor(new.text_size.zoom());
+                }
+                if new.font != self.settings.font {
+                    theme::install_fonts(ctx, new.font);
                 }
                 if new.language != self.settings.language {
                     crate::i18n::set_language(new.language);

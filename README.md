@@ -214,7 +214,7 @@ src/
   game_icons.rs        game icons (assets/games/*.ico, atlas built by build.rs)
   config.rs            JSON settings
   settings.rs          settings + settings dialog
-  theme.rs             skins (White/Black), text size, fonts (Tahoma)
+  theme.rs             skins (White/Black), text size, fonts (Arial / Tahoma / Inconsolata)
   i18n.rs              user interface languages (tr! / t(), assets/lang/*.json)
   app.rs               GUI (egui/eframe) in the HLSW layout
   main.rs              program start
@@ -253,8 +253,9 @@ openHLSW is free software: you can redistribute it and/or modify it under the te
 The game icons in `assets/games/` are **not** covered by this license: they show logos and
 artwork of the respective games, all rights belong to their owners, see
 [`assets/games/NOTICE.txt`](assets/games/NOTICE.txt). The country flags are public domain
-(`assets/FLAGS-LICENSE.txt`). On Linux and macOS without Microsoft's Tahoma, openHLSW uses
-the bundled Tahoma clone of the Wine project (LGPL-2.1-or-later, `assets/fonts/NOTICE.txt`).
+(`assets/FLAGS-LICENSE.txt`). The bundled fonts (Inconsolata and Liberation Sans under the
+SIL Open Font License 1.1, Wine's Tahoma under the LGPL-2.1-or-later) are listed in
+`assets/fonts/NOTICE.txt`.
 openHLSW is not affiliated with the original HLSW or with any
 game publisher. The license and these notices are also shown in the program under
 **? → License**.

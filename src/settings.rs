@@ -10,7 +10,7 @@ use egui_extras::Column;
 use serde::{Deserialize, Serialize};
 
 use crate::app::{EditMenu, fit, group_box, list_frame, plain_header, styled_table, tab_strip};
-use crate::theme::{Palette, TextSize, Theme};
+use crate::theme::{Palette, TextSize, Theme, UiFont};
 
 /// A game from HLSW's "My Games" list. Games with a Steam `app_id` are Source or GoldSrc
 /// (Half-Life 1) games whose servers openHLSW can query today; the others are listed for their
@@ -544,6 +544,8 @@ pub struct Settings {
     pub geo_lookup: bool,
     pub theme: Theme,
     pub text_size: TextSize,
+    /// Font of the user interface.
+    pub font: UiFont,
     /// User interface language.
     pub language: crate::i18n::Language,
     /// Bumped when a default changes, so old configs are migrated once (1 = refresh 1 s).
@@ -674,6 +676,7 @@ impl Default for Settings {
             geo_lookup: true,
             theme: Theme::Light,
             text_size: TextSize::Normal,
+            font: UiFont::Arial,
             language: crate::i18n::Language::System,
             defaults_revision: 1,
             connect_on_double_click: true,
@@ -1239,6 +1242,16 @@ impl SettingsDialog {
                 .show_ui(ui, |ui| {
                     for l in crate::i18n::Language::ALL {
                         ui.selectable_value(&mut d.language, l, label(l));
+                    }
+                });
+        });
+        group_box(ui, p, tr!("Font"), ui.available_width() - 20.0, |ui| {
+            egui::ComboBox::from_id_salt("ui_font")
+                .selected_text(d.font.label())
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    for f in UiFont::ALL {
+                        ui.selectable_value(&mut d.font, f, f.label());
                     }
                 });
         });

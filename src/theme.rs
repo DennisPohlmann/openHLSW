@@ -1,4 +1,4 @@
-//! Look & feel. The light theme mimics HLSW on Windows (Tahoma 8pt, white list
+//! Look & feel. The light theme mimics HLSW on Windows (white list
 //! views, grey chrome, square controls); the dark theme uses the same layout with
 //! dark colors.
 
@@ -288,50 +288,90 @@ fn crisp(mut data: FontData) -> FontData {
     data
 }
 
-/// Tahoma clone from the Wine project (LGPL-2.1-or-later, see `assets/fonts/NOTICE.txt`).
+/// Font of the user interface (Settings → Misc → Font).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum UiFont {
+    /// Arial: the system's, otherwise the bundled Liberation Sans (same letter widths).
+    #[default]
+    Arial,
+    /// Tahoma, HLSW's font: the system's, otherwise the bundled Wine Tahoma.
+    Tahoma,
+    /// Inconsolata (bundled).
+    Inconsolata,
+}
+
+impl UiFont {
+    pub const ALL: [UiFont; 3] = [UiFont::Arial, UiFont::Tahoma, UiFont::Inconsolata];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            UiFont::Arial => "Arial",
+            UiFont::Tahoma => "Tahoma",
+            UiFont::Inconsolata => "Inconsolata",
+        }
+    }
+
+    /// Installed font files, tried in this order.
+    fn system_paths(self) -> &'static [&'static str] {
+        match self {
+            UiFont::Arial if cfg!(windows) => &["C:\\Windows\\Fonts\\arial.ttf"],
+            UiFont::Arial if cfg!(target_os = "macos") => &[
+                "/System/Library/Fonts/Supplemental/Arial.ttf",
+                "/Library/Fonts/Arial.ttf",
+            ],
+            UiFont::Arial => &[
+                "/usr/share/fonts/truetype/msttcorefonts/arial.ttf",
+                "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
+                "/usr/share/fonts/TTF/arial.ttf",
+            ],
+            UiFont::Tahoma if cfg!(windows) => &["C:\\Windows\\Fonts\\tahoma.ttf"],
+            UiFont::Tahoma if cfg!(target_os = "macos") => &[
+                "/System/Library/Fonts/Supplemental/Tahoma.ttf",
+                "/Library/Fonts/Tahoma.ttf",
+            ],
+            UiFont::Tahoma => &[
+                "/usr/share/fonts/truetype/msttcorefonts/tahoma.ttf",
+                "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
+                "/usr/share/fonts/TTF/tahoma.ttf",
+            ],
+            UiFont::Inconsolata => &[],
+        }
+    }
+
+    /// The font file to use: an installed one, otherwise the bundled replacement.
+    fn data(self) -> FontData {
+        if let Some(bytes) = self
+            .system_paths()
+            .iter()
+            .find_map(|p| std::fs::read(p).ok())
+        {
+            return FontData::from_owned(bytes);
+        }
+        FontData::from_static(match self {
+            UiFont::Arial => BUNDLED_ARIAL,
+            UiFont::Tahoma => BUNDLED_TAHOMA,
+            UiFont::Inconsolata => INCONSOLATA,
+        })
+    }
+}
+
+/// Bundled fonts, see `assets/fonts/NOTICE.txt`: Inconsolata and Liberation Sans (SIL Open
+/// Font License 1.1, `OFL.txt`), Wine's Tahoma (LGPL-2.1-or-later, `LGPL-2.1.txt`).
+/// Windows always has Arial and Tahoma, so their replacements are only bundled elsewhere.
+static INCONSOLATA: &[u8] = include_bytes!("../assets/fonts/Inconsolata-Regular.ttf");
+#[cfg(not(windows))]
+static BUNDLED_ARIAL: &[u8] = include_bytes!("../assets/fonts/LiberationSans-Regular.ttf");
 #[cfg(not(windows))]
 static BUNDLED_TAHOMA: &[u8] = include_bytes!("../assets/fonts/tahoma.ttf");
+#[cfg(windows)]
+static BUNDLED_ARIAL: &[u8] = INCONSOLATA;
+#[cfg(windows)]
+static BUNDLED_TAHOMA: &[u8] = INCONSOLATA;
 
-/// Uses Tahoma (HLSW's font): the system's on Windows and where installed, otherwise the
-/// bundled Wine Tahoma.
-/// The bundled egui fonts stay as fallbacks for missing glyphs.
-pub fn install_fonts(ctx: &egui::Context) {
-    let candidates: &[&str] = if cfg!(windows) {
-        &[
-            "C:\\Windows\\Fonts\\tahoma.ttf",
-            "C:\\Windows\\Fonts\\segoeui.ttf",
-        ]
-    } else if cfg!(target_os = "macos") {
-        &[
-            "/System/Library/Fonts/Supplemental/Tahoma.ttf",
-            "/Library/Fonts/Tahoma.ttf",
-        ]
-    } else {
-        &[
-            "/usr/share/fonts/truetype/msttcorefonts/tahoma.ttf",
-            "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
-            "/usr/share/fonts/TTF/tahoma.ttf",
-        ]
-    };
-    let mono_candidates: &[&str] = if cfg!(windows) {
-        &[
-            "C:\\Windows\\Fonts\\consola.ttf",
-            "C:\\Windows\\Fonts\\cour.ttf",
-        ]
-    } else if cfg!(target_os = "macos") {
-        &[
-            "/System/Library/Fonts/Supplemental/Andale Mono.ttf",
-            "/System/Library/Fonts/Supplemental/Courier New.ttf",
-        ]
-    } else {
-        &[
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-        ]
-    };
-
-    // Fallbacks for characters Tahoma does not have (symbols, CJK, Cyrillic variants,
+/// Installs the chosen interface font (Inconsolata for monospace text) with fallbacks for
+/// all other scripts.
+pub fn install_fonts(ctx: &egui::Context, font: UiFont) {
+    // Fallbacks for characters the interface font does not have (symbols, CJK, Cyrillic variants,
     // emoji, ...) - player and server names use all of Unicode.
     let fallbacks: &[&str] = if cfg!(windows) {
         &[
@@ -375,45 +415,22 @@ pub fn install_fonts(ctx: &egui::Context) {
     };
 
     let mut fonts = FontDefinitions::default();
-    let add_first =
-        |fonts: &mut FontDefinitions, name: &str, paths: &[&str], family: FontFamily| {
-            if let Some(bytes) = paths.iter().find_map(|p| std::fs::read(p).ok()) {
-                fonts
-                    .font_data
-                    .insert(name.to_owned(), crisp(FontData::from_owned(bytes)).into());
-                fonts
-                    .families
-                    .entry(family)
-                    .or_default()
-                    .insert(0, name.to_owned());
-            }
-        };
-    add_first(
-        &mut fonts,
-        "system-ui",
-        candidates,
-        FontFamily::Proportional,
+    fonts
+        .font_data
+        .insert("ui".to_owned(), crisp(font.data()).into());
+    fonts.font_data.insert(
+        "inconsolata".to_owned(),
+        crisp(FontData::from_static(INCONSOLATA)).into(),
     );
-    // No Microsoft Tahoma installed (Linux, some macOS): use the bundled Tahoma clone from
-    // the Wine project, so the UI looks like HLSW everywhere.
-    #[cfg(not(windows))]
-    if !fonts.font_data.contains_key("system-ui") {
-        fonts.font_data.insert(
-            "system-ui".to_owned(),
-            crisp(FontData::from_static(BUNDLED_TAHOMA)).into(),
-        );
+    let first = |fonts: &mut FontDefinitions, family: FontFamily, name: &str| {
         fonts
             .families
-            .entry(FontFamily::Proportional)
+            .entry(family)
             .or_default()
-            .insert(0, "system-ui".to_owned());
-    }
-    add_first(
-        &mut fonts,
-        "system-mono",
-        mono_candidates,
-        FontFamily::Monospace,
-    );
+            .insert(0, name.to_owned());
+    };
+    first(&mut fonts, FontFamily::Proportional, "ui");
+    first(&mut fonts, FontFamily::Monospace, "inconsolata");
 
     // Fallbacks go right after the main font (before egui's bundled fonts) in both families.
     let mut position = 1;
