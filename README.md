@@ -164,9 +164,11 @@ e.g. on Debian/Ubuntu: `sudo apt install libxkbcommon-dev libgl1-mesa-dev libway
 
 | System | Architectures | Packages |
 |---|---|---|
-| Linux | x86, x86_64, arm64 | `.tar.gz`, `.deb`, `.rpm` |
-| Windows | x86, x86_64, arm64 | `.zip`, `.msi` |
-| macOS | arm64 (Apple silicon) | `.dmg`, `.tar.gz` |
+| Linux | x86_64, aarch64 | `.tar.gz`, `.deb`, `.rpm`, `.flatpak` |
+| Linux | riscv64 | `.tar.gz`, `.deb`, `.rpm` |
+| Windows | x64, x86, arm64 | `.msi`, `-portable.zip` |
+| macOS | universal (Apple silicon + Intel) | `.dmg`, `.zip` |
+| FreeBSD | x86_64 | `.tar.gz` |
 
 It only runs for version tags: `git tag v0.1.0 && git push --tags` builds everything and
 creates a GitHub release with all packages; the release text is that version's section of
@@ -175,7 +177,9 @@ so the binaries run on older distributions too), `.deb` / `.rpm` are made with `
 `cargo-generate-rpm` (settings in `Cargo.toml`), the `.msi` with WiX 5
 (`packaging/windows/openhlsw.wxs`) as a setup wizard: license, choice of the installation
 folder, progress and a finish page with "Launch openHLSW". The Linux packages install a desktop entry and icon
-(`packaging/linux/`). The macOS app bundle (`packaging/macos/Info.plist`) is only ad-hoc
+(`packaging/linux/`); the Flatpak (`packaging/linux/flatpak/`, freedesktop runtime 24.08)
+packs the same binaries – install it with `flatpak install --user openhlsw-…flatpak`.
+FreeBSD is built natively in a FreeBSD VM. The macOS binaries are universal (`lipo`). The macOS app bundle (`packaging/macos/Info.plist`) is only ad-hoc
 signed, not notarized: on the first start, right-click the app → Open (or run
 `xattr -dr com.apple.quarantine /Applications/openHLSW.app`).
 

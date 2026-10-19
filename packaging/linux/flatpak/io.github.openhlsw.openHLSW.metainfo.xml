@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.openhlsw.openHLSW</id>
+  <name>openHLSW</name>
+  <summary>Game server browser and RCON admin tool</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      openHLSW is a free remake of HLSW: a game server browser and RCON admin tool for
+      Source (SRCDS, CS2), Half-Life 1 (HLDS) and GameSpy 2 servers.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.openhlsw.openHLSW.desktop</launchable>
+  <url type="homepage">https://github.com/DennisPohlmann/openHLSW</url>
+  <url type="bugtracker">https://github.com/DennisPohlmann/openHLSW/issues</url>
+  <categories>
+    <category>Game</category>
+    <category>Network</category>
+  </categories>
+  <content_rating type="oars-1.1" />
+</component>

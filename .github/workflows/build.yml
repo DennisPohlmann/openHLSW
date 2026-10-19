@@ -1,8 +1,10 @@
 # Builds and packages openHLSW when a version tag "v*" is pushed
 # (git tag v0.1.0 && git push --tags) and publishes a GitHub release with all packages:
-#   Linux   (x86, x86_64, arm64): .tar.gz, .deb, .rpm
-#   Windows (x86, x86_64, arm64): .zip, .msi
-#   macOS   (Apple silicon):      .dmg, .tar.gz
+#   Linux   x86_64, aarch64: .tar.gz, .deb, .rpm, .flatpak
+#   Linux   riscv64:         .tar.gz, .deb, .rpm
+#   Windows x64, x86, arm64: .msi, -portable.zip
+#   macOS   universal:       .dmg, .zip (Apple silicon + Intel)
+#   FreeBSD x86_64:          .tar.gz
 name: build
 
 on:
@@ -38,10 +40,10 @@ jobs:
         include:
           - arch: x86_64
             target: x86_64-unknown-linux-gnu
-          - arch: x86
-            target: i686-unknown-linux-gnu
-          - arch: arm64
+          - arch: aarch64
             target: aarch64-unknown-linux-gnu
+          - arch: riscv64
+            target: riscv64gc-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -90,6 +92,63 @@ jobs:
           name: openhlsw-linux-${{ matrix.arch }}
           path: dist/*
 
+  flatpak:
+    name: flatpak ${{ matrix.arch }}
+    needs: linux
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: openhlsw-linux-${{ matrix.arch }}
+          path: linux
+
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      # The Flatpak packs the binaries of the Linux build (cross, old glibc).
+      - name: Flatpak sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir=build/flatpak
+          mkdir -p "$dir"
+          mkdir -p build/bin
+          tar -xzf linux/openhlsw-v${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}.tar.gz \
+              -C build/bin --strip-components=1
+          cp build/bin/openhlsw build/bin/openhlsw-cli "$dir/"
+          cp packaging/linux/openhlsw.desktop packaging/linux/openhlsw.png LICENSE "$dir/"
+          cp packaging/linux/flatpak/* "$dir/"
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: build/flatpak/io.github.openhlsw.openHLSW.yml
+          bundle: openhlsw-v${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}.flatpak
+          arch: ${{ matrix.arch }}
+          cache: false
+          upload-artifact: false
+
+      - name: Collect
+        shell: bash
+        run: mkdir -p dist && mv openhlsw-*.flatpak dist/ && ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openhlsw-flatpak-${{ matrix.arch }}
+          path: dist/*
+
   windows:
     name: windows ${{ matrix.arch }}
     needs: check
@@ -98,7 +157,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
+          - arch: x64
             target: x86_64-pc-windows-msvc
             wix_arch: x64
           - arch: x86
@@ -124,10 +183,10 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package .zip
+      - name: Package -portable.zip
         shell: pwsh
         run: |
-          $name = "openhlsw-v${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
+          $name = "openhlsw-v${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}-portable"
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Copy-Item target\${{ matrix.target }}\release\openhlsw.exe, target\${{ matrix.target }}\release\openhlsw-cli.exe, README.md, CHANGELOG.md, LICENSE -Destination $dir
@@ -172,32 +231,45 @@ jobs:
           path: dist/*
 
   macos:
-    name: macos arm64
+    name: macos universal
     needs: check
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
-          key: aarch64-apple-darwin
+          key: macos-universal
 
       - name: Version
         id: version
         shell: bash
         run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
 
-      - name: Build
-        run: cargo build --release --target aarch64-apple-darwin
+      - name: Build (Apple silicon + Intel)
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Universal binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/universal
+          for b in openhlsw openhlsw-cli; do
+            lipo -create -output "build/universal/$b" \
+              "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
+          done
+          lipo -info build/universal/openhlsw
 
       - name: App bundle
         shell: bash
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
-          bin=target/aarch64-apple-darwin/release
+          bin=build/universal
           app=build/openHLSW.app
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp "$bin/openhlsw" "$bin/openhlsw-cli" "$app/Contents/MacOS/"
@@ -215,15 +287,16 @@ jobs:
           # Ad-hoc signature (Apple silicon only runs signed code; not notarized).
           codesign --force --deep --sign - "$app"
 
-      - name: Package .tar.gz and .dmg
+      - name: Package .zip and .dmg
         shell: bash
         run: |
           set -euo pipefail
-          name="openhlsw-v${{ steps.version.outputs.version }}-macos-arm64"
+          name="openhlsw-v${{ steps.version.outputs.version }}-macos-universal"
           mkdir -p dist "build/$name"
           cp -R build/openHLSW.app README.md CHANGELOG.md LICENSE "build/$name/"
           cp assets/games/NOTICE.txt "build/$name/GAME-ICONS-NOTICE.txt"
-          tar -C build -czf "dist/$name.tar.gz" "$name"
+          # ditto keeps the app bundle intact (permissions, signature).
+          ditto -c -k --keepParent "build/$name" "dist/$name.zip"
           # Disk image with the app and a link to /Applications for drag & drop install.
           ln -s /Applications "build/$name/Applications"
           hdiutil create -volname "openHLSW" -srcfolder "build/$name" -ov -format UDZO "dist/$name.dmg"
@@ -231,12 +304,55 @@ jobs:
       - run: ls -l dist
       - uses: actions/upload-artifact@v4
         with:
-          name: openhlsw-macos-arm64
+          name: openhlsw-macos-universal
           path: dist/*
+
+  freebsd:
+    name: freebsd x86_64
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      # Native build in a FreeBSD VM (Rust from rustup, X11 / Wayland / GL are loaded at runtime).
+      - name: Build and package in FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        with:
+          envs: VERSION
+          usesh: true
+          prepare: |
+            pkg install -y curl pkgconf libX11 libxkbcommon
+          run: |
+            set -eu
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            . "$HOME/.cargo/env"
+            cargo build --release
+            name="openhlsw-v${VERSION}-freebsd-x86_64"
+            mkdir -p "dist/$name"
+            cp target/release/openhlsw target/release/openhlsw-cli \
+               README.md CHANGELOG.md LICENSE \
+               packaging/linux/openhlsw.desktop packaging/linux/openhlsw.png \
+               "dist/$name/"
+            cp assets/games/NOTICE.txt "dist/$name/GAME-ICONS-NOTICE.txt"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+            rm -rf "dist/$name"
+
+      - run: ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openhlsw-freebsd-x86_64
+          path: dist/*.tar.gz
 
   release:
     name: GitHub release
-    needs: [linux, windows, macos]
+    needs: [linux, flatpak, windows, macos, freebsd]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

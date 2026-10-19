@@ -1,0 +1,31 @@
+# Flatpak of openHLSW, built by the GitHub workflow (.github/workflows/build.yml).
+# The workflow copies the released Linux binaries (built with cross) next to this file,
+# together with the desktop entry, icon and metainfo, and runs flatpak-builder on it.
+id: io.github.openhlsw.openHLSW
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+command: openhlsw
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Server list → Import Steam Favorites.
+  - --filesystem=~/.steam:ro
+  - --filesystem=~/.local/share/Steam:ro
+modules:
+  - name: openhlsw
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 openhlsw /app/bin/openhlsw
+      - install -Dm755 openhlsw-cli /app/bin/openhlsw-cli
+      - install -Dm644 openhlsw.png /app/share/icons/hicolor/256x256/apps/io.github.openhlsw.openHLSW.png
+      - desktop-file-edit --set-icon=io.github.openhlsw.openHLSW --set-key=StartupWMClass --set-value=io.github.openhlsw.openHLSW openhlsw.desktop
+      - install -Dm644 openhlsw.desktop /app/share/applications/io.github.openhlsw.openHLSW.desktop
+      - install -Dm644 io.github.openhlsw.openHLSW.metainfo.xml /app/share/metainfo/io.github.openhlsw.openHLSW.metainfo.xml
+      - install -Dm644 LICENSE /app/share/licenses/io.github.openhlsw.openHLSW/LICENSE
+    sources:
+      - type: dir
+        path: .
