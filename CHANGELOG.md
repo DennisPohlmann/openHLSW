@@ -4,6 +4,51 @@ All notable changes to openHLSW are listed here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## [v0.1.3] - 2026-10-20
+
+### Added
+- The user interface is available in 18 languages: English, German, French, Spanish
+  (Argentina), Portuguese (Portugal), Dutch, Danish, Swedish, Norwegian, Finnish, Polish,
+  Czech, Slovak, Hungarian, Turkish, Russian and Chinese (Simplified and Traditional).
+  Settings → Misc → Language; by default openHLSW follows the system language.
+- **Server list filter**: "Filter" check box and "Edit filter..." in the toolbar. Hides
+  servers by timeout, ping, password, game, map, country, AddOns, players, slots, free
+  slots and time / frag / round limits; the top right shows "X of Y servers".
+- **Find**: Server → Find → Server Name (Ctrl+F), Player..., Rule... across all servers of
+  the list, Find Next (F3). The Rcon console has its own find ("/" switch,
+  Ctrl+Shift+F, F3) that highlights the hits.
+- **Global Player ID Database** (File menu, Ctrl+W): Steam IDs with names, type (Normal,
+  Friend, Lamer, Blue, Brown – colours the player name), comment and banned flag. Names
+  are added automatically from `status` (Settings → Misc). Import / export `banned.cfg`,
+  player columns "Global ID Database Names / Comment" and a right-click submenu on players.
+- **Ban List**: Write (`writeid` / `writeip`), Reload, filter field and transfer of bans to
+  and from the Global ID Database.
+- **Admin Notification** (Rcon Config): chat messages starting with `@` play the
+  notification sound and are shown in the status bar.
+- **Connect**: player name (View → Player Name, passed as `+name`), start parameters per
+  game (Settings → My Games, right-click presets such as `-novid` or
+  `+rcon_password <RCONPASSWORD>`) and per server (Properties → Additional parameters).
+  Asks before connecting to a password protected server without a password and waits for a
+  free slot on full servers ("Connecting..." window, connects automatically).
+- Settings → Connecting: new option **Quit openHLSW** after connecting.
+- Server list menu: **Import Steam Favorites** and **Search LAN** (ports 27015-27030).
+- File → Advanced: clear the location and provider cache, reset all ping graphs.
+- Confirmations before deleting a server and before changing the level.
+
+### Changed
+- Selectable user interface font under Settings → Misc → Font: **Arial** (default),
+  **Tahoma** (HLSW's font) or **Inconsolata**. Windows uses its own Arial and Tahoma;
+  Linux and macOS use them when installed and otherwise bundled replacements (Liberation
+  Sans for Arial, Wine's Tahoma). Inconsolata is bundled and also used for the console.
+  The font licenses are shown under ? → License.
+- Buttons and labels grow with their (translated) text instead of cutting it off.
+- The default text size is now **Large (115 %)**; existing settings are kept.
+- Release packages: Linux **x86_64 / aarch64** (`.tar.gz`, `.deb`, `.rpm`, new **Flatpak**)
+  and new **riscv64** (`.tar.gz`, `.deb`, `.rpm`); Windows x64 / x86 / arm64 (`.msi`,
+  `-portable.zip`); macOS now as a **universal** app for Apple silicon and Intel (`.dmg`,
+  `.zip`); new **FreeBSD x86_64** (`.tar.gz`). The 32-bit Linux build is no longer
+  provided.
+
 ## [v0.1.2] - 2026-10-19
 
 ### Added
