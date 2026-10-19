@@ -144,8 +144,7 @@ e.g. on Debian/Ubuntu: `sudo apt install libxkbcommon-dev libgl1-mesa-dev libway
 
 ### Packages (GitHub Actions)
 
-`ci/github-build.yml` builds and packages openHLSW when a version tag is pushed. Copy it to
-`.github/workflows/build.yml` in your repository to enable it:
+`.github/workflows/build.yml` builds and packages openHLSW when a version tag is pushed:
 
 | System | Architectures | Packages |
 |---|---|---|
@@ -154,7 +153,8 @@ e.g. on Debian/Ubuntu: `sudo apt install libxkbcommon-dev libgl1-mesa-dev libway
 | macOS | arm64 (Apple silicon) | `.dmg`, `.tar.gz` |
 
 It only runs for version tags: `git tag v0.1.0 && git push --tags` builds everything and
-creates a GitHub release with all packages and the changelog. Linux builds use [cross](https://github.com/cross-rs/cross) (old glibc,
+creates a GitHub release with all packages; the release text is that version's section of
+`CHANGELOG.md`. Linux builds use [cross](https://github.com/cross-rs/cross) (old glibc,
 so the binaries run on older distributions too), `.deb` / `.rpm` are made with `cargo-deb` /
 `cargo-generate-rpm` (settings in `Cargo.toml`), the `.msi` with WiX 5
 (`packaging/windows/openhlsw.wxs`). The Linux packages install a desktop entry and icon

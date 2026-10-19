@@ -1,6 +1,6 @@
 <!--
   MSI installer for openHLSW (WiX Toolset v5).
-  Built by the GitHub workflow (ci/github-build.yml):
+  Built by the GitHub workflow (.github/workflows/build.yml):
     wix build -arch x64|x86|arm64 -d Version=0.1.0 -d RepoDir=<repository> -d BinDir=<dir with the .exe files>
               packaging/windows/openhlsw.wxs -o openhlsw.msi
 -->

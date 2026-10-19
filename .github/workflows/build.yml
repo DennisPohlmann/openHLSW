@@ -67,13 +67,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          name="openhlsw-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}"
+          name="openhlsw-v${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}"
           mkdir -p "dist/$name"
           cp target/${{ matrix.target }}/release/openhlsw \
              target/${{ matrix.target }}/release/openhlsw-cli \
-             README.md CHANGELOG.md \
+             README.md CHANGELOG.md LICENSE \
              packaging/linux/openhlsw.desktop packaging/linux/openhlsw.png \
              "dist/$name/"
+          cp assets/games/NOTICE.txt "dist/$name/GAME-ICONS-NOTICE.txt"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -rf "dist/$name"
 
@@ -126,10 +127,11 @@ jobs:
       - name: Package .zip
         shell: pwsh
         run: |
-          $name = "openhlsw-${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
+          $name = "openhlsw-v${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
           $dir = "dist\$name"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          Copy-Item target\${{ matrix.target }}\release\openhlsw.exe, target\${{ matrix.target }}\release\openhlsw-cli.exe, README.md, CHANGELOG.md -Destination $dir
+          Copy-Item target\${{ matrix.target }}\release\openhlsw.exe, target\${{ matrix.target }}\release\openhlsw-cli.exe, README.md, CHANGELOG.md, LICENSE -Destination $dir
+          Copy-Item assets\games\NOTICE.txt "$dir\GAME-ICONS-NOTICE.txt"
           Compress-Archive -Path "$dir\*" -DestinationPath "dist\$name.zip"
           Remove-Item -Recurse -Force $dir
 
@@ -139,7 +141,7 @@ jobs:
       - name: Package .msi
         shell: pwsh
         run: |
-          $name = "openhlsw-${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
+          $name = "openhlsw-v${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
           wix build -arch ${{ matrix.wix_arch }} `
             -d Version=${{ steps.version.outputs.version }} `
             -d RepoDir="$PWD" `
@@ -202,9 +204,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          name="openhlsw-${{ steps.version.outputs.version }}-macos-arm64"
+          name="openhlsw-v${{ steps.version.outputs.version }}-macos-arm64"
           mkdir -p dist "build/$name"
-          cp -R build/openHLSW.app README.md CHANGELOG.md "build/$name/"
+          cp -R build/openHLSW.app README.md CHANGELOG.md LICENSE "build/$name/"
+          cp assets/games/NOTICE.txt "build/$name/GAME-ICONS-NOTICE.txt"
           tar -C build -czf "dist/$name.tar.gz" "$name"
           # Disk image with the app and a link to /Applications for drag & drop install.
           ln -s /Applications "build/$name/Applications"
