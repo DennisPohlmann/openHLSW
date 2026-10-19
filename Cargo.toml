@@ -1,0 +1,63 @@
+[package]
+name = "openhlsw"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+description = "Game server browser and RCON admin tool (HLSW remake for Source, GoldSrc and GameSpy 2)"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+dirs = "7"
+dns-lookup = "2"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "persistence", "clipboard", "links"] }
+egui_extras = { version = "0.37", features = ["serde"] }
+png = "0.18.1"
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+
+[build-dependencies]
+ico = "0.6"
+png = "0.18"
+winresource = "0.1"
+
+# --- Linux packages (built by the GitHub workflow ci/github-build.yml) --------------------------
+
+[package.metadata.deb]
+maintainer = "openHLSW contributors <https://github.com/DennisPohlmann/openHLSW>"
+section = "games"
+priority = "optional"
+extended-description = """\
+openHLSW is a free remake of HLSW: a game server browser and RCON admin tool for \
+Source (SRCDS, CS2), Half-Life 1 (HLDS) and GameSpy 2 servers."""
+# Cross builds cannot run dpkg-shlibdeps; X11 / Wayland / GL are loaded at runtime.
+depends = "libc6, libgl1, libxkbcommon0, libx11-6 | libwayland-client0"
+assets = [
+    ["target/release/openhlsw", "usr/bin/", "755"],
+    ["target/release/openhlsw-cli", "usr/bin/", "755"],
+    ["packaging/linux/openhlsw.desktop", "usr/share/applications/", "644"],
+    ["packaging/linux/openhlsw.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["README.md", "usr/share/doc/openhlsw/", "644"],
+    ["CHANGELOG.md", "usr/share/doc/openhlsw/", "644"],
+    ["LICENSE", "usr/share/doc/openhlsw/", "644"],
+    ["assets/games/NOTICE.txt", "usr/share/doc/openhlsw/GAME-ICONS-NOTICE.txt", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Game server browser and RCON admin tool (HLSW remake)"
+assets = [
+    { source = "target/release/openhlsw", dest = "/usr/bin/openhlsw", mode = "755" },
+    { source = "target/release/openhlsw-cli", dest = "/usr/bin/openhlsw-cli", mode = "755" },
+    { source = "packaging/linux/openhlsw.desktop", dest = "/usr/share/applications/openhlsw.desktop", mode = "644" },
+    { source = "packaging/linux/openhlsw.png", dest = "/usr/share/icons/hicolor/256x256/apps/openhlsw.png", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/openhlsw/README.md", mode = "644", doc = true },
+    { source = "CHANGELOG.md", dest = "/usr/share/doc/openhlsw/CHANGELOG.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/openhlsw/LICENSE", mode = "644", doc = true },
+    { source = "assets/games/NOTICE.txt", dest = "/usr/share/doc/openhlsw/GAME-ICONS-NOTICE.txt", mode = "644", doc = true },
+]

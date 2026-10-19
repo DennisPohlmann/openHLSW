@@ -1,0 +1,208 @@
+//! Build script:
+//! * packs the game icons in `assets/games/*.ico` into one texture atlas (32x32 cells,
+//!   sharp at larger text sizes and on HiDPI screens),
+//! * prepares the window icon from `assets/openhlsw.ico`,
+//! * embeds `assets/openhlsw.ico` as the .exe icon on Windows.
+
+use std::env;
+use std::fs::{self, File};
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
+
+const CELL: u32 = 32;
+const COLUMNS: u32 = 16;
+
+fn main() {
+    println!("cargo:rerun-if-changed=assets/games");
+    println!("cargo:rerun-if-changed=assets/openhlsw.ico");
+    let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+
+    // --- game icon atlas -----------------------------------------------------
+    let mut icons: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut paths: Vec<PathBuf> = fs::read_dir("assets/games")
+        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
+        .unwrap_or_default();
+    paths.sort();
+    for path in paths {
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase)
+            .as_deref()
+            != Some("ico")
+        {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let name = stem.strip_prefix("GameType_").unwrap_or(stem).to_string();
+        match load_game_icon(&path, CELL) {
+            Some(rgba) => icons.push((name, rgba)),
+            None => println!("cargo:warning=could not decode {}", path.display()),
+        }
+    }
+    let rows = (icons.len() as u32).div_ceil(COLUMNS).max(1);
+    let (w, h) = (CELL * COLUMNS, CELL * rows);
+    let mut atlas = vec![0u8; (w * h * 4) as usize];
+    for (i, (_, rgba)) in icons.iter().enumerate() {
+        let (cx, cy) = ((i as u32 % COLUMNS) * CELL, (i as u32 / COLUMNS) * CELL);
+        for y in 0..CELL {
+            let src = (y * CELL * 4) as usize;
+            let dst = (((cy + y) * w + cx) * 4) as usize;
+            atlas[dst..dst + (CELL * 4) as usize]
+                .copy_from_slice(&rgba[src..src + (CELL * 4) as usize]);
+        }
+    }
+    write_png(&out.join("game_icons.png"), w, h, &atlas);
+    let names: Vec<&str> = icons.iter().map(|(n, _)| n.as_str()).collect();
+    fs::write(out.join("game_icons.txt"), names.join(",")).expect("write icon index");
+
+    // --- window icon (64x64 RGBA) -------------------------------------------
+    let app =
+        load_icon(Path::new("assets/openhlsw.ico"), 64).unwrap_or_else(|| vec![0; 64 * 64 * 4]);
+    fs::write(out.join("app_icon.rgba"), app).expect("write app icon");
+
+    // --- .exe icon on Windows -----------------------------------------------
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && Path::new("assets/openhlsw.ico").exists()
+    {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/openhlsw.ico");
+        if let Err(e) = res.compile() {
+            println!("cargo:warning=could not embed the program icon: {e}");
+        }
+    }
+}
+
+/// Game icon for the atlas. Uses the entry of the right size when its picture fills the
+/// canvas; otherwise (icons whose logo sits small in a big transparent canvas) the largest
+/// entry, cropped to the visible part, so every icon fills its cell.
+fn load_game_icon(path: &Path, size: u32) -> Option<Vec<u8>> {
+    let dir = ico::IconDir::read(File::open(path).ok()?).ok()?;
+    let entries = dir.entries();
+    if let Some(exact) = entries
+        .iter()
+        .filter(|e| e.width() == size && e.height() == size)
+        .max_by_key(|e| e.bits_per_pixel())
+        && let Ok(image) = exact.decode()
+        && let Some((x0, y0, x1, y1)) = alpha_bounds(image.rgba_data(), size, size)
+        && (x1 - x0).max(y1 - y0) * 10 >= size * 8
+    {
+        return Some(image.rgba_data().to_vec());
+    }
+    let largest = entries
+        .iter()
+        .max_by_key(|e| (e.width(), e.bits_per_pixel()))?;
+    let image = largest.decode().ok()?;
+    let (w, h) = (image.width(), image.height());
+    let data = image.rgba_data();
+    let Some((x0, y0, x1, y1)) = alpha_bounds(data, w, h) else {
+        return Some(resize(data, w, h, size));
+    };
+    // Square crop around the visible part, kept inside the image.
+    let side = (x1 - x0).max(y1 - y0).max(1);
+    let cx = (x0 + x1) / 2;
+    let cy = (y0 + y1) / 2;
+    let left = cx.saturating_sub(side / 2).min(w.saturating_sub(side));
+    let top = cy.saturating_sub(side / 2).min(h.saturating_sub(side));
+    let side = side.min(w).min(h);
+    let mut cropped = vec![0u8; (side * side * 4) as usize];
+    for y in 0..side {
+        let src = (((top + y) * w + left) * 4) as usize;
+        let dst = (y * side * 4) as usize;
+        cropped[dst..dst + (side * 4) as usize]
+            .copy_from_slice(&data[src..src + (side * 4) as usize]);
+    }
+    Some(resize(&cropped, side, side, size))
+}
+
+/// Bounding box (x0, y0, x1, y1; end exclusive) of the pixels that are not (almost)
+/// transparent.
+fn alpha_bounds(data: &[u8], w: u32, h: u32) -> Option<(u32, u32, u32, u32)> {
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            if data[((y * w + x) * 4 + 3) as usize] > 16 {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
+}
+
+/// Decodes the best entry of an .ico file and scales it to `size` x `size` RGBA.
+fn load_icon(path: &Path, size: u32) -> Option<Vec<u8>> {
+    let dir = ico::IconDir::read(File::open(path).ok()?).ok()?;
+    let entries = dir.entries();
+    // exact size if present, otherwise the smallest larger one, otherwise the largest
+    let entry = entries
+        .iter()
+        .filter(|e| e.width() == size)
+        .max_by_key(|e| e.bits_per_pixel())
+        .or_else(|| {
+            entries
+                .iter()
+                .filter(|e| e.width() > size)
+                .min_by_key(|e| e.width())
+        })
+        .or_else(|| entries.iter().max_by_key(|e| e.width()))?;
+    let image = entry.decode().ok()?;
+    Some(resize(
+        image.rgba_data(),
+        image.width(),
+        image.height(),
+        size,
+    ))
+}
+
+/// Area-average resize with premultiplied alpha.
+fn resize(src: &[u8], sw: u32, sh: u32, size: u32) -> Vec<u8> {
+    if sw == size && sh == size {
+        return src.to_vec();
+    }
+    let mut out = vec![0u8; (size * size * 4) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let (x0, x1) = (x * sw / size, ((x + 1) * sw / size).max(x * sw / size + 1));
+            let (y0, y1) = (y * sh / size, ((y + 1) * sh / size).max(y * sh / size + 1));
+            let (mut r, mut g, mut b, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+            for sy in y0..y1.min(sh) {
+                for sx in x0..x1.min(sw) {
+                    let i = ((sy * sw + sx) * 4) as usize;
+                    let alpha = src[i + 3] as u32;
+                    r += src[i] as u32 * alpha;
+                    g += src[i + 1] as u32 * alpha;
+                    b += src[i + 2] as u32 * alpha;
+                    a += alpha;
+                    n += 1;
+                }
+            }
+            let o = ((y * size + x) * 4) as usize;
+            if let (Some(r), Some(g), Some(b)) =
+                (r.checked_div(a), g.checked_div(a), b.checked_div(a))
+            {
+                out[o] = r as u8;
+                out[o + 1] = g as u8;
+                out[o + 2] = b as u8;
+            }
+            out[o + 3] = (a / n.max(1)) as u8;
+        }
+    }
+    out
+}
+
+fn write_png(path: &Path, w: u32, h: u32, rgba: &[u8]) {
+    let file = BufWriter::new(File::create(path).expect("create png"));
+    let mut enc = png::Encoder::new(file, w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .expect("png header")
+        .write_image_data(rgba)
+        .expect("png data");
+}

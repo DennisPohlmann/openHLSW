@@ -1,0 +1,57 @@
+<!--
+  MSI installer for openHLSW (WiX Toolset v5).
+  Built by the GitHub workflow (ci/github-build.yml):
+    wix build -arch x64|x86|arm64 -d Version=0.1.0 -d RepoDir=<repository> -d BinDir=<dir with the .exe files>
+              packaging/windows/openhlsw.wxs -o openhlsw.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="openHLSW"
+           Manufacturer="openHLSW"
+           Version="$(var.Version)"
+           UpgradeCode="6B0C8F3E-5D2A-4C1B-9E7F-2A4D6C8B0E13"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.RepoDir)\assets\openhlsw.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="openHLSW" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component>
+        <File Source="$(var.BinDir)\openhlsw.exe" KeyPath="yes">
+          <Shortcut Name="openHLSW"
+                    Description="Game server browser and RCON admin tool"
+                    Directory="ProgramMenuFolder"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AppIcon"
+                    Advertise="yes" />
+        </File>
+      </Component>
+      <Component>
+        <File Source="$(var.BinDir)\openhlsw-cli.exe" />
+      </Component>
+      <Component>
+        <File Source="$(var.RepoDir)\README.md" />
+      </Component>
+      <Component>
+        <File Source="$(var.RepoDir)\CHANGELOG.md" />
+      </Component>
+      <Component>
+        <File Source="$(var.RepoDir)\LICENSE" Name="LICENSE.txt" />
+      </Component>
+      <Component>
+        <File Source="$(var.RepoDir)\assets\games\NOTICE.txt" Name="GAME-ICONS-NOTICE.txt" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="openHLSW">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+  </Package>
+</Wix>

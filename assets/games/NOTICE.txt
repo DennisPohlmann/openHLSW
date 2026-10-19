@@ -1,0 +1,16 @@
+The game icons in this folder (GameType_*.ico) are NOT part of openHLSW and are NOT
+covered by its license (GNU GPL v3.0 or later).
+
+They show logos and artwork of the respective games. All rights to these images, and all
+trademarks and game names shown, belong to their respective owners (for example Valve
+Corporation, Electronic Arts, Activision, id Software and the other game publishers and
+mod teams). openHLSW is not affiliated with, endorsed or sponsored by any of them.
+
+The icons are only used to identify the game a server runs, in the same way the original
+HLSW program did. No ownership is claimed, and the authors of openHLSW take no
+responsibility for these images. If you are a rights holder and want an icon removed,
+please open an issue and it will be removed.
+
+Exceptions: GameType_DH2005.ico (deer head) and GameType_GS2.ico (globe with a "2",
+used for GameSpy 2 servers) were drawn for openHLSW and are licensed like openHLSW
+itself.

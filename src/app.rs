@@ -1,0 +1,7144 @@
+//! The openHLSW main window, laid out like HLSW 1.4:
+//!
+//! ```text
+//! ┌ menu ─────────────────────────────────────────────────────────┐
+//! │ Server list: [Custom server list]                  N servers  │
+//! │ IP/Port: [Half-Life 2] [address                             ] │
+//! │ toolbar · Password · Search                                   │
+//! ├ server list ──────────────────────────────────────────────────┤
+//! ├ server info ───────┬ players ─────────────────────────────────┤
+//! │                    ├ rules (key / value) ─────────────────────┤
+//! ├ Rcon Config / Console content ────────────────────────────────┤
+//! │ Rcon Config | Console | Chat | …                              │
+//! └ status bar ───────────────────────────────────────────────────┘
+//! ```
+
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
+
+use eframe::egui::{
+    self, Align, Button, Color32, DragValue, Frame, Key, Label, Layout, Margin, RichText,
+    ScrollArea, Sense, Stroke, StrokeKind, TextEdit, TextStyle, TextWrapMode, Ui, WidgetText,
+};
+use egui_extras::{Column, TableBuilder, TableRow};
+
+use openhlsw::a2s::{Player, QueryMeta, Rule, ServerInfo};
+use openhlsw::address::ServerAddress;
+
+use crate::config::{self, Config, SavedList, SavedServer};
+use crate::flags::Flags;
+use crate::game_icons::{self, GameIcons};
+use crate::geo::{self, GeoInfo};
+use crate::settings::{
+    DialogResult, OnConnect, Settings, SettingsDialog, SettingsTab, SoundEvent, StartupSelection,
+};
+use crate::theme::{self, Palette, Theme};
+use crate::worker::{
+    self, Event, Notifier, QueryKind, RconEvent, RconHandle, RconRequest, RconStatus, RconTag,
+    ServerId,
+};
+
+/// Rules (cvars) change rarely; they are queried less often than info/players.
+const RULES_REFRESH: Duration = Duration::from_secs(10);
+/// A server that has not answered for this long is shown as offline (red line).
+const OFFLINE_AFTER: Duration = Duration::from_secs(10);
+const CHAT_MAX_LINES: usize = 1000;
+/// Samples kept for the ping graph (about two minutes at the default interval).
+const PING_HISTORY: usize = 300;
+const ROW_HEIGHT: f32 = 15.0;
+const HEADER_HEIGHT: f32 = 18.0;
+
+// --------------------------------------------------------------------------
+// Server state
+// --------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+enum QueryState {
+    Unknown,
+    Online,
+    Offline(String),
+}
+
+struct Server {
+    id: ServerId,
+    address: ServerAddress,
+    comment: String,
+    info: Option<ServerInfo>,
+    ping: Option<u32>,
+    /// Ping per info query, `None` for a timeout (drawn as a red bar).
+    ping_history: VecDeque<Option<u32>>,
+    /// Kills, deaths, team, damage … per player name, from the server log.
+    log_players: HashMap<String, LogPlayer>,
+    state: QueryState,
+    players: Vec<Player>,
+    rules: Vec<Rule>,
+    /// In-flight queries: info, players, rules.
+    busy: [bool; 3],
+    rcon_password: String,
+    save_password: bool,
+    rcon_status: RconStatus,
+    rcon: RconHandle,
+    console: VecDeque<ConsoleLine>,
+    console_cache: usize,
+    resolved: Option<SocketAddr>,
+    /// Last answer, or when the server was added / the program started.
+    last_ok: Instant,
+    last_seen: Option<chrono::DateTime<chrono::Local>>,
+    /// When we last joined this server via Connect (saved in the config).
+    last_connected: Option<String>,
+    /// Last A2S challenge the server accepted (reused to save a round trip).
+    challenge: Option<[u8; 4]>,
+    /// Token bucket for the per-server query limit (srcds sv_max_queries_sec).
+    budget: f32,
+    /// 0.25 … 1.0: query rate is halved after each timeout and recovers slowly, so a server
+    /// (or a firewall in front of it) that drops our queries gets fewer of them.
+    rate_factor: f32,
+    budget_at: Instant,
+    last_rules: Option<Instant>,
+    bans: Vec<BanEntry>,
+    ban_selected: Option<usize>,
+    maps: Vec<String>,
+    map_selected: Option<String>,
+    /// Shown in the Change Level tab ("Loading…", "42 maps", errors).
+    maps_status: String,
+    maps_loading: bool,
+    /// Map to change to once the players have been kicked.
+    pending_change: Option<String>,
+    /// Players from RCON `status` (Steam ID, IP, ping, loss).
+    status_players: Vec<StatusPlayer>,
+    last_status: Option<Instant>,
+    /// Last automatic Get Log request (Auto Update Status).
+    log_requested: Option<Instant>,
+    chat: Vec<ChatLine>,
+    /// Where the server currently sends its log, and whether it was the Internet variant.
+    log_target: Option<(SocketAddr, bool)>,
+}
+
+#[derive(Clone)]
+struct BanEntry {
+    is_ip: bool,
+    ident: String,
+    duration: String,
+}
+
+/// One player line of RCON `status`.
+#[derive(Clone, Debug, PartialEq)]
+struct StatusPlayer {
+    userid: u32,
+    name: String,
+    steam_id: String,
+    connected: String,
+    ping: String,
+    loss: String,
+    state: String,
+    ip: Option<IpAddr>,
+    port: Option<u16>,
+    /// Server slot (CS:GO / HLDS `status`).
+    slot: Option<u32>,
+    /// Network rate (CS:GO / CS2 `status`).
+    rate: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LineKind {
+    /// Command we sent (dark highlight).
+    Command,
+    /// Server answer to a command (light highlight, hidden with "F").
+    Response,
+    /// Server log line (logaddress_add).
+    Log,
+    /// Message from openHLSW itself.
+    Note,
+}
+
+struct ConsoleLine {
+    time: chrono::DateTime<chrono::Local>,
+    kind: LineKind,
+    automatic: bool,
+    text: String,
+}
+
+/// Per player statistics from the server log (since the current map started).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct LogPlayer {
+    team: String,
+    kills: u32,
+    deaths: u32,
+    teamkills: u32,
+    suicides: u32,
+    damage_hp: u32,
+    damage_armor: u32,
+    /// Health and armor after the last hit taken.
+    health: Option<(i32, i32)>,
+}
+
+#[derive(Clone)]
+struct ChatLine {
+    time: String,
+    name: String,
+    team: String,
+    team_only: bool,
+    text: String,
+}
+
+impl Server {
+    fn new(id: ServerId, address: ServerAddress, notifier: &Notifier) -> Self {
+        Self {
+            id,
+            address,
+            comment: String::new(),
+            info: None,
+            ping: None,
+            ping_history: VecDeque::new(),
+            log_players: HashMap::new(),
+            state: QueryState::Unknown,
+            players: Vec::new(),
+            rules: Vec::new(),
+            busy: [false; 3],
+            rcon_password: String::new(),
+            save_password: false,
+            rcon_status: RconStatus::Unknown,
+            rcon: RconHandle::spawn(notifier, id),
+            console: VecDeque::new(),
+            console_cache: 1000,
+            resolved: None,
+            last_ok: Instant::now(),
+            last_seen: None,
+            last_connected: None,
+            challenge: None,
+            budget: 2.0,
+            rate_factor: 1.0,
+            budget_at: Instant::now(),
+            last_rules: None,
+            bans: Vec::new(),
+            ban_selected: None,
+            maps: Vec::new(),
+            map_selected: None,
+            maps_status: String::new(),
+            maps_loading: false,
+            pending_change: None,
+            status_players: Vec::new(),
+            last_status: None,
+            log_requested: None,
+            chat: Vec::new(),
+            log_target: None,
+        }
+    }
+
+    /// Accounts for the packets a query really needed (challenge round trips, retries)
+    /// and remembers the accepted challenge.
+    fn charge(&mut self, meta: &QueryMeta) {
+        self.budget -= meta.packets.saturating_sub(1) as f32;
+        if meta.challenge.is_some() {
+            self.challenge = meta.challenge;
+        }
+    }
+
+    fn is_offline(&self) -> bool {
+        matches!(self.state, QueryState::Offline(_))
+    }
+
+    fn rule(&self, key: &str) -> Option<&str> {
+        self.rules
+            .iter()
+            .find(|r| r.key.eq_ignore_ascii_case(key))
+            .map(|r| r.value.as_str())
+    }
+
+    fn push_ping(&mut self, ping: Option<u32>) {
+        self.ping_history.push_back(ping);
+        while self.ping_history.len() > PING_HISTORY {
+            self.ping_history.pop_front();
+        }
+    }
+
+    fn avg_ping(&self) -> Option<f32> {
+        let (sum, n) = self
+            .ping_history
+            .iter()
+            .flatten()
+            .fold((0u32, 0u32), |(s, n), &p| (s + p, n + 1));
+        (n > 0).then(|| sum as f32 / n as f32)
+    }
+
+    /// "34, Ø42.2" / "Timeout, Ø61.5" like HLSW.
+    fn ping_text(&self) -> String {
+        let avg = self
+            .avg_ping()
+            .map(|a| format!(", Ø{a:.1}"))
+            .unwrap_or_default();
+        match (&self.state, self.ping) {
+            (QueryState::Online, Some(p)) => format!("{p}{avg}"),
+            (QueryState::Offline(reason), _) if reason == "Timeout" => format!("Timeout{avg}"),
+            (QueryState::Offline(reason), _) => reason.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// "HL2 - CS:S" style short game name.
+    fn game_short(&self) -> String {
+        let Some(i) = &self.info else {
+            return String::new();
+        };
+        if i.gamespy {
+            return i.game.clone();
+        }
+        if i.goldsrc {
+            let short = match i.folder.to_ascii_lowercase().as_str() {
+                "cstrike" => "CS",
+                "czero" => "CZ",
+                "dod" => "DoD",
+                "tfc" => "TFC",
+                "dmc" => "DMC",
+                "valve" => "DM",
+                "gearbox" => "OpFor",
+                "ricochet" => "Ricochet",
+                "ns" => "NS",
+                "ts" => "TS",
+                _ => i.game.as_str(),
+            };
+            return format!("HL - {short}");
+        }
+        let short = match i.real_app_id() {
+            240 => "CS:S",
+            730 => return "CS2".into(),
+            440 => "TF2",
+            320 => "DM",
+            300 => "DoD:S",
+            4000 => "GMod",
+            500 => return "L4D".into(),
+            550 => return "L4D2".into(),
+            _ => i.game.as_str(),
+        };
+        format!("HL2 - {short}")
+    }
+
+    fn players_text(&self) -> String {
+        let Some(i) = &self.info else {
+            return String::new();
+        };
+        if i.bots > 0 {
+            format!(
+                "{} ({}) / {}",
+                i.players.saturating_sub(i.bots),
+                i.players,
+                i.max_players
+            )
+        } else {
+            format!("{} / {}", i.players, i.max_players)
+        }
+    }
+
+    fn humans(&self) -> u8 {
+        self.info
+            .as_ref()
+            .map_or(0, |i| i.players.saturating_sub(i.bots))
+    }
+
+    /// Plugins detected from public cvars: (short, long) names like HLSW shows them.
+    fn addon_list(&self) -> Vec<(String, String)> {
+        const SOURCE: [(&str, &str, &str); 5] = [
+            ("metamod_version", "MM:S", "MetaMod:Source"),
+            ("sourcemod_version", "SMod", "SourceMod"),
+            ("stripper_version", "STRP", "Stripper:Source"),
+            ("mani_admin_plugin_version", "Mani", "Mani Admin Plugin"),
+            ("eventscripts_ver", "ES", "EventScripts"),
+        ];
+        // Half-Life 1 (order like HLSW: "AMXX v1.8.2, ATAC v3.0.1, PTB v1.8b3, MM v1.21.1-am").
+        const GOLDSRC: [(&str, &str, &str); 7] = [
+            ("amxmodx_version", "AMXX", "AMX Mod X"),
+            ("amx_version", "AMX", "AMX Mod"),
+            ("atac_version", "ATAC", "Advanced Team Attack Control"),
+            ("amx_ptb_version", "PTB", "Ptahhotep's Team Balancer"),
+            ("adminmod_version", "AM", "Admin Mod"),
+            ("dproto_version", "DPROTO", "dproto"),
+            ("metamod_version", "MM", "Metamod"),
+        ];
+        let known: &[(&str, &str, &str)] = if self.is_goldsrc() { &GOLDSRC } else { &SOURCE };
+        known
+            .iter()
+            .filter_map(|(key, short, long)| {
+                self.rule(key)
+                    .map(|v| (format!("{short} v{v}"), format!("{long} v{v}")))
+            })
+            .collect()
+    }
+
+    fn addons_short(&self) -> String {
+        if self.rules.is_empty() || self.is_gamespy() {
+            return String::new();
+        }
+        let list = self.addon_list();
+        if list.is_empty() {
+            return "None".into();
+        }
+        list.into_iter()
+            .map(|(s, _)| s)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// "MM:S 1.12.0, SM 1.13.0.7427, HLX:CE 1.7.0" for the info panel.
+    fn addons_compact(&self) -> String {
+        if self.is_goldsrc() {
+            return self
+                .addon_list()
+                .into_iter()
+                .map(|(s, _)| s)
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+        const KNOWN: [(&str, &str); 6] = [
+            ("metamod_version", "MM:S"),
+            ("sourcemod_version", "SM"),
+            ("stripper_version", "Stripper"),
+            ("hlxce_version", "HLX:CE"),
+            ("mani_admin_plugin_version", "Mani"),
+            ("eventscripts_ver", "ES"),
+        ];
+        KNOWN
+            .iter()
+            .filter_map(|(key, name)| self.rule(key).map(|v| format!("{name} {v}")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn ranking(&self) -> (String, String) {
+        if let Some(v) = self.rule("hlxce_version") {
+            return (format!("HLX:CE v{v}"), format!("HLstatsX:CE v{v}"));
+        }
+        if self.rules.is_empty() || self.is_gamespy() {
+            (String::new(), String::new())
+        } else {
+            ("None".into(), "None".into())
+        }
+    }
+
+    /// "VAC", plus server side anti-cheat plugins found in the rules (HLGuard, sXe, ...).
+    fn anticheat(&self) -> String {
+        let Some(i) = &self.info else {
+            return String::new();
+        };
+        if i.gamespy {
+            return String::new();
+        }
+        const PLUGINS: [(&str, &str); 4] = [
+            ("hlg_version", "HLGuard"),
+            ("__sxei", "sXe Injected"),
+            ("sxei_version", "sXe Injected"),
+            ("smac_version", "SMAC"),
+        ];
+        let mut list: Vec<&str> = Vec::new();
+        if i.vac {
+            list.push("VAC");
+        }
+        for (key, name) in PLUGINS {
+            if self.rule(key).is_some() && !list.contains(&name) {
+                list.push(name);
+            }
+        }
+        if list.is_empty() {
+            "None".into()
+        } else {
+            list.join(", ")
+        }
+    }
+
+    /// Query limit the server announces in its rules (`sv_max_queries_sec` on srcds,
+    /// `max_queries_sec` on HLDS) and the averaging window in seconds.
+    fn announced_query_limit(&self) -> Option<(f32, f32)> {
+        let num = |keys: [&str; 2]| {
+            keys.iter()
+                .find_map(|k| self.rule(k))
+                .and_then(|v| v.trim().parse::<f32>().ok())
+                .filter(|v| *v > 0.0)
+        };
+        let rate = num(["sv_max_queries_sec", "max_queries_sec"])?;
+        let window = num(["sv_max_queries_window", "max_queries_window"]).unwrap_or(30.0);
+        Some((rate, window))
+    }
+
+    fn limits(&self) -> String {
+        let mut parts = Vec::new();
+        let mut add = |key: &str, unit: &str| {
+            if let Some(v) = self.rule(key).filter(|v| !v.is_empty() && *v != "0") {
+                parts.push(format!("{v} {unit}"));
+            }
+        };
+        add("mp_timelimit", "min");
+        add("mp_maxrounds", "rounds");
+        add("mp_winlimit", "wins");
+        add("mp_fraglimit", "frags");
+        if self.is_gamespy() {
+            add("timelimit", "min");
+            add("fraglimit", "frags");
+        }
+        if parts.is_empty() && !self.rules.is_empty() && !self.is_gamespy() {
+            return "None".into();
+        }
+        parts.join(", ")
+    }
+
+    fn version_text(&self) -> String {
+        self.info
+            .as_ref()
+            .filter(|i| !i.version.is_empty())
+            .map(|i| format!("v{}", i.version))
+            .unwrap_or_default()
+    }
+
+    /// Adds console lines. The prefix decides the kind: "] " sent command,
+    /// "*** " note from openHLSW, "L " server log line, anything else a note.
+    fn append_console(&mut self, text: &str) {
+        if let Some(cmd) = text.strip_prefix("] ") {
+            self.console_add(LineKind::Command, cmd, false);
+        } else if let Some(note) = text.strip_prefix("*** ") {
+            self.console_add(LineKind::Note, note, false);
+        } else if let Some(log) = text.strip_prefix("L ") {
+            self.console_add(LineKind::Log, log, false);
+        } else {
+            self.console_add(LineKind::Note, text, false);
+        }
+    }
+
+    /// One entry per line; `automatic` = caused by Auto Update Status (hidden with "A").
+    fn console_add(&mut self, kind: LineKind, text: &str, automatic: bool) {
+        let time = chrono::Local::now();
+        for line in text.trim_end_matches(['\n', '\r']).split('\n') {
+            self.console.push_back(ConsoleLine {
+                time,
+                kind,
+                automatic,
+                text: line.trim_end_matches('\r').to_string(),
+            });
+        }
+        self.trim_console(self.console_cache);
+    }
+
+    /// Keeps the last `max_lines` console lines ("Cache size" in the Rcon settings).
+    fn trim_console(&mut self, max_lines: usize) {
+        self.console_cache = max_lines.max(1);
+        while self.console.len() > self.console_cache {
+            self.console.pop_front();
+        }
+    }
+
+    fn configure_rcon(&self) {
+        self.rcon.send(RconRequest::Configure {
+            address: self.address.clone(),
+            password: self.rcon_password.clone(),
+            goldsrc: self.is_goldsrc(),
+        });
+    }
+
+    fn is_gamespy(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.gamespy)
+    }
+
+    /// Half-Life 1 engine server (UDP RCON, `kick #userid`, `logaddress_add ip port`).
+    fn is_goldsrc(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.goldsrc)
+    }
+
+    /// Kick command for this engine (HLDS has no `kickid`).
+    fn kick_cmd(&self, userid: u32, reason: &str) -> String {
+        if self.is_goldsrc() {
+            format!("kick #{userid} \"{reason}\"")
+        } else {
+            format!("kickid {userid} \"{reason}\"")
+        }
+    }
+
+    fn matches(&self, needle: &str) -> bool {
+        if needle.is_empty() {
+            return true;
+        }
+        let hit = |s: &str| s.to_lowercase().contains(needle);
+        hit(&self.address.to_string())
+            || hit(&self.comment)
+            || self
+                .info
+                .as_ref()
+                .is_some_and(|i| hit(&i.name) || hit(&i.map) || hit(&i.game))
+    }
+}
+
+// --------------------------------------------------------------------------
+// App
+// --------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    RconConfig,
+    Console,
+    Chat,
+    BanList,
+    ChangeLevel,
+}
+
+/// Bottom tabs like HLSW; `None` = not implemented yet (shown greyed out).
+const TABS: [(&str, Option<Tab>); 5] = [
+    ("Rcon Config", Some(Tab::RconConfig)),
+    ("Console", Some(Tab::Console)),
+    ("Chat", Some(Tab::Chat)),
+    ("Ban List", Some(Tab::BanList)),
+    ("Change Level", Some(Tab::ChangeLevel)),
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Col {
+    Index,
+    Address,
+    Name,
+    Game,
+    Map,
+    Players,
+    Ping,
+    Version,
+    Location,
+    AddOn,
+    AntiCheat,
+    Ranking,
+    Limits,
+    Comment,
+    /// Sort-only: game, then name / then address (Settings > Sort Server List).
+    GameName,
+    GameAddress,
+}
+
+const SERVER_COLUMNS: [(Col, &str, f32); 14] = [
+    (Col::Index, "#", 58.0),
+    (Col::Address, "Addr", 130.0),
+    (Col::Name, "Name", 285.0),
+    (Col::Game, "Game", 130.0),
+    (Col::Map, "Map", 145.0),
+    (Col::Players, "Players", 62.0),
+    (Col::Ping, "Ping", 100.0),
+    (Col::Version, "Version", 78.0),
+    (Col::Location, "Location", 128.0),
+    (Col::AddOn, "AddOn", 320.0),
+    (Col::AntiCheat, "Anti Cheat Tool", 72.0),
+    (Col::Ranking, "Ranking", 76.0),
+    (Col::Limits, "Limits", 160.0),
+    (Col::Comment, "Comment", 120.0),
+];
+
+/// Players are sorted by the title of a column.
+type PlayerCol = &'static str;
+
+enum Action {
+    Select(ServerId),
+    Add,
+    Refresh(ServerId),
+    RefreshAll,
+    Remove(ServerId),
+    Connect(ServerId),
+    CopyText(String),
+    EditComment(ServerId),
+    NewList(String),
+    OpenList(String),
+    DeleteList,
+    RenameList(String),
+    ImportList,
+    ExportList,
+    MultiInsert(String),
+    MoveToList(ServerId, String),
+    CopyToList(ServerId, String),
+    FocusSearch,
+    OpenDialog(Dialog),
+    ApplyServerProps(ServerId, ServerPropsDraft),
+    TraceRoute(ServerId),
+    ResetPing(ServerId),
+    /// "Rcon Status Command": run `status` and show it in the console.
+    RconStatus(ServerId),
+    Minimize {
+        no_traffic: bool,
+    },
+    OpenAppData,
+    RconConfigure(ServerId),
+    RconTest(ServerId),
+    RconDisconnect(ServerId),
+    SendConsole(ServerId),
+    ClearConsole(ServerId),
+    SwitchTab(Tab),
+    FetchBans(ServerId),
+    FetchMaps(ServerId),
+    Unban(ServerId),
+    AddBan {
+        id: ServerId,
+        ip: bool,
+    },
+    ChangeLevel(ServerId, String),
+    Say(ServerId),
+    StartLog {
+        id: ServerId,
+        internet: bool,
+    },
+    KickPlayer(ServerId, u32),
+    /// Kick the player, then connect to the server ourselves (HLSW "Kick & Connect").
+    KickAndConnect(ServerId, u32),
+    /// minutes 0 = permanent. `target` is the Steam ID (or userid for players without
+    /// one) for ID bans, the IP address for IP bans.
+    BanPlayer {
+        id: ServerId,
+        userid: u32,
+        target: String,
+        ip: bool,
+        kick: bool,
+        minutes: u32,
+    },
+    /// Header menu: show/hide a column of the server list (`players == false`) or players.
+    ToggleColumn {
+        players: bool,
+        title: String,
+    },
+    /// "Change ID → Increase / Decrease": move the server one place down / up in the list.
+    MoveServer(ServerId, i32),
+    /// "Change ID → Set": move the server to this number (1-based).
+    SetServerId(ServerId, usize),
+    /// "Set all server IDs to current sequence": number the servers as currently sorted.
+    RenumberServers,
+    /// Header menu: "Reset column width".
+    ResetColumns {
+        players: bool,
+    },
+    /// Set a cvar via RCON ("Change Value..." in the rules list).
+    SetCvar(ServerId, String, String),
+    SetTheme(Theme),
+    OpenSettings(SettingsTab),
+    ApplySettings(Box<Settings>),
+    SaveConfig,
+    Quit,
+}
+
+/// Game type of the "IP/Port" box: decides the protocol and default ports of new servers
+/// and shows the type of the selected server.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum AddGame {
+    #[default]
+    Source,
+    Cs2,
+    GoldSrc,
+    GameSpy2,
+}
+
+impl AddGame {
+    const ALL: [AddGame; 4] = [
+        AddGame::Source,
+        AddGame::Cs2,
+        AddGame::GoldSrc,
+        AddGame::GameSpy2,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            AddGame::Source => "Half-Life 2",
+            AddGame::Cs2 => "Counter-Strike 2",
+            AddGame::GoldSrc => "Half-Life",
+            AddGame::GameSpy2 => "GameSpy 2",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            AddGame::Source => "HL2",
+            AddGame::Cs2 => "HL2_CS2",
+            AddGame::GoldSrc => "HL",
+            AddGame::GameSpy2 => "GS2",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            AddGame::GameSpy2 => {
+                "ip:gameport:queryport, e.g. 1.2.3.4:23459:34567 (Deer Hunter 2005), Enter to add"
+            }
+            _ => "host:port or steam://connect/… and press Enter to add",
+        }
+    }
+
+    fn of(info: &ServerInfo) -> Self {
+        if info.gamespy {
+            AddGame::GameSpy2
+        } else if info.goldsrc {
+            AddGame::GoldSrc
+        } else if info.real_app_id() == 730 {
+            AddGame::Cs2
+        } else {
+            AddGame::Source
+        }
+    }
+}
+
+const COPYRIGHT_HOLDER: &str = "the openHLSW contributors";
+const LICENSE_TEXT: &str = include_str!("../LICENSE");
+const GAME_ICONS_NOTICE: &str = include_str!("../assets/games/NOTICE.txt");
+const FLAGS_NOTICE: &str = include_str!("../assets/FLAGS-LICENSE.txt");
+
+/// Joins the hard-wrapped lines of a notice file into paragraphs that wrap with the window.
+fn unwrap_paragraphs(text: &str) -> String {
+    text.trim()
+        .split("\n\n")
+        .map(|p| p.lines().map(str::trim).collect::<Vec<_>>().join(" "))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// "? → License": the program's license, the notice for the game icons and the other
+/// third-party parts.
+fn license_view(ui: &mut Ui) {
+    ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ui.heading("openHLSW");
+        ui.label(format!(
+            "Copyright (C) 2026 {COPYRIGHT_HOLDER}\n\n\
+             This program is free software: you can redistribute it and/or modify it under the \
+             terms of the GNU General Public License as published by the Free Software \
+             Foundation, either version 3 of the License, or (at your option) any later version.\n\n\
+             This program is distributed in the hope that it will be useful, but WITHOUT ANY \
+             WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A \
+             PARTICULAR PURPOSE. See the GNU General Public License for more details."
+        ));
+        ui.add_space(8.0);
+        ui.heading("Game icons");
+        ui.label(unwrap_paragraphs(GAME_ICONS_NOTICE));
+        ui.add_space(8.0);
+        ui.heading("Country flags");
+        ui.label(unwrap_paragraphs(FLAGS_NOTICE));
+        ui.add_space(8.0);
+        ui.heading("Other components");
+        ui.label(
+            "openHLSW is built with Rust libraries (egui/eframe, serde and others) under the MIT \
+             and/or Apache-2.0 licenses, and egui's bundled fonts (Ubuntu Font Licence, \
+             SIL Open Font License, MIT). Text is otherwise drawn with the fonts installed on \
+             your system. Server locations come from ip-api.com.",
+        );
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("GNU General Public License v3.0 (full text)")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(RichText::new(LICENSE_TEXT).monospace().size(11.0));
+            });
+    });
+}
+
+/// Small modal windows opened from the menus.
+#[derive(Clone)]
+enum Dialog {
+    NewList(String),
+    ListProperties(String),
+    MultiInsert(String),
+    ServerProperties(ServerId, ServerPropsDraft),
+    ConfirmDeleteList,
+    ConnectLog,
+    /// "Change ID → Set": server and the new number being typed.
+    SetId(ServerId, String),
+    /// Server, cvar, new value.
+    ChangeRule(ServerId, String, String),
+}
+
+#[derive(Clone)]
+struct ServerPropsDraft {
+    address: String,
+    comment: String,
+    rcon_password: String,
+    save_password: bool,
+}
+
+struct Traffic {
+    last: (u64, u64),
+    at: Instant,
+    rate: (u64, u64),
+}
+
+pub struct OpenHlswApp {
+    servers: Vec<Server>,
+    next_id: ServerId,
+    selected: Option<ServerId>,
+
+    notifier: Notifier,
+    events: Receiver<Event>,
+
+    settings: Settings,
+    settings_dialog: Option<SettingsDialog>,
+    list_name: String,
+    other_lists: Vec<SavedList>,
+    connect_log: Vec<String>,
+    dialog: Option<Dialog>,
+    /// The Trace Route window, while open.
+    trace: Option<crate::trace::TraceRoute>,
+    search_id: Option<egui::Id>,
+    flags: Option<Flags>,
+    game_icons: Option<GameIcons>,
+    geo: HashMap<IpAddr, GeoInfo>,
+    geo_pending: HashSet<IpAddr>,
+    last_geo_request: Option<Instant>,
+    /// Row order shown last frame (kept while hovering if keep_order_on_hover).
+    list_order: Vec<ServerId>,
+    /// Queries paused because we minimized for a game (OnConnect::MinimizeNoTraffic).
+    paused_for_game: bool,
+    console_input_id: Option<egui::Id>,
+    console_autoscroll: bool,
+    address_input: String,
+    add_game: AddGame,
+    search: String,
+    join_password: String,
+    hide_join_password: bool,
+    status_message: String,
+    auto_update_status: bool,
+    hide_password: bool,
+    last_list_refresh: Option<Instant>,
+    traffic: Traffic,
+    log_listener: Option<Result<u16, String>>,
+    chat_input: String,
+    ban_input: String,
+    ban_minutes: u32,
+
+    sort: (Col, bool),
+    player_sort: (PlayerCol, bool),
+    player_filter: String,
+    rules_filter: String,
+    tab: Tab,
+    console_input: String,
+    history: Vec<String>,
+    history_pos: Option<usize>,
+    show_about: bool,
+    show_license: bool,
+    editing_comment: Option<(ServerId, String)>,
+}
+
+impl OpenHlswApp {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
+        let config = config::load();
+        theme::install_fonts(&cc.egui_ctx);
+        theme::apply(&cc.egui_ctx, config.settings.theme);
+        cc.egui_ctx
+            .set_zoom_factor(config.settings.text_size.zoom());
+
+        let mut app = Self {
+            servers: Vec::new(),
+            next_id: 1,
+            selected: None,
+            notifier,
+            events,
+            settings: {
+                // Older configs stored the old defaults 0.2 / 0.4 s; the default is now 1 s.
+                let mut st = config.settings.clone();
+                if st.defaults_revision < 1 {
+                    if [0.2, 0.4]
+                        .iter()
+                        .any(|d| (st.refresh_interval - d).abs() < 1e-4)
+                    {
+                        st.refresh_interval = 1.0;
+                    }
+                    st.defaults_revision = 1;
+                }
+                st.refresh_interval =
+                    sanitize_interval(st.refresh_interval, st.max_queries_per_sec);
+                st
+            },
+            settings_dialog: None,
+            list_name: if config.list_name.trim().is_empty() {
+                config::DEFAULT_LIST_NAME.into()
+            } else {
+                config.list_name.clone()
+            },
+            other_lists: config.other_lists.clone(),
+            connect_log: config.connect_log.clone(),
+            dialog: None,
+            trace: None,
+            search_id: None,
+            flags: Flags::load(&cc.egui_ctx),
+            game_icons: GameIcons::load(&cc.egui_ctx),
+            geo: geo::load_cache(),
+            geo_pending: HashSet::new(),
+            last_geo_request: None,
+            list_order: Vec::new(),
+            paused_for_game: false,
+            console_input_id: None,
+            console_autoscroll: true,
+            address_input: String::new(),
+            add_game: AddGame::default(),
+            search: String::new(),
+            join_password: String::new(),
+            hide_join_password: true,
+            status_message: "Ready".into(),
+            auto_update_status: config.auto_update_status,
+            hide_password: config.hide_rcon_password,
+            last_list_refresh: None,
+            log_listener: None,
+            chat_input: String::new(),
+            ban_input: String::new(),
+            ban_minutes: 0,
+            traffic: Traffic {
+                last: openhlsw::stats::totals(),
+                at: Instant::now(),
+                rate: (0, 0),
+            },
+            sort: (Col::Index, true),
+            player_sort: ("#", true),
+            player_filter: String::new(),
+            rules_filter: String::new(),
+            tab: Tab::RconConfig,
+            console_input: String::new(),
+            history: Vec::new(),
+            history_pos: None,
+            show_about: false,
+            show_license: false,
+            editing_comment: None,
+        };
+
+        app.add_saved_servers(&config.servers);
+        let startup = match config.settings.startup {
+            StartupSelection::None => None,
+            StartupSelection::LastUsed => config.selected.clone(),
+            StartupSelection::This => Some(config.settings.startup_address.clone()),
+        };
+        app.selected = startup
+            .as_deref()
+            .and_then(ServerAddress::parse)
+            .and_then(|a| app.servers.iter().find(|s| s.address == a))
+            .map(|s| s.id);
+        app.play(SoundEvent::StartUp);
+        app
+    }
+
+    /// Adds servers from the config / an import. Duplicates are skipped.
+    /// Returns how many were added.
+    fn add_saved_servers(&mut self, saved: &[SavedServer]) -> usize {
+        let mut added = 0;
+        for saved in saved {
+            let Some(address) = ServerAddress::parse(&saved.address) else {
+                continue;
+            };
+            if self.servers.iter().any(|s| s.address == address) {
+                continue;
+            }
+            let id = self.alloc_id();
+            let mut server = Server::new(id, address, &self.notifier);
+            server.comment = saved.comment.clone();
+            server.last_connected = saved.last_connected.clone();
+            server.info = saved.info.clone();
+            server.last_seen = saved
+                .last_seen
+                .as_deref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.with_timezone(&chrono::Local));
+            server.console_cache = self.settings.console_cache.max(1);
+            if let Some(pw) = &saved.rcon_password {
+                server.rcon_password = pw.clone();
+                server.save_password = true;
+            }
+            self.servers.push(server);
+            added += 1;
+        }
+        added
+    }
+
+    fn saved_server(s: &Server) -> SavedServer {
+        SavedServer {
+            address: s.address.to_string(),
+            rcon_password: s.save_password.then(|| s.rcon_password.clone()),
+            comment: s.comment.clone(),
+            last_connected: s.last_connected.clone(),
+            info: s.info.clone(),
+            last_seen: s.last_seen.map(|t| t.to_rfc3339()),
+        }
+    }
+
+    fn list_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::iter::once(self.list_name.clone())
+            .chain(self.other_lists.iter().map(|l| l.name.clone()))
+            .collect();
+        names.sort_by_key(|n| n.to_lowercase());
+        names
+    }
+
+    /// Makes another server list the current one. `keep_current` = false drops the
+    /// current list (Server list > Delete).
+    fn switch_list(&mut self, name: &str, keep_current: bool) {
+        let Some(pos) = self.other_lists.iter().position(|l| l.name == name) else {
+            return;
+        };
+        let target = self.other_lists.remove(pos);
+        if keep_current {
+            let current = SavedList {
+                name: std::mem::take(&mut self.list_name),
+                servers: self.servers.iter().map(Self::saved_server).collect(),
+            };
+            self.other_lists.push(current);
+        }
+        self.servers.clear();
+        self.selected = None;
+        self.list_order.clear();
+        self.list_name = target.name;
+        self.add_saved_servers(&target.servers);
+        self.selected = self.servers.first().map(|s| s.id);
+        self.last_list_refresh = None;
+        self.status_message = format!("Server list: {}", self.list_name);
+        self.save_config();
+    }
+
+    fn alloc_id(&mut self) -> ServerId {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    fn index_of(&self, id: ServerId) -> Option<usize> {
+        self.servers.iter().position(|s| s.id == id)
+    }
+
+    fn server(&self, id: ServerId) -> Option<&Server> {
+        self.servers.iter().find(|s| s.id == id)
+    }
+
+    fn server_mut(&mut self, id: ServerId) -> Option<&mut Server> {
+        self.servers.iter_mut().find(|s| s.id == id)
+    }
+
+    fn selected_index(&self) -> Option<usize> {
+        self.selected.and_then(|id| self.index_of(id))
+    }
+
+    /// Info always; players for the selected server; rules every [`RULES_REFRESH`]
+    /// (the list shows AddOn/Ranking/Limits from them) or when `force_details`.
+    fn refresh(&mut self, id: ServerId, force_details: bool) {
+        let notifier = self.notifier.clone();
+        let selected = self.selected == Some(id);
+        let auto_details = self.auto_update_status;
+        let base_rate = self.settings.max_queries_per_sec.max(0.1);
+        let Some(s) = self.server_mut(id) else { return };
+        // Never more than the server itself announces (HLDS often uses max_queries_sec 1 with a
+        // 1 s window: a short burst would already be dropped).
+        let (limit, window) = s.announced_query_limit().unwrap_or((f32::INFINITY, 30.0));
+        let rate = base_rate.min(limit * 0.9) * s.rate_factor;
+
+        // Refill the token bucket. A short burst is fine for srcds: it averages
+        // queries over sv_max_queries_window (30 s).
+        let burst = (rate * window.min(2.0)).max(1.0);
+        s.budget = (s.budget + s.budget_at.elapsed().as_secs_f32() * rate).min(burst);
+        s.budget_at = Instant::now();
+
+        let rules_due = s.last_rules.is_none_or(|t| t.elapsed() >= RULES_REFRESH);
+        // Priority: info first (ping, map, players count must stay current even on servers
+        // that allow only one query per second, like many HLDS), then the rules when due
+        // (every 10 s), then the players of the selected server.
+        let mut kinds = vec![(0, QueryKind::Info)];
+        if force_details || rules_due {
+            kinds.push((2, QueryKind::Rules));
+        }
+        if force_details || (selected && auto_details) {
+            kinds.push((1, QueryKind::Players));
+        }
+        for (slot, kind) in kinds {
+            if s.busy[slot] {
+                continue;
+            }
+            // Explicit refreshes (click, F5) always go out; the budget may go negative
+            // and the automatic refresh then waits until it has recovered.
+            if !force_details && s.budget < 1.0 {
+                break;
+            }
+            s.budget -= 1.0;
+            s.busy[slot] = true;
+            if slot == 2 {
+                s.last_rules = Some(Instant::now());
+            }
+            worker::spawn_query(&notifier, s.id, s.address.clone(), kind, s.challenge);
+        }
+    }
+
+    fn refresh_all(&mut self, force_details: bool) {
+        let mut ids: Vec<ServerId> = self.servers.iter().map(|s| s.id).collect();
+        // The selected server first.
+        ids.sort_by_key(|id| Some(*id) != self.selected);
+        for id in ids {
+            let force = force_details && Some(id) == self.selected;
+            self.refresh(id, force);
+        }
+        self.last_list_refresh = Some(Instant::now());
+    }
+
+    /// "Auto Update Status": every 5 s RCON `status` for the selected server (Steam IDs,
+    /// IPs, ping) and make sure the server sends us its log (`logaddress_add`), so
+    /// the log shows up in the Console and Chat tabs.
+    /// Never retries after a bad password (srcds bans IPs after repeated failed logins).
+    fn poll_player_status(&mut self, ctx: &egui::Context) {
+        if !self.auto_update_status {
+            return;
+        }
+        let Some(id) = self.selected else { return };
+        let Some(s) = self.server_mut(id) else { return };
+        if s.rcon_password.is_empty()
+            || matches!(
+                s.rcon_status,
+                RconStatus::BadPassword | RconStatus::Connecting
+            )
+        {
+            return;
+        }
+        // After an error (server down, connection refused) wait longer before retrying.
+        let wait = if matches!(s.rcon_status, RconStatus::Error(_)) {
+            30
+        } else {
+            5
+        };
+        if s.last_status
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(wait))
+        {
+            return;
+        }
+        s.last_status = Some(Instant::now());
+        s.configure_rcon();
+        s.console_add(LineKind::Command, "status", true);
+        s.rcon.exec("status", RconTag::PlayerStatus);
+
+        let wants_log = s.rcon_status == RconStatus::Ok
+            && s.log_target.is_none()
+            && s.log_requested
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(60));
+        if wants_log {
+            s.log_requested = Some(Instant::now());
+            // LAN for servers in the local network, otherwise our public IP.
+            let internet = s.resolved.is_some_and(|a| geo::is_public(a.ip()));
+            self.apply(Action::StartLog { id, internet }, ctx);
+        }
+    }
+
+    /// Asks ip-api.com for the location of server IPs we do not know yet
+    /// (one batch request at most every 5 s; the free API allows 15 per minute).
+    fn lookup_locations(&mut self) {
+        if !self.settings.geo_lookup
+            || self
+                .last_geo_request
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(5))
+        {
+            return;
+        }
+        let mut ips: Vec<IpAddr> = self
+            .servers
+            .iter()
+            .filter_map(|s| s.resolved.map(|a| a.ip()))
+            .chain(
+                self.selected_index()
+                    .map(|i| {
+                        self.servers[i]
+                            .status_players
+                            .iter()
+                            .filter_map(|p| p.ip)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+            )
+            .chain(
+                self.trace
+                    .iter()
+                    .flat_map(|t| t.hops.iter().filter_map(|h| h.ip)),
+            )
+            .filter(|ip| {
+                geo::is_public(*ip) && !self.geo.contains_key(ip) && !self.geo_pending.contains(ip)
+            })
+            .collect();
+        ips.sort();
+        ips.dedup();
+        ips.truncate(100);
+        if ips.is_empty() {
+            return;
+        }
+        self.geo_pending.extend(ips.iter().copied());
+        self.last_geo_request = Some(Instant::now());
+        worker::spawn_geo_lookup(&self.notifier, ips);
+    }
+
+    /// Location of a server: `Some(None)` = private/LAN address.
+    fn location_of(&self, s: &Server) -> Option<Option<&GeoInfo>> {
+        let ip = s.resolved?.ip();
+        if !geo::is_public(ip) {
+            return Some(None);
+        }
+        self.geo.get(&ip).map(Some)
+    }
+
+    fn ensure_log_listener(&mut self) -> Result<u16, String> {
+        if let Some(Ok(port)) = &self.log_listener
+            && *port == self.settings.log_port
+        {
+            return Ok(*port);
+        }
+        let result = worker::spawn_log_listener(&self.notifier, self.settings.log_port)
+            .map(|_| self.settings.log_port)
+            .map_err(|e| format!("Cannot listen on UDP port {}: {e}", self.settings.log_port));
+        self.log_listener = Some(result.clone());
+        result
+    }
+
+    fn handle_log_line(&mut self, from: SocketAddr, line: String) {
+        // Match by address; srcds sends from its game port, fall back to the IP alone.
+        let idx = self
+            .servers
+            .iter()
+            .position(|s| s.resolved == Some(from))
+            .or_else(|| {
+                self.servers
+                    .iter()
+                    .position(|s| s.resolved.map(|a| a.ip()) == Some(from.ip()))
+            });
+        let Some(idx) = idx else { return };
+        let chat = parse_chat_line(&line);
+        let joined = line.contains("\" entered the game");
+        let address = self.servers[idx].address.to_string();
+        if self.settings.save_server_log {
+            append_log_file(&address, &line, "log");
+        }
+        if self.settings.save_chat_log && chat.is_some() {
+            append_log_file(&address, &line, "chat.log");
+        }
+
+        let s = &mut self.servers[idx];
+        apply_log_stats(&mut s.log_players, &line);
+        s.append_console(&format!("L {line}"));
+        let mut sound = joined.then_some(SoundEvent::PlayerJoin);
+        if let Some(chat) = chat {
+            if chat.name != "Console" {
+                sound = Some(SoundEvent::IncomingMessage);
+            }
+            s.chat.push(chat);
+            if s.chat.len() > CHAT_MAX_LINES {
+                s.chat.remove(0);
+            }
+        }
+        if let Some(sound) = sound {
+            self.play(sound);
+        }
+    }
+
+    fn play(&self, event: SoundEvent) {
+        if let Some(file) = self.settings.sound_file(event) {
+            play_sound(file);
+        }
+    }
+
+    /// Joins a server: game executable from "My Games" or steam://connect, then the
+    /// "On Connection" action and the user's "Execute applications".
+    fn connect(&mut self, id: ServerId, ctx: &egui::Context) {
+        let Some(s) = self.server(id) else { return };
+        if s.address.query_port.is_some() {
+            // GameSpy games have no connect URL: start the game, join from its server list.
+            let game = s.info.as_ref().map(|i| i.game.clone()).unwrap_or_default();
+            let addr = s.address.game_address();
+            let exe = crate::settings::game_by_name(&game)
+                .and_then(|g| self.settings.game_paths.get(g.name))
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty());
+            self.status_message = match exe {
+                Some(exe) => {
+                    let mut cmd = std::process::Command::new(&exe);
+                    if let Some(dir) = std::path::Path::new(&exe).parent() {
+                        cmd.current_dir(dir);
+                    }
+                    match cmd.spawn() {
+                        Ok(_) => format!("Started {game} – join {addr} in the game"),
+                        Err(e) => format!("Could not start {exe}: {e}"),
+                    }
+                }
+                None => format!(
+                    "Set the path of {} in Settings → My Games to start it (server: {addr})",
+                    if game.is_empty() { "the game" } else { &game }
+                ),
+            };
+            return;
+        }
+        let addr = s.address.to_string();
+        let (host, port) = (s.address.host.clone(), s.address.port.to_string());
+        let app_id = s.info.as_ref().map(|i| i.real_app_id());
+        let password = self.join_password.trim().to_string();
+
+        let game_exe = app_id
+            .and_then(crate::settings::game_by_app_id)
+            .and_then(|g| self.settings.game_paths.get(g.name))
+            .filter(|p| !p.trim().is_empty());
+        let result = if let Some(exe) = game_exe {
+            let mut cmd = std::process::Command::new(exe.trim());
+            cmd.args(["+connect", &addr]);
+            if !password.is_empty() {
+                cmd.args(["+password", &password]);
+            }
+            if let Some(dir) = std::path::Path::new(exe.trim()).parent() {
+                cmd.current_dir(dir);
+            }
+            cmd.spawn().map(|_| ())
+        } else {
+            let mut url = format!("steam://connect/{addr}");
+            if !password.is_empty() {
+                url = format!("{url}/{password}");
+            }
+            open_url(&url)
+        };
+        if let Err(e) = result {
+            self.status_message = format!("Could not start the game: {e}");
+            return;
+        }
+        self.status_message = format!("Connecting to {addr}");
+        let now = chrono::Local::now().format("%d.%m.%Y %H:%M:%S").to_string();
+        if let Some(s) = self.server_mut(id) {
+            s.last_connected = Some(now.clone());
+            let name = s.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
+            self.connect_log.push(format!("{now}   {addr}   {name}"));
+            if self.connect_log.len() > 500 {
+                self.connect_log.remove(0);
+            }
+        }
+        self.save_config();
+
+        for app in self
+            .settings
+            .connect_apps
+            .iter()
+            .filter(|a| a.enabled && !a.command.trim().is_empty())
+        {
+            let command = app
+                .command
+                .replace("%addr%", &addr)
+                .replace("%ip%", &host)
+                .replace("%port%", &port);
+            if let Err(e) = run_shell(&command) {
+                self.status_message = format!("Could not run {command}: {e}");
+            }
+        }
+        match self.settings.on_connect {
+            OnConnect::Nothing => {}
+            OnConnect::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            OnConnect::MinimizeNoTraffic => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                self.paused_for_game = true;
+            }
+        }
+    }
+
+    fn process_events(&mut self) {
+        let mut went_offline = false;
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                Event::Info { id, result } => {
+                    let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
+                        continue;
+                    };
+                    s.busy[0] = false;
+                    match result {
+                        Ok((info, meta, addr)) => {
+                            let ping = meta.rtt.as_millis() as u32;
+                            s.charge(&meta);
+                            let map_changed =
+                                s.info.as_ref().is_some_and(|old| old.map != info.map);
+                            s.resolved = Some(addr);
+                            s.last_ok = Instant::now();
+                            if map_changed {
+                                s.last_rules = None; // limits / next map may have changed
+                            }
+                            if map_changed
+                                && self.settings.log_on_map_change
+                                && let Some((_, internet)) = s.log_target
+                            {
+                                s.rcon.send(RconRequest::StartLog {
+                                    internet,
+                                    port: self.settings.log_port,
+                                    public_ip: self
+                                        .settings
+                                        .public_ip
+                                        .trim()
+                                        .parse::<IpAddr>()
+                                        .ok(),
+                                });
+                            }
+                            let engine_changed = s.is_goldsrc() != info.goldsrc;
+                            s.info = Some(*info);
+                            if engine_changed && !s.rcon_password.is_empty() {
+                                s.configure_rcon(); // GoldSrc uses UDP RCON
+                            }
+                            s.ping = Some(ping);
+                            s.push_ping(Some(ping));
+                            s.rate_factor = (s.rate_factor + 0.02).min(1.0);
+                            s.state = QueryState::Online;
+                            s.last_seen = Some(chrono::Local::now());
+                        }
+                        Err(e) => {
+                            s.budget -= 1.0; // the timeout retry
+                            if s.info.is_some() {
+                                s.push_ping(None);
+                                s.rate_factor = (s.rate_factor * 0.5).max(0.25);
+                            }
+                            if s.last_ok.elapsed() >= OFFLINE_AFTER {
+                                if s.state == QueryState::Online {
+                                    went_offline = true;
+                                }
+                                s.ping = None;
+                                s.state = QueryState::Offline(e);
+                            }
+                        }
+                    }
+                }
+                Event::Players { id, result } => {
+                    let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
+                        continue;
+                    };
+                    s.busy[1] = false;
+                    match result {
+                        Ok((players, meta)) => {
+                            s.charge(&meta);
+                            s.players = players;
+                        }
+                        Err(_) => s.budget -= 1.0,
+                    }
+                }
+                Event::Rules { id, result } => {
+                    let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
+                        continue;
+                    };
+                    s.busy[2] = false;
+                    match result {
+                        Ok((rules, meta)) => {
+                            s.charge(&meta);
+                            s.rules = rules;
+                        }
+                        Err(_) => s.budget -= 1.0,
+                    }
+                }
+                Event::Rcon { id, event } => {
+                    let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
+                        continue;
+                    };
+                    match event {
+                        RconEvent::Status(status) => {
+                            if status == RconStatus::Ok {
+                                s.last_status = None; // fetch player details right away
+                            }
+                            s.rcon_status = status;
+                        }
+                        RconEvent::Output { tag, text } => match tag {
+                            RconTag::Console => {
+                                if !text.trim().is_empty() {
+                                    s.console_add(LineKind::Response, &text, false);
+                                }
+                            }
+                            RconTag::Silent => {}
+                            RconTag::BanIds | RconTag::BanIps => {
+                                let is_ip = tag == RconTag::BanIps;
+                                s.bans.retain(|b| b.is_ip != is_ip);
+                                s.bans.extend(parse_ban_list(&text, is_ip));
+                                s.ban_selected = None;
+                            }
+                            RconTag::Maps => {
+                                let found = parse_map_list(&text);
+                                if found.is_empty() {
+                                    s.append_console(&format!(
+                                        "*** maps * returned no map names. Server answer:\n{}",
+                                        if text.trim().is_empty() {
+                                            "(empty)"
+                                        } else {
+                                            text.trim_end()
+                                        }
+                                    ));
+                                }
+                                merge_maps(&mut s.maps, found);
+                                // `maps *` does not list maps inside the game's VPK files, so
+                                // add the stock maps of the game.
+                                if let Some(i) = &s.info {
+                                    let stock = stock_maps(i.real_app_id(), &i.folder);
+                                    merge_maps(
+                                        &mut s.maps,
+                                        stock.iter().map(|m| m.to_string()).collect(),
+                                    );
+                                }
+                            }
+                            RconTag::MapCycle => {
+                                merge_maps(&mut s.maps, parse_map_cycle(&text));
+                                s.maps_loading = false;
+                                s.maps_status = if s.maps.is_empty() {
+                                    "No maps found. The server's answer is in the Console tab."
+                                        .into()
+                                } else {
+                                    format!("{} maps", s.maps.len())
+                                };
+                            }
+                            RconTag::PlayerStatus => {
+                                s.console_add(LineKind::Response, &text, true);
+                                s.status_players = parse_status_players(&text);
+                            }
+                            RconTag::KickAllStatus => {
+                                let ids = parse_status_userids(&text);
+                                for uid in &ids {
+                                    s.rcon.exec(s.kick_cmd(*uid, "Map change"), RconTag::Silent);
+                                }
+                                if let Some(map) = s.pending_change.take() {
+                                    s.append_console(&format!(
+                                        "*** Kicked {} players, changelevel {map}",
+                                        ids.len()
+                                    ));
+                                    s.rcon.exec(format!("changelevel {map}"), RconTag::Console);
+                                }
+                            }
+                        },
+                        RconEvent::Error(msg) => {
+                            if s.maps_loading {
+                                s.maps_loading = false;
+                                s.maps_status = format!("Could not load maps: {msg}");
+                            }
+                            s.pending_change = None;
+                            s.append_console(&format!("*** {msg}"));
+                        }
+                        RconEvent::LogStarted(Ok(target)) => {
+                            let internet = s.log_target.map(|(_, i)| i).unwrap_or(false);
+                            s.log_target = Some((target, internet));
+                            s.append_console(&format!("*** Server log is now sent to {target}"));
+                            self.status_message =
+                                format!("Receiving log of {} on {target}", s.address);
+                        }
+                        RconEvent::LogStarted(Err(e)) => {
+                            s.log_target = None;
+                            s.append_console(&format!("*** Get Log failed: {e}"));
+                            self.status_message = format!("Get Log failed: {e}");
+                        }
+                    }
+                }
+                Event::Log { from, line } => self.handle_log_line(from, line),
+                Event::Geo(result) => match result {
+                    Ok(list) => {
+                        for (ip, info) in list {
+                            self.geo_pending.remove(&ip);
+                            self.geo.insert(ip, info);
+                        }
+                        geo::save_cache(&self.geo);
+                    }
+                    Err(e) => {
+                        self.geo_pending.clear(); // try again on the next round
+                        self.status_message = format!("Location lookup failed: {e}");
+                    }
+                },
+            }
+        }
+        if went_offline {
+            self.play(SoundEvent::Notification);
+        }
+    }
+
+    fn tick(&mut self, ctx: &egui::Context) {
+        if self.paused_for_game {
+            if ctx.input(|i| i.viewport().minimized) == Some(true) {
+                return; // OnConnect::MinimizeNoTraffic
+            }
+            self.paused_for_game = false;
+        }
+        let interval = Duration::from_secs_f32(self.settings.refresh_interval);
+        let due = match self.last_list_refresh {
+            None => true,
+            Some(t) => t.elapsed() >= interval,
+        };
+        if due {
+            if self.last_list_refresh.is_none() || self.settings.auto_refresh {
+                self.refresh_all(false);
+            } else if self.auto_update_status
+                && let Some(id) = self.selected
+            {
+                self.refresh(id, false);
+                self.last_list_refresh = Some(Instant::now());
+            }
+        }
+
+        self.lookup_locations();
+        self.poll_player_status(ctx);
+
+        let elapsed = self.traffic.at.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            let now = openhlsw::stats::totals();
+            let secs = elapsed.as_secs_f64();
+            self.traffic.rate = (
+                ((now.0 - self.traffic.last.0) as f64 / secs) as u64,
+                ((now.1 - self.traffic.last.1) as f64 / secs) as u64,
+            );
+            self.traffic.last = now;
+            self.traffic.at = Instant::now();
+        }
+    }
+
+    fn save_config(&mut self) {
+        let config = Config {
+            servers: self.servers.iter().map(Self::saved_server).collect(),
+            list_name: self.list_name.clone(),
+            other_lists: self.other_lists.clone(),
+            connect_log: self.connect_log.clone(),
+            selected: self
+                .selected
+                .and_then(|id| self.server(id))
+                .map(|s| s.address.to_string()),
+            hide_rcon_password: self.hide_password,
+            auto_update_status: self.auto_update_status,
+            settings: self.settings.clone(),
+        };
+        if let Err(e) = config::save(&config) {
+            self.status_message = format!("Could not save settings: {e}");
+        }
+    }
+
+    fn apply(&mut self, action: Action, ctx: &egui::Context) {
+        let action_name = match &action {
+            Action::MoveToList(..) => "move",
+            _ => "",
+        };
+        match action {
+            Action::Select(id) => {
+                if let Some(info) = self.server(id).and_then(|s| s.info.as_ref()) {
+                    self.add_game = AddGame::of(info);
+                }
+                if self.selected != Some(id) {
+                    self.selected = Some(id);
+                    self.history_pos = None;
+                    self.refresh(id, true);
+                    self.save_config();
+                }
+            }
+            Action::Add => {
+                let input = self.address_input.trim().to_string();
+                if input.is_empty() {
+                    return;
+                }
+                let Some(address) = ServerAddress::parse(&input) else {
+                    self.status_message = format!("Invalid address: {input}");
+                    return;
+                };
+                if self.add_game == AddGame::GameSpy2 && address.query_port.is_none() {
+                    // GameSpy 2 answers on a separate query port.
+                    self.status_message = format!(
+                        "GameSpy 2 servers need the query port: ip:gameport:queryport (e.g. {}:{}:34567)",
+                        address.host, address.port
+                    );
+                    return;
+                }
+                if let Some(existing) = self.servers.iter().find(|s| s.address == address) {
+                    let id = existing.id;
+                    self.status_message = format!("{address} is already in the list");
+                    self.apply(Action::Select(id), ctx);
+                } else {
+                    let id = self.alloc_id();
+                    self.status_message = format!("Added {address}");
+                    let mut server = Server::new(id, address, &self.notifier);
+                    server.console_cache = self.settings.console_cache.max(1);
+                    self.servers.push(server);
+                    self.apply(Action::Select(id), ctx);
+                    self.save_config();
+                }
+                self.address_input.clear();
+            }
+            Action::Refresh(id) => self.refresh(id, true),
+            Action::RefreshAll => self.refresh_all(true),
+            Action::Remove(id) => {
+                let Some(idx) = self.index_of(id) else { return };
+                let removed = self.servers.remove(idx);
+                self.status_message = format!("Removed {}", removed.address);
+                if self.selected == Some(id) {
+                    self.selected = self
+                        .servers
+                        .get(idx.min(self.servers.len().saturating_sub(1)))
+                        .map(|s| s.id);
+                }
+                self.save_config();
+            }
+            Action::Connect(id) => self.connect(id, ctx),
+            Action::CopyText(text) => {
+                self.status_message = format!("Copied {text}");
+                ctx.copy_text(text);
+            }
+            Action::NewList(name) => {
+                let name = name.trim().to_string();
+                if name.is_empty() || self.list_names().contains(&name) {
+                    self.status_message = format!("A server list named \"{name}\" already exists");
+                    return;
+                }
+                let current = SavedList {
+                    name: std::mem::replace(&mut self.list_name, name),
+                    servers: self.servers.iter().map(Self::saved_server).collect(),
+                };
+                self.other_lists.push(current);
+                self.servers.clear();
+                self.selected = None;
+                self.list_order.clear();
+                self.status_message = format!("Created server list {}", self.list_name);
+                self.save_config();
+            }
+            Action::OpenList(name) => self.switch_list(&name, true),
+            Action::DeleteList => {
+                let next = self.list_names().into_iter().find(|n| *n != self.list_name);
+                match next {
+                    Some(next) => {
+                        let old = self.list_name.clone();
+                        self.switch_list(&next, false);
+                        self.status_message = format!("Deleted server list {old}");
+                    }
+                    None => self.status_message = "The last server list cannot be deleted".into(),
+                }
+            }
+            Action::RenameList(name) => {
+                let name = name.trim().to_string();
+                if !name.is_empty() && !self.other_lists.iter().any(|l| l.name == name) {
+                    self.list_name = name;
+                    self.save_config();
+                }
+            }
+            Action::ImportList => {
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title("Import server list")
+                    .add_filter("Server list", &["txt", "json", "cfg"])
+                    .add_filter("All files", &["*"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        let saved = parse_server_list_file(&text);
+                        let added = self.add_saved_servers(&saved);
+                        self.status_message = format!(
+                            "Imported {added} of {} servers from {}",
+                            saved.len(),
+                            path.display()
+                        );
+                        self.last_list_refresh = None;
+                        self.save_config();
+                    }
+                    Err(e) => {
+                        self.status_message = format!("Could not read {}: {e}", path.display())
+                    }
+                }
+            }
+            Action::ExportList => {
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title("Export server list")
+                    .set_file_name(format!("{}.txt", self.list_name))
+                    .add_filter("Text (one address per line)", &["txt"])
+                    .add_filter("openHLSW JSON", &["json"])
+                    .save_file()
+                else {
+                    return;
+                };
+                let is_json = path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("json"));
+                let content = if is_json {
+                    let list = SavedList {
+                        name: self.list_name.clone(),
+                        servers: self
+                            .servers
+                            .iter()
+                            .map(|s| SavedServer {
+                                rcon_password: None,
+                                ..Self::saved_server(s)
+                            })
+                            .collect(),
+                    };
+                    serde_json::to_string_pretty(&list).unwrap_or_default()
+                } else {
+                    self.servers
+                        .iter()
+                        .map(|s| {
+                            if s.comment.is_empty() {
+                                s.address.to_string()
+                            } else {
+                                format!("{} {}", s.address, s.comment)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        + "\n"
+                };
+                self.status_message = match std::fs::write(&path, content) {
+                    Ok(()) => format!(
+                        "Exported {} servers to {}",
+                        self.servers.len(),
+                        path.display()
+                    ),
+                    Err(e) => format!("Could not write {}: {e}", path.display()),
+                };
+            }
+            Action::MultiInsert(text) => {
+                let saved = parse_server_list_file(&text);
+                let added = self.add_saved_servers(&saved);
+                self.status_message = format!("Added {added} servers");
+                self.last_list_refresh = None;
+                self.save_config();
+            }
+            Action::MoveToList(id, target) | Action::CopyToList(id, target) => {
+                let moving = matches!(action_name, "move");
+                let Some(s) = self.server(id) else { return };
+                let saved = Self::saved_server(s);
+                let Some(list) = self.other_lists.iter_mut().find(|l| l.name == target) else {
+                    return;
+                };
+                if !list.servers.iter().any(|x| x.address == saved.address) {
+                    list.servers.push(saved);
+                }
+                if moving {
+                    self.servers.retain(|s| s.id != id);
+                    if self.selected == Some(id) {
+                        self.selected = self.servers.first().map(|s| s.id);
+                    }
+                    self.status_message = format!("Moved server to {target}");
+                } else {
+                    self.status_message = format!("Copied server to {target}");
+                }
+                self.save_config();
+            }
+            Action::FocusSearch => {
+                self.settings.view.filter = true;
+                if let Some(search) = self.search_id {
+                    ctx.memory_mut(|m| m.request_focus(search));
+                }
+            }
+            Action::OpenDialog(dialog) => self.dialog = Some(dialog),
+            Action::ApplyServerProps(id, draft) => {
+                let address = ServerAddress::parse(&draft.address);
+                if let Some(s) = self.server_mut(id) {
+                    s.comment = draft.comment.trim().to_string();
+                    s.save_password = draft.save_password;
+                    if s.rcon_password != draft.rcon_password {
+                        s.rcon_password = draft.rcon_password;
+                        s.rcon_status = RconStatus::Unknown;
+                        s.configure_rcon();
+                    }
+                    if let Some(address) = address
+                        && address != s.address
+                    {
+                        s.address = address;
+                        s.info = None;
+                        s.resolved = None;
+                        s.challenge = None;
+                        s.ping_history.clear();
+                        s.state = QueryState::Unknown;
+                        s.configure_rcon();
+                    }
+                }
+                self.refresh(id, true);
+                self.save_config();
+            }
+            Action::ResetPing(id) => {
+                if let Some(s) = self.server_mut(id) {
+                    s.ping_history.clear();
+                    if let Some(p) = s.ping {
+                        s.ping_history.push_back(Some(p));
+                    }
+                }
+            }
+            Action::RconStatus(id) => {
+                if let Some(s) = self.server_mut(id) {
+                    s.append_console("] status");
+                    s.configure_rcon();
+                    s.rcon.exec("status", RconTag::Console);
+                }
+                self.tab = Tab::Console;
+                self.settings.view.rcon_section = true;
+            }
+            Action::TraceRoute(id) => {
+                if let Some(s) = self.server(id) {
+                    let host = s
+                        .resolved
+                        .map(|a| a.ip().to_string())
+                        .unwrap_or_else(|| s.address.host.clone());
+                    let mut t = crate::trace::TraceRoute::new(host);
+                    t.start(ctx);
+                    self.trace = Some(t);
+                }
+            }
+            Action::Minimize { no_traffic } => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                self.paused_for_game = no_traffic;
+            }
+            Action::OpenAppData => {
+                if let Some(dir) = config::path().and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                {
+                    let _ = std::fs::create_dir_all(&dir);
+                    if let Err(e) = open_url(&dir.display().to_string()) {
+                        self.status_message = format!("Could not open {}: {e}", dir.display());
+                    }
+                }
+            }
+            Action::EditComment(id) => {
+                if let Some(s) = self.server(id) {
+                    self.editing_comment = Some((id, s.comment.clone()));
+                }
+            }
+            Action::RconConfigure(id) => {
+                if let Some(s) = self.server_mut(id) {
+                    s.rcon_status = RconStatus::Unknown;
+                    s.configure_rcon();
+                }
+            }
+            Action::RconTest(id) => {
+                if let Some(s) = self.server(id) {
+                    s.configure_rcon();
+                    s.rcon.send(RconRequest::Test);
+                }
+            }
+            Action::RconDisconnect(id) => {
+                if let Some(s) = self.server(id) {
+                    s.rcon.send(RconRequest::Disconnect);
+                }
+            }
+            Action::SendConsole(id) => {
+                let command = self.console_input.trim().to_string();
+                if command.is_empty() {
+                    return;
+                }
+                if self.history.last() != Some(&command) {
+                    self.history.push(command.clone());
+                }
+                self.history_pos = None;
+                self.console_input.clear();
+                if let Some(s) = self.server_mut(id) {
+                    s.append_console(&format!("] {command}"));
+                    s.configure_rcon();
+                    s.rcon.exec(command, RconTag::Console);
+                }
+            }
+            Action::ClearConsole(id) => {
+                if let Some(s) = self.server_mut(id) {
+                    s.console.clear();
+                }
+            }
+            Action::SwitchTab(tab) => {
+                self.tab = tab;
+                // Load ban list / map list the first time the tab is opened.
+                if let Some(s) = self.selected.and_then(|id| self.server(id))
+                    && !s.rcon_password.is_empty()
+                {
+                    match tab {
+                        Tab::BanList if s.bans.is_empty() => {
+                            self.apply(Action::FetchBans(s.id), ctx)
+                        }
+                        Tab::ChangeLevel if s.maps.is_empty() && !s.maps_loading => {
+                            self.apply(Action::FetchMaps(s.id), ctx)
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Action::FetchBans(id) => {
+                if let Some(s) = self.server(id) {
+                    s.configure_rcon();
+                    s.rcon.exec("listid", RconTag::BanIds);
+                    s.rcon.exec("listip", RconTag::BanIps);
+                }
+            }
+            Action::FetchMaps(id) => {
+                if let Some(s) = self.server_mut(id) {
+                    if s.rcon_password.is_empty() {
+                        s.maps_status = "No RCON password set (Rcon Config tab).".into();
+                        return;
+                    }
+                    s.maps.clear();
+                    s.maps_loading = true;
+                    s.maps_status = "Loading maps…".into();
+                    s.configure_rcon();
+                    s.rcon.exec("maps *", RconTag::Maps);
+                    s.rcon.exec("listmaps", RconTag::MapCycle);
+                }
+            }
+            Action::Unban(id) => {
+                if let Some(s) = self.server(id)
+                    && let Some(ban) = s.ban_selected.and_then(|i| s.bans.get(i))
+                {
+                    let (remove, write) = if ban.is_ip {
+                        ("removeip", "writeip")
+                    } else {
+                        ("removeid", "writeid")
+                    };
+                    s.configure_rcon();
+                    s.rcon
+                        .exec(format!("{remove} {}", ban.ident), RconTag::Console);
+                    s.rcon.exec(write, RconTag::Silent);
+                    self.apply(Action::FetchBans(id), ctx);
+                }
+            }
+            Action::AddBan { id, ip } => {
+                let ident = self.ban_input.trim().to_string();
+                if ident.is_empty() {
+                    return;
+                }
+                if let Some(s) = self.server(id) {
+                    let minutes = self.ban_minutes;
+                    let (add, write) = if ip {
+                        ("addip", "writeip")
+                    } else {
+                        ("banid", "writeid")
+                    };
+                    s.configure_rcon();
+                    s.rcon
+                        .exec(format!("{add} {minutes} {ident}"), RconTag::Console);
+                    s.rcon.exec(write, RconTag::Silent);
+                    self.ban_input.clear();
+                    self.apply(Action::FetchBans(id), ctx);
+                }
+            }
+            Action::ChangeLevel(id, map) => {
+                let kick_all = self.settings.kick_all_on_map_change;
+                if let Some(s) = self.server_mut(id) {
+                    if s.rcon_password.is_empty() {
+                        s.maps_status = "No RCON password set (Rcon Config tab).".into();
+                        return;
+                    }
+                    s.configure_rcon();
+                    if kick_all {
+                        // Kick everybody (userids from `status`), then change the level.
+                        s.pending_change = Some(map.clone());
+                        s.rcon.exec("status", RconTag::KickAllStatus);
+                    } else {
+                        s.append_console(&format!("] changelevel {map}"));
+                        s.rcon.exec(format!("changelevel {map}"), RconTag::Console);
+                    }
+                    s.maps_status = format!("Changing level to {map}…");
+                    self.status_message = format!("Changing level to {map}");
+                }
+            }
+            Action::Say(id) => {
+                let text = self.chat_input.trim().replace('"', "'");
+                if text.is_empty() {
+                    return;
+                }
+                self.chat_input.clear();
+                if let Some(s) = self.server_mut(id) {
+                    if s.log_target.is_none() {
+                        // Without a log stream we would never see our own message.
+                        s.chat.push(ChatLine {
+                            time: String::new(),
+                            name: "Console".into(),
+                            team: String::new(),
+                            team_only: false,
+                            text: text.clone(),
+                        });
+                    }
+                    s.configure_rcon();
+                    s.rcon.exec(format!("say {text}"), RconTag::Silent);
+                }
+                self.play(SoundEvent::SendingMessage);
+            }
+            Action::StartLog { id, internet } => {
+                if let Err(e) = self.ensure_log_listener() {
+                    self.status_message = e;
+                    return;
+                }
+                let port = self.settings.log_port;
+                let public_ip = self.settings.public_ip.trim().parse::<IpAddr>().ok();
+                if let Some(s) = self.server_mut(id) {
+                    s.log_target = Some((SocketAddr::from(([0, 0, 0, 0], port)), internet));
+                    s.configure_rcon();
+                    s.rcon.send(RconRequest::StartLog {
+                        internet,
+                        port,
+                        public_ip,
+                    });
+                    self.status_message = format!("Requesting log of {}…", s.address);
+                }
+            }
+            Action::KickPlayer(id, userid) => {
+                if let Some(s) = self.server_mut(id) {
+                    let cmd = s.kick_cmd(userid, "Kicked by admin");
+                    s.append_console(&format!("] {cmd}"));
+                    s.configure_rcon();
+                    s.rcon.exec(cmd, RconTag::Console);
+                    s.last_status = None;
+                }
+            }
+            Action::KickAndConnect(id, userid) => {
+                self.apply(Action::KickPlayer(id, userid), ctx);
+                self.apply(Action::Connect(id), ctx);
+            }
+            Action::BanPlayer {
+                id,
+                userid,
+                target,
+                ip,
+                kick,
+                minutes,
+            } => {
+                if let Some(s) = self.server_mut(id) {
+                    s.configure_rcon();
+                    let mut cmds = Vec::new();
+                    if ip {
+                        cmds.push(format!("addip {minutes} {target}"));
+                        if kick {
+                            cmds.push(s.kick_cmd(userid, "Banned by admin"));
+                        }
+                    } else {
+                        // banid with the Steam ID keeps working after the player left.
+                        let target = if target.starts_with("STEAM_") || target.starts_with("[U:") {
+                            target
+                        } else {
+                            userid.to_string()
+                        };
+                        cmds.push(if kick {
+                            format!("banid {minutes} {target} kick")
+                        } else {
+                            format!("banid {minutes} {target}")
+                        });
+                    }
+                    for cmd in cmds {
+                        s.append_console(&format!("] {cmd}"));
+                        s.rcon.exec(cmd, RconTag::Console);
+                    }
+                    s.rcon
+                        .exec(if ip { "writeip" } else { "writeid" }, RconTag::Silent);
+                    s.last_status = None;
+                    s.bans.clear(); // reload the ban list next time
+                }
+            }
+            Action::MoveServer(id, delta) => {
+                if let Some(i) = self.index_of(id) {
+                    let j =
+                        (i as i64 + delta as i64).clamp(0, self.servers.len() as i64 - 1) as usize;
+                    if i != j {
+                        let s = self.servers.remove(i);
+                        self.servers.insert(j, s);
+                        self.save_config();
+                    }
+                }
+            }
+            Action::SetServerId(id, n) => {
+                if let Some(i) = self.index_of(id) {
+                    let j = n.clamp(1, self.servers.len()) - 1;
+                    let s = self.servers.remove(i);
+                    self.servers.insert(j, s);
+                    self.save_config();
+                }
+            }
+            Action::RenumberServers => {
+                let order = self.list_order.clone();
+                self.servers.sort_by_key(|s| {
+                    order
+                        .iter()
+                        .position(|id| *id == s.id)
+                        .unwrap_or(usize::MAX)
+                });
+                self.save_config();
+                self.status_message = "Server IDs set to the current sequence".into();
+            }
+            Action::ToggleColumn { players, title } => {
+                let v = &mut self.settings.view;
+                if !players && title == "Comment" {
+                    v.comment = !v.comment;
+                } else {
+                    // Server list: list of hidden columns; players: list of shown columns.
+                    let list = if players {
+                        &mut v.player_columns
+                    } else {
+                        &mut v.hidden_server_columns
+                    };
+                    if let Some(i) = list.iter().position(|h| *h == title) {
+                        list.remove(i);
+                    } else {
+                        list.push(title);
+                    }
+                }
+                self.save_config();
+            }
+            Action::ResetColumns { players } => {
+                let v = &mut self.settings.view;
+                if players {
+                    v.player_columns_reset = v.player_columns_reset.wrapping_add(1);
+                } else {
+                    v.server_columns_reset = v.server_columns_reset.wrapping_add(1);
+                }
+                self.save_config();
+            }
+            Action::SetCvar(id, key, value) => {
+                if let Some(s) = self.server_mut(id) {
+                    let cmd = format!("{key} \"{}\"", value.replace('"', "'"));
+                    s.append_console(&format!("] {cmd}"));
+                    s.configure_rcon();
+                    s.rcon.exec(cmd, RconTag::Console);
+                    s.last_rules = None; // show the new value soon
+                }
+            }
+            Action::SetTheme(theme) => {
+                if self.settings.theme != theme {
+                    self.settings.theme = theme;
+                    theme::apply(ctx, theme);
+                    self.save_config();
+                }
+            }
+            Action::OpenSettings(tab) => {
+                self.settings_dialog = Some(SettingsDialog::new(&self.settings, tab))
+            }
+            Action::ApplySettings(new) => {
+                let mut new = *new;
+                new.refresh_interval =
+                    sanitize_interval(new.refresh_interval, new.max_queries_per_sec);
+                if new.theme != self.settings.theme {
+                    theme::apply(ctx, new.theme);
+                }
+                if new.text_size != self.settings.text_size {
+                    ctx.set_zoom_factor(new.text_size.zoom());
+                }
+                let port_changed = new.log_port != self.settings.log_port;
+                self.settings = new;
+                if let Some(dialog) = &mut self.settings_dialog {
+                    dialog.draft = self.settings.clone();
+                }
+                if port_changed && self.log_listener.is_some() {
+                    self.status_message = match self.ensure_log_listener() {
+                        Ok(port) => format!("Listening for server logs on UDP port {port}"),
+                        Err(e) => e,
+                    };
+                }
+                let cache = self.settings.console_cache;
+                for s in &mut self.servers {
+                    s.trim_console(cache);
+                }
+                self.save_config();
+            }
+            Action::SaveConfig => self.save_config(),
+            Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        }
+    }
+}
+
+impl eframe::App for OpenHlswApp {
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        self.process_events();
+        self.tick(&ui.ctx().clone());
+        // While minimized the window has (almost) no size: laying out the panels now would
+        // shrink them and that size would be remembered. Draw nothing until it is restored.
+        if ui.ctx().input(|i| i.viewport().minimized) == Some(true) {
+            return;
+        }
+
+        let p = self.settings.theme.palette();
+        let mut actions = Vec::new();
+        self.shortcuts(ui, &mut actions);
+
+        let chrome = Frame::new()
+            .fill(p.window)
+            .inner_margin(Margin::symmetric(4, 2));
+        egui::Panel::top("menu")
+            .frame(chrome)
+            .show(ui, |ui| self.menu_bar(ui, &mut actions));
+        egui::Panel::top("toolbar")
+            .frame(chrome)
+            .show_separator_line(false)
+            .show(ui, |ui| self.toolbar(ui, &p, &mut actions));
+        let view = self.settings.view.clone();
+        if view.status_bar {
+            egui::Panel::bottom("statusbar")
+                .frame(chrome)
+                .show(ui, |ui| self.status_bar(ui, &p));
+        }
+        if view.rcon_section {
+            egui::Panel::bottom("tools")
+                .frame(chrome)
+                .resizable(true)
+                .default_size(150.0)
+                .min_size(110.0)
+                .show(ui, |ui| self.tools_panel(ui, &p, &mut actions));
+        }
+        if view.server_list {
+            egui::Panel::top("server_list")
+                .frame(chrome)
+                .resizable(true)
+                .default_size(420.0)
+                .min_size(80.0)
+                .show(ui, |ui| {
+                    let needle = self.search.trim().to_lowercase();
+                    list_frame(ui, &p, |ui| {
+                        let locations: Vec<(String, String)> = self
+                            .servers
+                            .iter()
+                            .map(|s| match self.location_of(s) {
+                                Some(Some(g)) => (g.country_code.clone(), g.provider().to_string()),
+                                Some(None) => (String::new(), "LAN".into()),
+                                None => (String::new(), String::new()),
+                            })
+                            .collect();
+                        let other_lists: Vec<String> = self
+                            .list_names()
+                            .into_iter()
+                            .filter(|n| *n != self.list_name)
+                            .collect();
+                        let opts = ListOptions {
+                            game_icons: self.game_icons.as_ref(),
+                            other_lists: &other_lists,
+                            show_comment: self.settings.view.comment,
+                            hidden: &self.settings.view.hidden_server_columns,
+                            generation: self.settings.view.server_columns_reset,
+                            flags: self.flags.as_ref(),
+                            locations: &locations,
+                            needle: &needle,
+                            selected: self.selected,
+                            connect_on_double_click: self.settings.connect_on_double_click,
+                            keep_order_on_hover: self.settings.keep_order_on_hover,
+                        };
+                        server_table(
+                            ui,
+                            &p,
+                            &self.servers,
+                            &opts,
+                            &mut self.list_order,
+                            &mut self.sort,
+                            &mut actions,
+                        );
+                    });
+                });
+        }
+        egui::CentralPanel::default()
+            .frame(chrome)
+            .show(ui, |ui| self.details(ui, &p, &mut actions));
+
+        let ctx = ui.ctx().clone();
+        self.dialogs(&ctx, &mut actions);
+
+        for action in actions {
+            self.apply(action, &ctx);
+        }
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+}
+
+// --------------------------------------------------------------------------
+// UI pieces
+// --------------------------------------------------------------------------
+
+impl OpenHlswApp {
+    fn shortcuts(&mut self, ui: &Ui, actions: &mut Vec<Action>) {
+        use egui::{KeyboardShortcut, Modifiers};
+        let typing = ui.ctx().memory(|m| m.focused().is_some());
+        let selected = self.selected;
+        let ctrl = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
+        ui.ctx().input_mut(|i| {
+            if i.key_pressed(Key::F5) {
+                actions.push(Action::RefreshAll);
+            }
+            if i.key_pressed(Key::F6)
+                && let Some(id) = selected
+            {
+                actions.push(Action::Refresh(id));
+            }
+            // While typing in a text field, Ctrl+C/V/X/A/D/... belong to the text field.
+            if typing {
+                return;
+            }
+            if i.consume_shortcut(&ctrl(Key::I)) {
+                actions.push(Action::OpenDialog(Dialog::MultiInsert(String::new())));
+            }
+            if i.consume_shortcut(&ctrl(Key::O)) {
+                actions.push(Action::OpenDialog(Dialog::ListProperties(
+                    self.list_name.clone(),
+                )));
+            }
+            if i.consume_shortcut(&ctrl(Key::F)) {
+                actions.push(Action::FocusSearch);
+            }
+            if i.consume_shortcut(&ctrl(Key::M)) {
+                actions.push(Action::Minimize { no_traffic: true });
+            }
+            let view = &mut self.settings.view;
+            let mut toggled = false;
+            for (key, flag) in [
+                (Key::R, &mut view.rcon_section),
+                (Key::L, &mut view.server_list),
+                (Key::U, &mut view.rules),
+            ] {
+                if i.consume_shortcut(&ctrl(key)) {
+                    *flag = !*flag;
+                    toggled = true;
+                }
+            }
+            if toggled {
+                actions.push(Action::SaveConfig);
+            }
+            if let Some(id) = selected {
+                if i.consume_shortcut(&ctrl(Key::G)) {
+                    actions.push(Action::Connect(id));
+                }
+                if i.consume_shortcut(&ctrl(Key::D)) || i.key_pressed(Key::Delete) {
+                    actions.push(Action::Remove(id));
+                }
+                if i.consume_shortcut(&ctrl(Key::P)) {
+                    actions.push(Action::OpenDialog(self.server_props_dialog(id)));
+                }
+                if i.consume_shortcut(&ctrl(Key::T)) {
+                    actions.push(Action::TraceRoute(id));
+                }
+                // Change ID
+                if i.key_pressed(Key::Plus) {
+                    actions.push(Action::MoveServer(id, 1));
+                }
+                if i.key_pressed(Key::Minus) {
+                    actions.push(Action::MoveServer(id, -1));
+                }
+            }
+        });
+    }
+
+    fn server_props_dialog(&self, id: ServerId) -> Dialog {
+        let s = self.server(id);
+        Dialog::ServerProperties(
+            id,
+            ServerPropsDraft {
+                address: s.map(|s| s.address.to_string()).unwrap_or_default(),
+                comment: s.map(|s| s.comment.clone()).unwrap_or_default(),
+                rcon_password: s.map(|s| s.rcon_password.clone()).unwrap_or_default(),
+                save_password: s.is_some_and(|s| s.save_password),
+            },
+        )
+    }
+
+    fn menu_bar(&mut self, ui: &mut Ui, actions: &mut Vec<Action>) {
+        let selected = self.selected;
+        let other_lists: Vec<String> = self
+            .list_names()
+            .into_iter()
+            .filter(|n| *n != self.list_name)
+            .collect();
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("View Connect Log").clicked() {
+                    actions.push(Action::OpenDialog(Dialog::ConnectLog));
+                    ui.close();
+                }
+                if ui.button("View openHLSW AppData Directory").clicked() {
+                    actions.push(Action::OpenAppData);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Minimize (no traffic)\tCtrl+M").clicked() {
+                    actions.push(Action::Minimize { no_traffic: true });
+                    ui.close();
+                }
+                if ui.button("Minimize").clicked() {
+                    actions.push(Action::Minimize { no_traffic: false });
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Exit").clicked() {
+                    actions.push(Action::Quit);
+                }
+            });
+            ui.menu_button("Server list", |ui| {
+                if ui.button("New...").clicked() {
+                    actions.push(Action::OpenDialog(Dialog::NewList(String::new())));
+                    ui.close();
+                }
+                ui.add_enabled_ui(!other_lists.is_empty(), |ui| {
+                    ui.menu_button("Open", |ui| {
+                        for name in &other_lists {
+                            if ui.button(name).clicked() {
+                                actions.push(Action::OpenList(name.clone()));
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                if ui
+                    .add_enabled(!other_lists.is_empty(), Button::new("Delete"))
+                    .clicked()
+                {
+                    actions.push(Action::OpenDialog(Dialog::ConfirmDeleteList));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Import...").clicked() {
+                    actions.push(Action::ImportList);
+                    ui.close();
+                }
+                if ui.button("Export...").clicked() {
+                    actions.push(Action::ExportList);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Multi Server Insert...\tCtrl+I").clicked() {
+                    actions.push(Action::OpenDialog(Dialog::MultiInsert(String::new())));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Refresh\tF5").clicked() {
+                    actions.push(Action::RefreshAll);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(selected.is_some(), Button::new("Update\tF6"))
+                    .clicked()
+                {
+                    actions.push(Action::Refresh(selected.unwrap_or_default()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Properties...\tCtrl+O").clicked() {
+                    actions.push(Action::OpenDialog(Dialog::ListProperties(
+                        self.list_name.clone(),
+                    )));
+                    ui.close();
+                }
+            });
+            ui.menu_button("Server", |ui| {
+                ui.add_enabled_ui(selected.is_some(), |ui| {
+                    if let Some(s) = selected.and_then(|id| self.server(id)) {
+                        server_menu_items(ui, s, &other_lists, actions);
+                    }
+                });
+            });
+            ui.menu_button("Settings", |ui| {
+                if ui.button("Settings...").clicked() {
+                    actions.push(Action::OpenSettings(SettingsTab::Misc));
+                    ui.close();
+                }
+                ui.menu_button("Sort Server List", |ui| {
+                    for (label, col) in [
+                        ("Unsorted", Col::Index),
+                        ("Name", Col::Name),
+                        ("IP/Port", Col::Address),
+                        ("Game + Name", Col::GameName),
+                        ("Game + IP/Port", Col::GameAddress),
+                    ] {
+                        if ui.radio(self.sort.0 == col, label).clicked() {
+                            self.sort = (col, true);
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            ui.menu_button("View", |ui| {
+                let v = &mut self.settings.view;
+                let mut changed = false;
+                changed |= ui
+                    .checkbox(&mut v.rcon_section, "Rcon Section\tCtrl+R")
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut v.server_list, "Server List\tCtrl+L")
+                    .changed();
+                changed |= ui.checkbox(&mut v.rules, "Rules\tCtrl+U").changed();
+                ui.separator();
+                changed |= ui.checkbox(&mut v.password, "Password").changed();
+                changed |= ui.checkbox(&mut v.filter, "Filter").changed();
+                changed |= ui.checkbox(&mut v.comment, "Comment").changed();
+                ui.separator();
+                changed |= ui.checkbox(&mut v.toolbar, "Toolbar").changed();
+                changed |= ui.checkbox(&mut v.status_bar, "Status Bar").changed();
+                ui.separator();
+                changed |= ui.checkbox(&mut v.ping_graph, "Ping Graph").changed();
+                if changed {
+                    actions.push(Action::SaveConfig);
+                }
+                ui.separator();
+                ui.menu_button("Skin", |ui| {
+                    for theme in [Theme::Light, Theme::Dark] {
+                        if ui
+                            .radio(self.settings.theme == theme, theme.label())
+                            .clicked()
+                        {
+                            actions.push(Action::SetTheme(theme));
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            ui.menu_button("?", |ui| {
+                if ui.button("License...").clicked() {
+                    self.show_license = true;
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("About openHLSW").clicked() {
+                    self.show_about = true;
+                    ui.close();
+                }
+            });
+        });
+    }
+
+    fn toolbar(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
+        const LABEL_W: f32 = 52.0;
+        let label = |ui: &mut Ui, text: &str| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(LABEL_W, 18.0),
+                Layout::right_to_left(Align::Center),
+                |ui| {
+                    ui.label(text);
+                },
+            );
+        };
+
+        // Server list: [Custom server list ▼]                         N servers
+        ui.horizontal(|ui| {
+            label(ui, "Server list:");
+            let width = (ui.available_width() - 100.0).max(150.0);
+            let names = self.list_names();
+            egui::ComboBox::from_id_salt("server_list_source")
+                .selected_text(self.list_name.clone())
+                .width(width)
+                .show_ui(ui, |ui| {
+                    for name in names {
+                        if ui.selectable_label(name == self.list_name, &name).clicked()
+                            && name != self.list_name
+                        {
+                            actions.push(Action::OpenList(name));
+                        }
+                    }
+                });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(format!("{} servers", self.servers.len()));
+            });
+        });
+
+        // IP/Port: [Half-Life 2 ▼] [address ...................]
+        ui.horizontal(|ui| {
+            label(ui, "IP/Port:");
+            if let Some(icons) = &self.game_icons {
+                icons.show(ui, self.add_game.icon(), 16.0);
+            }
+            egui::ComboBox::from_id_salt("game_type")
+                .selected_text(self.add_game.label())
+                .width(140.0)
+                .show_ui(ui, |ui| {
+                    for g in AddGame::ALL {
+                        ui.horizontal(|ui| {
+                            if let Some(icons) = &self.game_icons {
+                                icons.show(ui, g.icon(), 16.0);
+                            }
+                            ui.selectable_value(&mut self.add_game, g, g.label());
+                        });
+                    }
+                });
+            let hint = match self.selected.and_then(|id| self.server(id)) {
+                Some(s) if self.address_input.is_empty() => format!(
+                    "{} {}",
+                    s.address,
+                    s.info.as_ref().map(|i| i.name.as_str()).unwrap_or_default()
+                ),
+                _ => self.add_game.hint().into(),
+            };
+            let input = ui
+                .add(
+                    TextEdit::singleline(&mut self.address_input)
+                        .hint_text(hint)
+                        .desired_width(ui.available_width() - 40.0),
+                )
+                .with_edit_menu();
+            if input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                actions.push(Action::Add);
+            }
+            if ui.button("Add").clicked() {
+                actions.push(Action::Add);
+            }
+        });
+
+        // Toolbar: buttons · Password · Search
+        let view = self.settings.view.clone();
+        if !view.toolbar && !view.password && !view.filter {
+            ui.add_space(2.0);
+            return;
+        }
+        ui.horizontal(|ui| {
+            if view.toolbar {
+                let selected = self.selected;
+                let id = selected.unwrap_or_default();
+                if ui
+                    .add_enabled(selected.is_some(), Button::new("Refresh"))
+                    .on_hover_text("F5")
+                    .clicked()
+                {
+                    actions.push(Action::Refresh(id));
+                }
+                if ui.button("Refresh all").on_hover_text("Shift+F5").clicked() {
+                    actions.push(Action::RefreshAll);
+                }
+                if ui
+                    .add_enabled(selected.is_some(), Button::new("Connect"))
+                    .on_hover_text("Join via Steam")
+                    .clicked()
+                {
+                    actions.push(Action::Connect(id));
+                }
+                if ui
+                    .add_enabled(selected.is_some(), Button::new("Remove"))
+                    .on_hover_text("Del")
+                    .clicked()
+                {
+                    actions.push(Action::Remove(id));
+                }
+                toolbar_separator(ui, p);
+            }
+            if view.password {
+                ui.label("Password:");
+                ui.add(
+                    TextEdit::singleline(&mut self.join_password)
+                        .password(self.hide_join_password)
+                        .desired_width(110.0),
+                )
+                .with_edit_menu()
+                .on_hover_text("Server password used by Connect");
+                ui.checkbox(&mut self.hide_join_password, "Hide");
+                toolbar_separator(ui, p);
+            }
+            if view.filter {
+                ui.label("Search:");
+                let search = ui
+                    .add(
+                        TextEdit::singleline(&mut self.search)
+                            .hint_text("Name, map, address")
+                            .desired_width(160.0),
+                    )
+                    .with_edit_menu();
+                self.search_id = Some(search.id);
+                toolbar_separator(ui, p);
+            }
+            if view.toolbar {
+                if ui
+                    .checkbox(&mut self.settings.auto_refresh, "Auto refresh every")
+                    .changed()
+                {
+                    actions.push(Action::SaveConfig);
+                }
+                let rate = self.settings.max_queries_per_sec;
+                if interval_edit(ui, &mut self.settings.refresh_interval, rate) {
+                    actions.push(Action::SaveConfig);
+                }
+            }
+        });
+        ui.add_space(2.0);
+    }
+
+    fn status_bar(&self, ui: &mut Ui, p: &Palette) {
+        ui.horizontal(|ui| {
+            ui.label(&self.status_message);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let (sent, recv) = self.traffic.rate;
+                ui.label(format!(
+                    "Send: {} Recv: {}",
+                    format_rate(sent),
+                    format_rate(recv)
+                ));
+                toolbar_separator(ui, p);
+                let online = self
+                    .servers
+                    .iter()
+                    .filter(|s| s.state == QueryState::Online)
+                    .count();
+                ui.label(format!("{online}/{} online", self.servers.len()));
+                toolbar_separator(ui, p);
+            });
+        });
+    }
+
+    fn details(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
+        let idx = self.selected_index();
+        let chrome = Frame::new().fill(p.window).inner_margin(Margin::same(4));
+        egui::Panel::left("server_info")
+            .frame(chrome)
+            .resizable(true)
+            .default_size(385.0)
+            .min_size(220.0)
+            .show(ui, |ui| {
+                let location = idx
+                    .and_then(|i| self.location_of(&self.servers[i]))
+                    .map(|g| g.cloned());
+                let flags = self.flags.as_ref();
+                let server = idx.map(|i| &mut self.servers[i]);
+                let graph = self.settings.view.ping_graph;
+                if list_frame_with(ui, p, p.window, |ui| {
+                    info_panel(ui, p, server, location, flags, graph)
+                }) {
+                    actions.push(Action::SaveConfig);
+                }
+            });
+        if self.settings.view.rules {
+            egui::Panel::top("players")
+                .frame(chrome)
+                .resizable(true)
+                .default_size(140.0)
+                .min_size(50.0)
+                .show(ui, |ui| self.players_section(ui, p, idx, actions));
+            egui::CentralPanel::default().frame(chrome).show(ui, |ui| {
+                let rules = idx
+                    .map(|i| self.servers[i].rules.as_slice())
+                    .unwrap_or_default();
+                let rule_server = idx.map(|i| {
+                    let s = &self.servers[i];
+                    (s.id, !s.rcon_password.is_empty())
+                });
+                let needle = filter_bar(
+                    ui,
+                    p,
+                    "rules_filter",
+                    &mut self.rules_filter,
+                    "cvar or value",
+                    rules.len(),
+                );
+                list_frame(ui, p, |ui| {
+                    rules_table(ui, p, rules, &needle, rule_server, actions)
+                });
+            });
+        } else {
+            egui::CentralPanel::default()
+                .frame(chrome)
+                .show(ui, |ui| self.players_section(ui, p, idx, actions));
+        }
+    }
+
+    fn players_section(
+        &mut self,
+        ui: &mut Ui,
+        p: &Palette,
+        idx: Option<usize>,
+        actions: &mut Vec<Action>,
+    ) {
+        let Some(idx) = idx else {
+            let needle = filter_bar(
+                ui,
+                p,
+                "player_filter",
+                &mut self.player_filter,
+                "player name",
+                0,
+            );
+            list_frame(ui, p, |ui| {
+                players_table(
+                    ui,
+                    p,
+                    &PlayerTableData::default(),
+                    &needle,
+                    &mut self.player_sort,
+                    actions,
+                )
+            });
+            return;
+        };
+        let s = &self.servers[idx];
+        let rows: Vec<PlayerRow> = s
+            .players
+            .iter()
+            .map(|pl| {
+                let st = s.status_players.iter().find(|x| x.name == pl.name);
+                let ip = st.and_then(|x| x.ip);
+                let g = ip.and_then(|ip| self.geo.get(&ip));
+                let lan = ip.is_some_and(|ip| !geo::is_public(ip));
+                PlayerRow {
+                    player: pl.clone(),
+                    status: st.cloned(),
+                    country: g.map(|g| g.country_code.clone()).unwrap_or_default(),
+                    country_name: g.map(|g| g.country.clone()).unwrap_or_default(),
+                    provider: if lan {
+                        "LAN".into()
+                    } else {
+                        g.map(|g| g.provider().to_string()).unwrap_or_default()
+                    },
+                    log: s.log_players.get(&pl.name).cloned(),
+                }
+            })
+            .collect();
+        let data = PlayerTableData {
+            server: Some(s.id),
+            shown: &self.settings.view.player_columns,
+            generation: self.settings.view.player_columns_reset,
+            rows,
+            flags: self.flags.as_ref(),
+            has_status: !s.status_players.is_empty(),
+            rcon_ok: s.rcon_status == RconStatus::Ok,
+        };
+        let total = data.rows.len();
+        let needle = filter_bar(
+            ui,
+            p,
+            "player_filter",
+            &mut self.player_filter,
+            "name, Steam ID or IP",
+            total,
+        );
+        list_frame(ui, p, |ui| {
+            players_table(ui, p, &data, &needle, &mut self.player_sort, actions)
+        });
+    }
+
+    fn tools_panel(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
+        egui::Panel::bottom("tool_tabs")
+            .frame(Frame::new().fill(p.window))
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                if let Some(tab) = tab_strip(ui, p, &TABS, self.tab) {
+                    actions.push(Action::SwitchTab(tab));
+                }
+            });
+
+        egui::CentralPanel::default()
+            .frame(
+                Frame::new()
+                    .fill(p.window)
+                    .stroke(Stroke::new(1.0, p.list_border))
+                    .inner_margin(6),
+            )
+            .show(ui, |ui| {
+                let Some(idx) = self.selected_index() else {
+                    ui.add_enabled_ui(false, |ui| ui.label("Select a server in the list first."));
+                    return;
+                };
+                match self.tab {
+                    Tab::RconConfig => self.rcon_config_tab(ui, p, idx, actions),
+                    Tab::Console => self.console_tab(ui, p, idx, actions),
+                    Tab::Chat => self.chat_tab(ui, p, idx, actions),
+                    Tab::BanList => self.ban_tab(ui, p, idx, actions),
+                    Tab::ChangeLevel => self.change_level_tab(ui, p, idx, actions),
+                }
+            });
+    }
+
+    fn rcon_config_tab(&mut self, ui: &mut Ui, p: &Palette, idx: usize, actions: &mut Vec<Action>) {
+        let hide = &mut self.hide_password;
+        let auto_update = &mut self.auto_update_status;
+        let s = &mut self.servers[idx];
+        let id = s.id;
+
+        ui.horizontal_top(|ui| {
+            group_box(ui, p, "Rcon Password", 200.0, |ui| {
+                egui::Grid::new("rcon_pw_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 5.0])
+                    .show(ui, |ui| {
+                        let pw = ui.add(
+                            TextEdit::singleline(&mut s.rcon_password)
+                                .password(*hide)
+                                .desired_width(105.0),
+                        ).with_edit_menu();
+                        if pw.changed() {
+                            actions.push(Action::RconConfigure(id));
+                            if s.save_password {
+                                actions.push(Action::SaveConfig);
+                            }
+                        }
+                        if pw.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                            actions.push(Action::RconTest(id));
+                        }
+                        if ui.add_sized([75.0, 18.0], Button::new("Test")).clicked() {
+                            actions.push(Action::RconTest(id));
+                        }
+                        ui.end_row();
+
+                        ui.horizontal(|ui| {
+                            ui.label("Status:");
+                            ui.label(rcon_status_text(&s.rcon_status, p));
+                        });
+                        if ui
+                            .add_sized([75.0, 18.0], Button::new("Disconnect"))
+                            .clicked()
+                        {
+                            actions.push(Action::RconDisconnect(id));
+                        }
+                        ui.end_row();
+
+                        ui.horizontal(|ui| {
+                            if ui.checkbox(hide, "Hide").changed() {
+                                actions.push(Action::SaveConfig);
+                            }
+                            ui.add_space(14.0);
+                            if ui
+                                .checkbox(&mut s.save_password, "Save")
+                                .on_hover_text(
+                                    "Stores the password in plain text in the settings file",
+                                )
+                                .changed()
+                            {
+                                actions.push(Action::SaveConfig);
+                            }
+                        });
+                        if ui
+                            .add(Button::new("Properties...").min_size(egui::vec2(75.0, 18.0)))
+                            .on_hover_text("Log port and public IP")
+                            .clicked()
+                        {
+                            actions.push(Action::OpenSettings(SettingsTab::Connections));
+                        }
+                        ui.end_row();
+                    });
+            });
+
+            let log_on_map_change = &mut self.settings.log_on_map_change;
+            group_box(ui, p, "Receive Server Log", 120.0, |ui| {
+                let active = s.log_target.is_some();
+                if ui
+                    .add_sized([110.0, 18.0], Button::new("Get Log (Internet)"))
+                    .on_hover_text(
+                        "Server sends its log to your public IP (port must be forwarded)",
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::StartLog { id, internet: true });
+                }
+                if ui
+                    .add_sized([110.0, 18.0], Button::new("Get Log (LAN)"))
+                    .on_hover_text("Server sends its log to your local IP")
+                    .clicked()
+                {
+                    actions.push(Action::StartLog {
+                        id,
+                        internet: false,
+                    });
+                }
+                if ui
+                    .checkbox(log_on_map_change, "Retrieve log on map\nchange")
+                    .changed()
+                {
+                    actions.push(Action::SaveConfig);
+                }
+                if active && let Some((target, _)) = s.log_target {
+                    ui.label(RichText::new(format!("→ {target}")).color(p.green).small());
+                }
+            });
+
+            ui.vertical(|ui| {
+                ui.add_space(10.0);
+                if ui
+                    .checkbox(auto_update, "Auto Update Status")
+                    .on_hover_text(
+                        "Regularly sends `status` (Steam IDs, IPs, ping) and sets up the server log (logaddress_add) for the Console and Chat tabs",
+                    )
+                    .changed()
+                {
+                    actions.push(Action::SaveConfig);
+                }
+                let mut off = false;
+                ui.add_enabled(
+                    false,
+                    egui::Checkbox::new(&mut off, "Enable Admin Notification"),
+                )
+                .on_disabled_hover_text("Not implemented yet");
+            });
+        });
+        // Keep the panel height stable when switching tabs.
+        ui.allocate_space(ui.available_size());
+    }
+
+    /// Tab completion of the console input ("Complete" button / Tab key).
+    fn complete_console_input(&mut self, idx: usize, ctx: &egui::Context) {
+        let (completed, candidates) = autocomplete(&self.console_input, &self.history);
+        if let Some(text) = completed {
+            self.console_input = text;
+            if let Some(input_id) = self.console_input_id
+                && let Some(mut state) = egui::TextEdit::load_state(ctx, input_id)
+            {
+                let end = egui::text::CCursor::new(self.console_input.chars().count());
+                state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                state.store(ctx, input_id);
+            }
+        }
+        if candidates.len() > 1 {
+            self.servers[idx].console_add(LineKind::Note, &candidates.join("  "), false);
+        }
+    }
+
+    fn console_tab(&mut self, ui: &mut Ui, p: &Palette, idx: usize, actions: &mut Vec<Action>) {
+        let id = self.servers[idx].id;
+        // Tab key: must be handled before the TextEdit so it does not move the focus.
+        if self.settings.autocomplete
+            && let Some(input_id) = self.console_input_id
+            && ui.ctx().memory(|m| m.has_focus(input_id))
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Tab))
+        {
+            self.complete_console_input(idx, &ui.ctx().clone());
+        }
+
+        // Switches on the left, like HLSW.
+        let mut options_changed = false;
+        egui::Panel::left("console_switches")
+            .frame(Frame::new())
+            .exact_size(20.0)
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let o = &mut self.settings.console;
+                let switches: [(&str, &str, &mut bool); 6] = [
+                    ("C", "Translate Log", &mut o.translate_log),
+                    ("*", "Hide rcon password", &mut o.hide_rcon_password),
+                    ("F", "Hide rcon feedback", &mut o.hide_feedback),
+                    ("D", "Show date", &mut o.show_date),
+                    ("E", "Show empty lines", &mut o.show_empty),
+                    ("A", "Hide automatic", &mut o.hide_automatic),
+                ];
+                for (label, tip, flag) in switches {
+                    if toggle_button(ui, p, label, *flag)
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        *flag = !*flag;
+                        options_changed = true;
+                    }
+                }
+            });
+        if options_changed {
+            actions.push(Action::SaveConfig);
+        }
+
+        let mut complete = false;
+        let input = &mut self.console_input;
+        let history = &self.history;
+        let history_pos = &mut self.history_pos;
+        let input_id = &mut self.console_input_id;
+        let autoscroll = &mut self.console_autoscroll;
+        egui::Panel::bottom("console_input")
+            .frame(Frame::new().inner_margin(Margin {
+                top: 4,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let width = (ui.available_width() - 210.0).max(100.0);
+                    let resp = ui
+                        .add(
+                            TextEdit::singleline(input)
+                                .id_salt("console_input_field")
+                                .font(TextStyle::Monospace)
+                                .hint_text(
+                                    "RCON command, e.g. status  (Up/Down: history, Tab: complete)",
+                                )
+                                .desired_width(width),
+                        )
+                        .with_edit_menu();
+                    *input_id = Some(resp.id);
+                    // History drop-down (the ▼ of HLSW's combo box).
+                    let (arrow_rect, arrow) =
+                        ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::click());
+                    let c = arrow_rect.center();
+                    ui.painter().rect_stroke(
+                        arrow_rect,
+                        0.0,
+                        Stroke::new(1.0, p.button_border),
+                        StrokeKind::Inside,
+                    );
+                    ui.painter().add(egui::Shape::convex_polygon(
+                        vec![
+                            egui::pos2(c.x - 4.0, c.y - 2.0),
+                            egui::pos2(c.x + 4.0, c.y - 2.0),
+                            egui::pos2(c.x, c.y + 3.0),
+                        ],
+                        p.text,
+                        Stroke::NONE,
+                    ));
+                    egui::Popup::menu(&arrow).show(|ui| {
+                        ui.set_min_width(width);
+                        if history.is_empty() {
+                            ui.label("No commands yet");
+                        }
+                        for cmd in history.iter().rev().take(30) {
+                            if ui.button(RichText::new(cmd).monospace()).clicked() {
+                                *input = cmd.clone();
+                                ui.close();
+                            }
+                        }
+                    });
+                    if resp.has_focus() && !history.is_empty() {
+                        let (up, down) = ui.input(|i| {
+                            (i.key_pressed(Key::ArrowUp), i.key_pressed(Key::ArrowDown))
+                        });
+                        if up {
+                            let pos =
+                                history_pos.map_or(history.len() - 1, |p| p.saturating_sub(1));
+                            *history_pos = Some(pos);
+                            *input = history[pos].clone();
+                        } else if down {
+                            match *history_pos {
+                                Some(p) if p + 1 < history.len() => {
+                                    *history_pos = Some(p + 1);
+                                    *input = history[p + 1].clone();
+                                }
+                                _ => {
+                                    *history_pos = None;
+                                    input.clear();
+                                }
+                            }
+                        }
+                    }
+                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if ui.add_sized([60.0, 18.0], Button::new("Send")).clicked() || enter {
+                        actions.push(Action::SendConsole(id));
+                        resp.request_focus();
+                    }
+                    if ui
+                        .add_sized([60.0, 18.0], Button::new("Complete"))
+                        .clicked()
+                    {
+                        complete = true;
+                        resp.request_focus();
+                    }
+                    if toggle_button(ui, p, "S", *autoscroll)
+                        .on_hover_text("Auto scroll")
+                        .clicked()
+                    {
+                        *autoscroll = !*autoscroll;
+                    }
+                    if toggle_button(ui, p, "X", false)
+                        .on_hover_text("Clear console")
+                        .clicked()
+                    {
+                        actions.push(Action::ClearConsole(id));
+                    }
+                });
+            });
+        if complete {
+            self.complete_console_input(idx, &ui.ctx().clone());
+        }
+
+        // Lines to show, after the switches.
+        let o = self.settings.console.clone();
+        let s = &self.servers[idx];
+        let password = (o.hide_rcon_password && s.rcon_password.len() >= 2)
+            .then_some(s.rcon_password.as_str());
+        let lines: Vec<(String, LineKind)> = s
+            .console
+            .iter()
+            .filter(|l| !(o.hide_feedback && l.kind == LineKind::Response))
+            .filter(|l| !(o.hide_automatic && l.automatic))
+            .filter(|l| o.show_empty || !l.text.trim().is_empty())
+            .map(|l| {
+                let time = if o.show_date {
+                    l.time.format("%d.%m.%Y %H:%M:%S")
+                } else {
+                    l.time.format("%H:%M:%S")
+                };
+                let mut text = match l.kind {
+                    LineKind::Log if o.translate_log => translate_log(&l.text),
+                    LineKind::Note => format!("openHLSW NOTE: {}", l.text),
+                    _ => l.text.clone(),
+                };
+                if o.hide_rcon_password {
+                    text = mask_password(&text, password);
+                }
+                (format!("{time} {text}"), l.kind)
+            })
+            .collect();
+        let autoscroll = self.console_autoscroll;
+        // One read-only text area: scrolling, mouse selection, Ctrl+A / Ctrl+C and the
+        // right-click menu work like in any text field. Lines keep their HLSW colours.
+        let mut text = String::new();
+        let mut job = egui::text::LayoutJob::default();
+        let font = TextStyle::Monospace.resolve(ui.style());
+        for (i, (line, kind)) in lines.iter().enumerate() {
+            let fg = match kind {
+                LineKind::Command => p.console_cmd_fg,
+                LineKind::Note => p.link,
+                _ => p.text,
+            };
+            let mut piece = line.clone();
+            if i + 1 < lines.len() {
+                piece.push('\n');
+            }
+            job.append(&piece, 0.0, egui::TextFormat::simple(font.clone(), fg));
+            text.push_str(&piece);
+        }
+        job.wrap.max_width = f32::INFINITY;
+        let job = std::sync::Arc::new(job);
+        egui::CentralPanel::default()
+            .frame(Frame::new())
+            .show(ui, |ui| {
+                list_frame(ui, p, |ui| {
+                    ScrollArea::both()
+                        .id_salt(("console_scroll", id))
+                        .stick_to_bottom(autoscroll)
+                        .auto_shrink(false)
+                        .show(ui, |ui| {
+                            // Row backgrounds go below the text: reserve a shape slot first.
+                            let bg_slot = ui.painter().add(egui::Shape::Noop);
+                            let full_width = ui.available_width();
+                            let mut layouter = |ui: &Ui, _: &dyn egui::TextBuffer, _: f32| {
+                                ui.fonts_mut(|f| f.layout_job((*job).clone()))
+                            };
+                            let mut readonly = text.as_str();
+                            let output = TextEdit::multiline(&mut readonly)
+                                .id_salt(("console_text", id))
+                                .frame(egui::Frame::NONE)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(1)
+                                .layouter(&mut layouter)
+                                .show(ui);
+                            output.response.response.clone().with_edit_menu();
+
+                            let mut shapes = Vec::new();
+                            let mut line = 0;
+                            let width = full_width.max(output.galley.rect.width());
+                            for row in &output.galley.rows {
+                                if let Some((_, kind)) = lines.get(line) {
+                                    let bg = match kind {
+                                        LineKind::Command => Some(p.console_cmd_bg),
+                                        LineKind::Response => Some(p.console_resp_bg),
+                                        _ => None,
+                                    };
+                                    if let Some(bg) = bg {
+                                        let r = row.rect().translate(output.galley_pos.to_vec2());
+                                        shapes.push(egui::Shape::rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(output.galley_pos.x, r.top()),
+                                                egui::vec2(width, r.height()),
+                                            ),
+                                            0.0,
+                                            bg,
+                                        ));
+                                    }
+                                }
+                                if row.ends_with_newline {
+                                    line += 1;
+                                }
+                            }
+                            ui.painter().set(bg_slot, egui::Shape::Vec(shapes));
+                        });
+                });
+            });
+    }
+
+    /// HLSW's Trace Route window (own native window where supported).
+    fn trace_window(&mut self, ctx: &egui::Context) {
+        let Some(trace) = &mut self.trace else { return };
+        trace.poll();
+        let p = self.settings.theme.palette();
+        let flags = self.flags.as_ref();
+        let geo = &self.geo;
+        let mut close = false;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("trace_route"),
+            egui::ViewportBuilder::default()
+                .with_title("openHLSW Trace Route")
+                .with_inner_size([860.0, 560.0])
+                .with_min_inner_size([500.0, 300.0]),
+            |ui, _class| {
+                if ui.input(|i| i.viewport().close_requested()) {
+                    close = true;
+                }
+                egui::CentralPanel::default()
+                    .frame(Frame::new().fill(p.window).inner_margin(Margin::same(6)))
+                    .show(ui, |ui| trace_view(ui, &p, trace, flags, geo));
+            },
+        );
+        if close {
+            self.trace = None;
+        }
+    }
+
+    /// The small windows opened from the menus.
+    fn menu_dialog(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let Some(mut dialog) = self.dialog.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut close = false;
+        let title = match &dialog {
+            Dialog::NewList(_) => "New server list",
+            Dialog::ListProperties(_) => "Server list properties",
+            Dialog::MultiInsert(_) => "Multi Server Insert",
+            Dialog::ServerProperties(..) => "Server properties",
+            Dialog::ConfirmDeleteList => "Delete server list",
+            Dialog::ConnectLog => "Connect Log",
+            Dialog::ChangeRule(..) => "Change Value",
+            Dialog::SetId(..) => "Change ID",
+        };
+        let list_name = self.list_name.clone();
+        let connect_log = &self.connect_log;
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(matches!(
+                dialog,
+                Dialog::MultiInsert(_) | Dialog::ConnectLog
+            ))
+            .default_width(380.0)
+            .show(ctx, |ui| {
+                let ok_cancel = |ui: &mut Ui| -> (bool, bool) {
+                    ui.add_space(6.0);
+                    let mut r = (false, false);
+                    ui.horizontal(|ui| {
+                        r.0 = ui.add_sized([75.0, 22.0], Button::new("OK")).clicked();
+                        r.1 = ui.add_sized([75.0, 22.0], Button::new("Cancel")).clicked();
+                    });
+                    r
+                };
+                match &mut dialog {
+                    Dialog::NewList(name) | Dialog::ListProperties(name) => {
+                        ui.label("Name:");
+                        let r = ui
+                            .add(TextEdit::singleline(name).desired_width(340.0))
+                            .with_edit_menu();
+                        // Check Enter before re-requesting focus (request_focus resets lost_focus).
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        if !enter {
+                            r.request_focus();
+                        }
+                        let (ok, cancel) = ok_cancel(ui);
+                        if ok || enter {
+                            let n = name.clone();
+                            actions.push(if matches!(dialog, Dialog::NewList(_)) {
+                                Action::NewList(n)
+                            } else {
+                                Action::RenameList(n)
+                            });
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::MultiInsert(text) => {
+                        ui.label("Paste server addresses (one per line, or separated by commas):");
+                        ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                            ui.add(
+                                TextEdit::multiline(text)
+                                    .hint_text("1.2.3.4:27015\nexample.org:27016 my comment")
+                                    .desired_rows(12)
+                                    .desired_width(f32::INFINITY),
+                            )
+                            .with_edit_menu();
+                        });
+                        let (ok, cancel) = ok_cancel(ui);
+                        if ok {
+                            actions.push(Action::MultiInsert(text.clone()));
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::ServerProperties(id, draft) => {
+                        egui::Grid::new("server_props")
+                            .num_columns(2)
+                            .spacing([8.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label("IP/Port:");
+                                ui.add(
+                                    TextEdit::singleline(&mut draft.address).desired_width(260.0),
+                                )
+                                .with_edit_menu();
+                                ui.end_row();
+                                ui.label("Comment:");
+                                ui.add(
+                                    TextEdit::singleline(&mut draft.comment).desired_width(260.0),
+                                )
+                                .with_edit_menu();
+                                ui.end_row();
+                                ui.label("Rcon password:");
+                                ui.add(
+                                    TextEdit::singleline(&mut draft.rcon_password)
+                                        .password(true)
+                                        .desired_width(260.0),
+                                )
+                                .with_edit_menu();
+                                ui.end_row();
+                                ui.label("");
+                                ui.checkbox(&mut draft.save_password, "Save Rcon password");
+                                ui.end_row();
+                            });
+                        let valid = ServerAddress::parse(&draft.address).is_some();
+                        if !valid {
+                            ui.colored_label(Color32::from_rgb(220, 60, 60), "Invalid address");
+                        }
+                        let (ok, cancel) = ok_cancel(ui);
+                        if ok && valid {
+                            actions.push(Action::ApplyServerProps(*id, draft.clone()));
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::SetId(id, text) => {
+                        ui.label("New ID (position in the server list):");
+                        let r = ui
+                            .add(TextEdit::singleline(text).desired_width(120.0))
+                            .with_edit_menu();
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        if !enter {
+                            r.request_focus();
+                        }
+                        let (ok, cancel) = ok_cancel(ui);
+                        if ok || enter {
+                            if let Ok(n) = text.trim().parse::<usize>() {
+                                actions.push(Action::SetServerId(*id, n));
+                            }
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::ChangeRule(id, key, value) => {
+                        ui.label(format!("New value of {key}:"));
+                        let r = ui
+                            .add(TextEdit::singleline(value).desired_width(340.0))
+                            .with_edit_menu();
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        if !enter {
+                            r.request_focus();
+                        }
+                        let (ok, cancel) = ok_cancel(ui);
+                        if ok || enter {
+                            actions.push(Action::SetCvar(*id, key.clone(), value.clone()));
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::ConfirmDeleteList => {
+                        ui.label(format!(
+                            "Delete the server list \"{list_name}\" and all its servers?"
+                        ));
+                        let (ok, cancel) = ok_cancel(ui);
+                        if ok {
+                            actions.push(Action::DeleteList);
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::ConnectLog => {
+                        ScrollArea::vertical()
+                            .max_height(300.0)
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                if connect_log.is_empty() {
+                                    ui.label("No connections yet.");
+                                }
+                                for line in connect_log {
+                                    ui.label(RichText::new(line).monospace());
+                                }
+                            });
+                        ui.add_space(4.0);
+                        if ui.add_sized([75.0, 22.0], Button::new("Close")).clicked() {
+                            close = true;
+                        }
+                    }
+                }
+            });
+        if open && !close {
+            self.dialog = Some(dialog);
+        }
+    }
+
+    fn chat_tab(&mut self, ui: &mut Ui, p: &Palette, idx: usize, actions: &mut Vec<Action>) {
+        let id = self.servers[idx].id;
+        let input = &mut self.chat_input;
+        egui::Panel::bottom("chat_input")
+            .frame(Frame::new().inner_margin(Margin {
+                top: 4,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let resp = ui
+                        .add(
+                            TextEdit::singleline(input)
+                                .id_salt("chat_input_field")
+                                .hint_text("Message to all players (rcon say)")
+                                .desired_width((ui.available_width() - 60.0).max(100.0)),
+                        )
+                        .with_edit_menu();
+                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if ui.add_sized([50.0, 18.0], Button::new("Say")).clicked() || enter {
+                        actions.push(Action::Say(id));
+                        resp.request_focus();
+                    }
+                });
+            });
+
+        let s = &self.servers[idx];
+        egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
+            list_frame(ui, p, |ui| {
+                if s.log_target.is_none() && s.chat.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.")
+                                .color(p.weak_text),
+                        );
+                    });
+                    return;
+                }
+                styled_table(ui, "chat")
+                    .stick_to_bottom(true)
+                    .column(Column::initial(60.0).at_least(40.0))
+                    .column(Column::initial(160.0).at_least(60.0).clip(true))
+                    .column(Column::remainder().clip(true))
+                    .header(HEADER_HEIGHT, |mut h| {
+                        h.col(|ui| { plain_header(ui, p, "Time"); });
+                        h.col(|ui| { plain_header(ui, p, "Name"); });
+                        h.col(|ui| { plain_header(ui, p, "Message"); });
+                    })
+                    .body(|body| {
+                        body.rows(ROW_HEIGHT, s.chat.len(), |mut row| {
+                            let c = &s.chat[row.index()];
+                            let team_color = match c.team.as_str() {
+                                "CT" | "Blue" => Some(Color32::from_rgb(60, 110, 230)),
+                                "TERRORIST" | "Red" => Some(p.red),
+                                _ => None,
+                            };
+                            row.col(|ui| {
+                                ui.label(&c.time);
+                            });
+                            row.col(|ui| {
+                                let mut name = RichText::new(&c.name);
+                                if let Some(col) = team_color {
+                                    name = name.color(col);
+                                }
+                                ui.add(Label::new(name).wrap_mode(fit(ui)));
+                            });
+                            row.col(|ui| {
+                                let prefix = if c.team_only { "(Team) " } else { "" };
+                                ui.add(Label::new(format!("{prefix}{}", c.text)).wrap_mode(fit(ui)));
+                            });
+                        });
+                    });
+            });
+        });
+    }
+
+    fn ban_tab(&mut self, ui: &mut Ui, p: &Palette, idx: usize, actions: &mut Vec<Action>) {
+        let ban_input = &mut self.ban_input;
+        let ban_minutes = &mut self.ban_minutes;
+        let s = &mut self.servers[idx];
+        let id = s.id;
+
+        egui::Panel::right("ban_controls")
+            .frame(Frame::new().inner_margin(Margin {
+                left: 8,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .exact_size(250.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.add_sized([80.0, 18.0], Button::new("Refresh")).clicked() {
+                        actions.push(Action::FetchBans(id));
+                    }
+                    if ui
+                        .add_enabled(
+                            s.ban_selected.is_some(),
+                            Button::new("Unban").min_size(egui::vec2(80.0, 18.0)),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::Unban(id));
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label("Steam ID or IP:");
+                ui.add(
+                    TextEdit::singleline(ban_input)
+                        .hint_text("STEAM_1:0:123 / 1.2.3.4")
+                        .desired_width(230.0),
+                )
+                .with_edit_menu();
+                ui.horizontal(|ui| {
+                    ui.label("Minutes:");
+                    ui.add(DragValue::new(ban_minutes).range(0..=525_600));
+                    ui.label(RichText::new("0 = permanent").color(p.weak_text));
+                });
+                ui.horizontal(|ui| {
+                    if ui.add_sized([80.0, 18.0], Button::new("Ban ID")).clicked() {
+                        actions.push(Action::AddBan { id, ip: false });
+                    }
+                    if ui.add_sized([80.0, 18.0], Button::new("Ban IP")).clicked() {
+                        actions.push(Action::AddBan { id, ip: true });
+                    }
+                });
+            });
+
+        egui::CentralPanel::default()
+            .frame(Frame::new())
+            .show(ui, |ui| {
+                list_frame(ui, p, |ui| {
+                    let selected = s.ban_selected;
+                    let mut clicked = None;
+                    styled_table(ui, "bans")
+                        .sense(Sense::click())
+                        .column(Column::exact(20.0))
+                        .column(Column::initial(40.0))
+                        .column(Column::initial(200.0).at_least(80.0).clip(true))
+                        .column(Column::remainder().clip(true))
+                        .header(HEADER_HEIGHT, |mut h| {
+                            h.col(|ui| {
+                                plain_header(ui, p, "#");
+                            });
+                            h.col(|ui| {
+                                plain_header(ui, p, "Type");
+                            });
+                            h.col(|ui| {
+                                plain_header(ui, p, "Steam ID / IP");
+                            });
+                            h.col(|ui| {
+                                plain_header(ui, p, "Duration");
+                            });
+                        })
+                        .body(|body| {
+                            body.rows(ROW_HEIGHT, s.bans.len(), |mut row| {
+                                let i = row.index();
+                                let b = &s.bans[i];
+                                row.set_selected(selected == Some(i));
+                                row.col(|ui| {
+                                    ui.label(format!("{:02}", i + 1));
+                                });
+                                row.col(|ui| {
+                                    ui.label(if b.is_ip { "IP" } else { "ID" });
+                                });
+                                row.col(|ui| {
+                                    ui.add(
+                                        Label::new(&b.ident).wrap_mode(fit(ui)).selectable(false),
+                                    );
+                                });
+                                row.col(|ui| {
+                                    ui.label(&b.duration);
+                                });
+                                if row.response().clicked() {
+                                    clicked = Some(i);
+                                }
+                            });
+                        });
+                    if clicked.is_some() {
+                        s.ban_selected = clicked;
+                    }
+                });
+            });
+    }
+
+    fn change_level_tab(
+        &mut self,
+        ui: &mut Ui,
+        p: &Palette,
+        idx: usize,
+        actions: &mut Vec<Action>,
+    ) {
+        let kick_all = &mut self.settings.kick_all_on_map_change;
+        let s = &mut self.servers[idx];
+        let id = s.id;
+        let current = s.info.as_ref().map(|i| i.map.clone()).unwrap_or_default();
+
+        // HLSW layout: map list left, Update / Change Level / Kick all on the right.
+        egui::Panel::right("map_controls")
+            .frame(Frame::new().inner_margin(Margin {
+                left: 8,
+                ..Default::default()
+            }))
+            .show_separator_line(false)
+            .exact_size(170.0)
+            .show(ui, |ui| {
+                if ui.add_sized([150.0, 20.0], Button::new("Update")).clicked() {
+                    actions.push(Action::FetchMaps(id));
+                }
+                ui.add_space(4.0);
+                let target = s.map_selected.clone();
+                if ui
+                    .add_enabled(
+                        target.is_some(),
+                        Button::new("Change Level").min_size(egui::vec2(150.0, 20.0)),
+                    )
+                    .clicked()
+                    && let Some(map) = target
+                {
+                    actions.push(Action::ChangeLevel(id, map));
+                }
+                if ui.checkbox(kick_all, "Kick all on map\nchange").changed() {
+                    actions.push(Action::SaveConfig);
+                }
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Current:").color(p.weak_text));
+                    ui.label(RichText::new(&current).color(p.red));
+                });
+                if !s.maps_status.is_empty() {
+                    ui.add(Label::new(RichText::new(&s.maps_status).color(p.weak_text)).wrap());
+                }
+            });
+
+        egui::CentralPanel::default()
+            .frame(Frame::new())
+            .show(ui, |ui| {
+                list_frame(ui, p, |ui| {
+                    let selected = s.map_selected.clone();
+                    let mut clicked = None;
+                    styled_table(ui, "maps")
+                        .sense(Sense::click())
+                        .column(Column::exact(28.0))
+                        .column(Column::remainder().clip(true))
+                        .header(HEADER_HEIGHT, |mut h| {
+                            h.col(|ui| {
+                                plain_header(ui, p, "#");
+                            });
+                            h.col(|ui| {
+                                plain_header(ui, p, "Map");
+                            });
+                        })
+                        .body(|body| {
+                            body.rows(ROW_HEIGHT, s.maps.len(), |mut row| {
+                                let m = &s.maps[row.index()];
+                                row.set_selected(selected.as_deref() == Some(m.as_str()));
+                                let n = row.index() + 1;
+                                row.col(|ui| {
+                                    ui.label(format!("{n:02}"));
+                                });
+                                row.col(|ui| {
+                                    let mut t = RichText::new(m);
+                                    if *m == current {
+                                        t = t.strong();
+                                    }
+                                    ui.add(Label::new(t).selectable(false));
+                                });
+                                let r = row.response();
+                                if r.clicked() {
+                                    clicked = Some(m.clone());
+                                }
+                                if r.double_clicked() {
+                                    actions.push(Action::ChangeLevel(id, m.clone()));
+                                }
+                            });
+                        });
+                    if clicked.is_some() {
+                        s.map_selected = clicked;
+                    }
+                });
+            });
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        self.menu_dialog(ctx, actions);
+        self.trace_window(ctx);
+        if let Some(dialog) = &mut self.settings_dialog {
+            let p = self.settings.theme.palette();
+            let addresses: Vec<String> =
+                self.servers.iter().map(|s| s.address.to_string()).collect();
+            match dialog.show(
+                ctx,
+                &p,
+                &self.settings,
+                &addresses,
+                self.game_icons.as_ref(),
+            ) {
+                DialogResult::Open => {}
+                DialogResult::Apply(new) => actions.push(Action::ApplySettings(Box::new(new))),
+                DialogResult::Ok(new) => {
+                    actions.push(Action::ApplySettings(Box::new(new)));
+                    self.settings_dialog = None;
+                }
+                DialogResult::Cancel => self.settings_dialog = None,
+            }
+        }
+
+        let mut show_about = self.show_about;
+        egui::Window::new("About openHLSW")
+            .open(&mut show_about)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading(format!("openHLSW v{}", env!("CARGO_PKG_VERSION")));
+                ui.label("Free game server browser and RCON admin tool.");
+                ui.label("A remake of HLSW. Not affiliated with the original HLSW authors.");
+                ui.add_space(6.0);
+                ui.label(format!("Copyright (C) 2026 {COPYRIGHT_HOLDER}"));
+                ui.label("License: GNU General Public License v3.0 or later");
+                if ui.button("License...").clicked() {
+                    self.show_license = true;
+                }
+                ui.add_space(6.0);
+                if let Some(path) = config::path() {
+                    ui.weak(format!("Settings: {}", path.display()));
+                }
+            });
+        self.show_about = show_about;
+
+        let mut show_license = self.show_license;
+        egui::Window::new("License")
+            .open(&mut show_license)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([620.0, 520.0])
+            .show(ctx, license_view);
+        self.show_license = show_license;
+
+        let mut close = false;
+        if let Some((id, text)) = &mut self.editing_comment {
+            let id = *id;
+            let mut open = true;
+            egui::Window::new("Comment")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    let r = ui
+                        .add(TextEdit::singleline(text).desired_width(260.0))
+                        .with_edit_menu();
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if !enter {
+                        r.request_focus();
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() || enter {
+                            if let Some(s) = self.servers.iter_mut().find(|s| s.id == id) {
+                                s.comment = text.trim().to_string();
+                            }
+                            actions.push(Action::SaveConfig);
+                            close = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if !open {
+                close = true;
+            }
+        }
+        if close {
+            self.editing_comment = None;
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
+// Widgets
+// --------------------------------------------------------------------------
+
+/// White list-view area with the thin Windows border.
+pub(crate) fn list_frame<R>(ui: &mut Ui, p: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
+    list_frame_with(ui, p, p.list_bg, add)
+}
+
+pub(crate) fn list_frame_with<R>(
+    ui: &mut Ui,
+    p: &Palette,
+    fill: Color32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    Frame::new()
+        .fill(fill)
+        .stroke(Stroke::new(1.0, p.list_border))
+        .inner_margin(1)
+        .show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            add(ui)
+        })
+        .inner
+}
+
+/// Windows-style group box with the title sitting on the top border.
+pub(crate) fn group_box(
+    ui: &mut Ui,
+    p: &Palette,
+    title: &str,
+    width: f32,
+    add: impl FnOnce(&mut Ui),
+) {
+    let response = Frame::new()
+        .stroke(Stroke::new(1.0, p.group_border))
+        .inner_margin(Margin {
+            left: 8,
+            right: 8,
+            top: 12,
+            bottom: 8,
+        })
+        .outer_margin(Margin {
+            top: 6,
+            ..Default::default()
+        })
+        .show(ui, |ui| {
+            ui.set_width(width);
+            ui.vertical(|ui| add(ui));
+        })
+        .response;
+    let galley = WidgetText::from(title).into_galley(
+        ui,
+        Some(TextWrapMode::Extend),
+        f32::INFINITY,
+        TextStyle::Body,
+    );
+    let pos = egui::pos2(
+        response.rect.left() + 6.0,
+        response.rect.top() + 6.0 - galley.size().y / 2.0,
+    );
+    let bg = egui::Rect::from_min_size(
+        pos - egui::vec2(2.0, 0.0),
+        galley.size() + egui::vec2(4.0, 0.0),
+    );
+    ui.painter().rect_filled(bg, 0.0, p.window);
+    ui.painter().galley(pos, galley, p.text);
+}
+
+pub(crate) fn toolbar_separator(ui: &mut Ui, p: &Palette) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(6.0, 16.0), Sense::hover());
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range(),
+        Stroke::new(1.0, p.list_border),
+    );
+}
+
+/// HLSW's flat bottom tabs: "Rcon Config | Console | Chat | …".
+pub(crate) fn tab_strip<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    p: &Palette,
+    tabs: &[(&str, Option<T>)],
+    current: T,
+) -> Option<T> {
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for &(title, tab) in tabs {
+            let galley = WidgetText::from(title).into_galley(
+                ui,
+                Some(TextWrapMode::Extend),
+                f32::INFINITY,
+                TextStyle::Body,
+            );
+            let size = galley.size() + egui::vec2(8.0, 4.0);
+            let sense = if tab.is_some() {
+                Sense::click()
+            } else {
+                Sense::hover()
+            };
+            let (rect, resp) = ui.allocate_exact_size(size, sense);
+            let selected = tab == Some(current);
+            let painter = ui.painter();
+            if selected {
+                painter.rect_filled(rect, 0.0, p.list_bg);
+                painter.rect_stroke(
+                    rect,
+                    0.0,
+                    Stroke::new(1.0, p.list_border),
+                    StrokeKind::Inside,
+                );
+            } else {
+                if resp.hovered() && tab.is_some() {
+                    painter.rect_filled(rect, 0.0, p.hover_bg);
+                }
+                painter.vline(
+                    rect.right() - 0.5,
+                    rect.y_range().shrink(3.0),
+                    Stroke::new(1.0, p.list_border),
+                );
+            }
+            let color = if tab.is_some() {
+                p.text
+            } else {
+                p.disabled_text
+            };
+            painter.galley(rect.min + egui::vec2(4.0, 2.0), galley, color);
+            if let Some(t) = tab {
+                if resp.clicked() {
+                    clicked = Some(t);
+                }
+            } else {
+                resp.on_hover_text("Not implemented yet");
+            }
+        }
+    });
+    clicked
+}
+
+/// Table with HLSW-style header (white, thin separators) and no grid lines in the body.
+pub(crate) fn styled_table<'a>(ui: &'a mut Ui, id: &str) -> TableBuilder<'a> {
+    ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
+    ui.visuals_mut().widgets.noninteractive.bg_stroke = Stroke::NONE;
+    // Selectable labels would swallow the clicks meant for the row (selection, context menu).
+    ui.style_mut().interaction.selectable_labels = false;
+    TableBuilder::new(ui)
+        .id_salt(id)
+        .striped(false)
+        .resizable(true)
+        .auto_shrink(false)
+        .min_scrolled_height(0.0)
+        .cell_layout(Layout::left_to_right(Align::Center))
+}
+
+/// Header cell; returns the response of the whole cell (click = sort, double click = auto-size).
+pub(crate) fn header_cell(ui: &mut Ui, p: &Palette, add: impl FnOnce(&mut Ui)) -> egui::Response {
+    let rect = ui.max_rect().expand2(egui::vec2(3.0, 0.0));
+    let response = ui.interact(
+        ui.max_rect(),
+        ui.scope_id().with("header_cell"),
+        Sense::click(),
+    );
+    ui.painter().rect_filled(rect, 0.0, p.header_bg);
+    ui.painter().vline(
+        rect.right() - 0.5,
+        rect.y_range(),
+        Stroke::new(1.0, p.header_border),
+    );
+    ui.painter().hline(
+        rect.x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(1.0, p.header_border),
+    );
+    add(ui);
+    response
+}
+
+/// Double click on the column separator to the right of this header cell (where the
+/// resize cursor shows). egui_extras does not detect that itself.
+fn separator_double_clicked(ui: &Ui) -> bool {
+    let cell = ui.max_rect();
+    let line_x = cell.right() + ui.spacing().item_spacing.x / 2.0;
+    let grab = ui.style().interaction.resize_grab_radius_side + 1.0;
+    ui.input(|i| {
+        i.pointer
+            .button_double_clicked(egui::PointerButton::Primary)
+            && i.pointer.interact_pos().is_some_and(|pos| {
+                (pos.x - line_x).abs() <= grab && pos.y >= cell.top() && pos.y <= cell.bottom()
+            })
+    })
+}
+
+/// Double click on a column header widens the column to its longest value: the
+/// request is kept in egui's memory and applied to that column on the next frame.
+pub(crate) fn take_autosize(ui: &Ui, table: &str) -> Option<usize> {
+    ui.ctx()
+        .data_mut(|d| d.remove_temp::<usize>(egui::Id::unique(("autosize", table))))
+}
+
+pub(crate) fn request_autosize(ui: &Ui, table: &str, col: usize) {
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(egui::Id::unique(("autosize", table)), col));
+    ui.ctx().request_repaint();
+}
+
+/// Sortable header cell: click sorts, double click (or a double click on the separator)
+/// requests auto-size (first value). Also returns the cell's response for its context menu.
+fn sort_header<C: PartialEq + Copy + Send + Sync + 'static>(
+    ui: &mut Ui,
+    p: &Palette,
+    title: &str,
+    col: C,
+    sort: &mut (C, bool),
+) -> (bool, egui::Response) {
+    let edge = separator_double_clicked(ui);
+    let resp = header_cell(ui, p, |ui| {
+        ui.add(Label::new(title).selectable(false).wrap_mode(fit(ui)));
+        if sort.0 == col {
+            // Drawn by hand: the bundled UI fonts have no arrow glyphs.
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), Sense::hover());
+            let c = rect.center();
+            let (tip, base) = if sort.1 {
+                (c.y - 2.5, c.y + 2.5)
+            } else {
+                (c.y + 2.5, c.y - 2.5)
+            };
+            let points = vec![
+                egui::pos2(c.x, tip),
+                egui::pos2(c.x - 3.5, base),
+                egui::pos2(c.x + 3.5, base),
+            ];
+            ui.painter().add(egui::Shape::convex_polygon(
+                points,
+                p.weak_text,
+                Stroke::NONE,
+            ));
+        }
+    });
+    // A double click (auto-size) must not change the sorting: remember the order before
+    // the first click and restore it when the second click turns out to be a double click.
+    let memory_id = resp.id.with("sort_before_click");
+    if resp.double_clicked() {
+        if let Some(previous) = ui.ctx().data_mut(|d| d.get_temp::<(C, bool)>(memory_id)) {
+            *sort = previous;
+        }
+    } else if resp.clicked() {
+        ui.ctx().data_mut(|d| d.insert_temp(memory_id, *sort));
+        *sort = if sort.0 == col {
+            (col, !sort.1)
+        } else {
+            (col, true)
+        };
+    }
+    (resp.double_clicked() || edge, resp)
+}
+
+/// Right-click menu of a list header like HLSW: one check box per column, then
+/// "Reset column width". `columns` is (title, visible, can be hidden).
+fn column_menu(
+    ui: &mut Ui,
+    players: bool,
+    columns: &[(&str, bool, bool)],
+    actions: &mut Vec<Action>,
+) {
+    for &(title, visible, optional) in columns {
+        let mut on = visible;
+        if ui
+            .add_enabled(optional, egui::Checkbox::new(&mut on, title))
+            .clicked()
+        {
+            actions.push(Action::ToggleColumn {
+                players,
+                title: title.to_string(),
+            });
+        }
+    }
+    ui.separator();
+    if ui.button("Reset column width").clicked() {
+        actions.push(Action::ResetColumns { players });
+        ui.close();
+    }
+}
+
+/// Header without sorting; returns true on double click (auto-size).
+pub(crate) fn plain_header(ui: &mut Ui, p: &Palette, title: &str) -> bool {
+    let edge = separator_double_clicked(ui);
+    header_cell(ui, p, |ui| {
+        ui.add(Label::new(title).selectable(false).wrap_mode(fit(ui)));
+    })
+    .double_clicked()
+        || edge
+}
+
+/// Width of `text` in the list font.
+fn text_width(ui: &Ui, text: &str) -> f32 {
+    let font = TextStyle::Body.resolve(ui.style());
+    let job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, Color32::WHITE);
+    ui.fonts_mut(|f| f.layout_job(job)).size().x
+}
+
+/// Auto-size width of a column: the widest of the header and *all* rows (also the ones
+/// scrolled out of view). Each row gives its text plus the width of icons in front of it.
+fn fit_column(ui: &Ui, header: &str, rows: impl Iterator<Item = (String, f32)>) -> f32 {
+    let header = text_width(ui, header) + 14.0; // room for the sort arrow
+    rows.map(|(t, extra)| text_width(ui, &t) + extra)
+        .fold(header, f32::max)
+        .ceil()
+        + 4.0
+}
+
+/// A column forced to `width` for one frame (the table keeps it afterwards).
+fn sized(column: Column, width: Option<f32>) -> Column {
+    match width {
+        Some(w) => column.range(w..=w),
+        None => column,
+    }
+}
+
+/// Text in list cells: truncated with "…", except during the auto-size pass of a column
+/// (double-click on its header or separator), where the full width must be measured.
+pub(crate) fn fit(ui: &Ui) -> egui::TextWrapMode {
+    if ui.is_sizing_pass() {
+        egui::TextWrapMode::Extend
+    } else {
+        egui::TextWrapMode::Truncate
+    }
+}
+
+/// One list cell. Selected rows use the selection text color for everything.
+fn cell(
+    row: &mut TableRow<'_, '_>,
+    text: String,
+    color: Option<Color32>,
+    bg: Option<Color32>,
+    selected: bool,
+) -> egui::Rect {
+    row.col(|ui| {
+        if let Some(bg) = bg {
+            let rect = ui.max_rect().expand2(0.5 * egui::vec2(6.0, 0.0));
+            ui.painter().rect_filled(rect, 0.0, bg);
+        }
+        let mut rt = RichText::new(text);
+        if let (Some(c), false) = (color, selected) {
+            rt = rt.color(c);
+        }
+        ui.add(Label::new(rt).wrap_mode(fit(ui)).selectable(false));
+    })
+    .0
+}
+
+struct ListOptions<'a> {
+    game_icons: Option<&'a GameIcons>,
+    other_lists: &'a [String],
+    show_comment: bool,
+    /// Columns switched off in the header's right-click menu (titles).
+    hidden: &'a [String],
+    /// Bumped by "Reset column width" (new table id = default widths).
+    generation: u32,
+    flags: Option<&'a Flags>,
+    /// Per server (same order as `servers`): country code, provider.
+    locations: &'a [(String, String)],
+    needle: &'a str,
+    selected: Option<ServerId>,
+    connect_on_double_click: bool,
+    keep_order_on_hover: bool,
+}
+
+fn server_table(
+    ui: &mut Ui,
+    p: &Palette,
+    servers: &[Server],
+    opts: &ListOptions<'_>,
+    last_order: &mut Vec<ServerId>,
+    sort: &mut (Col, bool),
+    actions: &mut Vec<Action>,
+) {
+    let selected = opts.selected;
+    let fresh: Vec<usize> = sorted_servers(servers, opts.locations, *sort)
+        .into_iter()
+        .filter(|&i| servers[i].matches(opts.needle))
+        .collect();
+    let hovered = ui.rect_contains_pointer(ui.max_rect());
+    let order: Vec<usize> = if opts.keep_order_on_hover && hovered && !last_order.is_empty() {
+        // Keep rows where they are while the mouse is over the list (new servers go to the end).
+        let mut kept: Vec<usize> = last_order
+            .iter()
+            .filter_map(|id| fresh.iter().copied().find(|&i| servers[i].id == *id))
+            .collect();
+        let new: Vec<usize> = fresh
+            .iter()
+            .copied()
+            .filter(|i| !kept.contains(i))
+            .collect();
+        kept.extend(new);
+        kept
+    } else {
+        fresh
+    };
+    *last_order = order.iter().map(|&i| servers[i].id).collect();
+
+    let visible = |c: Col, title: &str| match c {
+        Col::Comment => opts.show_comment,
+        Col::Index | Col::Name => true,
+        _ => !opts.hidden.iter().any(|h| h == title),
+    };
+    let columns: Vec<(Col, &str, f32)> = SERVER_COLUMNS
+        .iter()
+        .copied()
+        .filter(|&(c, t, _)| visible(c, t))
+        .collect();
+    let menu_items: Vec<(&str, bool, bool)> = SERVER_COLUMNS
+        .iter()
+        .map(|&(c, t, _)| (t, visible(c, t), !matches!(c, Col::Index | Col::Name)))
+        .collect();
+    let autosize = take_autosize(ui, "servers");
+    // Double click on a header / separator: fit the column to all servers in the list.
+    let fit_width = autosize
+        .and_then(|i| columns.get(i))
+        .map(|&(col, title, _)| {
+            let spacing = 6.0;
+            fit_column(
+                ui,
+                title,
+                order.iter().map(|&idx| {
+                    let s = &servers[idx];
+                    let info = s.info.as_ref();
+                    match col {
+                        Col::Index => {
+                            let star = if s.rcon_password.is_empty() {
+                                0.0
+                            } else {
+                                12.0 + spacing
+                            };
+                            ((idx + 1).to_string(), 16.5 + spacing + star)
+                        }
+                        Col::Address => (s.address.to_string(), 0.0),
+                        Col::Name => (
+                            info.map(|i| i.name.clone()).unwrap_or_default(),
+                            14.0 + spacing,
+                        ),
+                        Col::Game => (s.game_short(), 0.0),
+                        Col::Map => (info.map(|i| i.map.clone()).unwrap_or_default(), 0.0),
+                        Col::Players => (s.players_text(), 0.0),
+                        Col::Ping => (s.ping_text(), 0.0),
+                        Col::Version => (s.version_text(), 0.0),
+                        Col::Location => (opts.locations[idx].1.clone(), 0.0),
+                        Col::AddOn => (s.addons_short(), 0.0),
+                        Col::AntiCheat => (s.anticheat(), 0.0),
+                        Col::Ranking => (s.ranking().0, 0.0),
+                        Col::Limits => (s.limits(), 0.0),
+                        Col::Comment => (s.comment.clone(), 0.0),
+                        Col::GameName | Col::GameAddress => (String::new(), 0.0),
+                    }
+                }),
+            )
+        });
+    let table_id = format!("servers{}", opts.generation);
+    let mut table = styled_table(ui, &table_id).sense(Sense::click());
+    for (i, (_, _, width)) in columns.iter().enumerate() {
+        let column = if i + 1 == columns.len() {
+            Column::remainder().at_least(60.0)
+        } else {
+            sized(
+                Column::initial(*width).at_least(20.0),
+                fit_width.filter(|_| autosize == Some(i)),
+            )
+        };
+        table = table.column(column);
+    }
+    let mut autosize_request = None;
+
+    table
+        .header(HEADER_HEIGHT, |mut header| {
+            for (i, &(col, title, _)) in columns.iter().enumerate() {
+                header.col(|ui| {
+                    let (auto, resp) = sort_header(ui, p, title, col, sort);
+                    if auto {
+                        autosize_request = Some(i);
+                    }
+                    resp.context_menu(|ui| column_menu(ui, false, &menu_items, actions));
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(ROW_HEIGHT, order.len(), |mut row| {
+                let idx = order[row.index()];
+                let s = &servers[idx];
+                let sel = Some(s.id) == selected;
+                row.set_selected(sel);
+                let offline = s.is_offline();
+                let bg = (offline && !sel).then_some(p.offline_bg);
+                // Offline: the whole line in red (with the last known infos).
+                let red = offline.then_some(p.red);
+                let info = s.info.as_ref();
+                let players_color = if offline {
+                    Some(p.red)
+                } else if s.humans() > 0 {
+                    Some(p.green)
+                } else {
+                    None
+                };
+
+                let (country, provider) = &opts.locations[idx];
+                let mut comment_rect = egui::Rect::NOTHING;
+                for &(col, _, _) in &columns {
+                    match col {
+                        // Country flag + number (+ star when an RCON password is stored).
+                        Col::Index => {
+                            row.col(|ui| {
+                                if let Some(bg) = bg {
+                                    ui.painter().rect_filled(
+                                        ui.max_rect().expand2(egui::vec2(3.0, 0.0)),
+                                        0.0,
+                                        bg,
+                                    );
+                                }
+                                match opts.flags {
+                                    Some(flags) if flags.has(country) => {
+                                        flags
+                                            .show(ui, country, 11.0)
+                                            .on_hover_text(country.to_uppercase());
+                                    }
+                                    _ => {
+                                        // Same space as a flag, so the numbers line up.
+                                        ui.allocate_exact_size(
+                                            egui::vec2(16.5, 11.0),
+                                            Sense::hover(),
+                                        );
+                                    }
+                                }
+                                let mut num = RichText::new((idx + 1).to_string());
+                                if let (Some(c), false) = (red, sel) {
+                                    num = num.color(c);
+                                }
+                                ui.add(Label::new(num).selectable(false));
+                                if !s.rcon_password.is_empty() {
+                                    star(ui, 12.0).on_hover_text("RCON password set");
+                                }
+                            });
+                        }
+                        Col::Address => {
+                            cell(&mut row, s.address.to_string(), red, bg, sel);
+                        }
+                        // Name with the game icon in front, like HLSW.
+                        Col::Name => {
+                            row.col(|ui| {
+                                if let Some(bg) = bg {
+                                    ui.painter().rect_filled(
+                                        ui.max_rect().expand2(egui::vec2(3.0, 0.0)),
+                                        0.0,
+                                        bg,
+                                    );
+                                }
+                                if let (Some(icons), Some(i)) = (opts.game_icons, info) {
+                                    let icon = if i.gamespy {
+                                        game_icons::icon_for_gamespy(&i.folder)
+                                    } else {
+                                        game_icons::icon_for_server(i.real_app_id(), &i.folder)
+                                    };
+                                    icons.show(ui, icon, 14.0);
+                                }
+                                let mut name =
+                                    RichText::new(info.map(|i| i.name.clone()).unwrap_or_default());
+                                if let (Some(c), false) = (red, sel) {
+                                    name = name.color(c);
+                                }
+                                ui.add(Label::new(name).wrap_mode(fit(ui)).selectable(false));
+                            });
+                        }
+                        Col::Game => {
+                            cell(&mut row, s.game_short(), Some(p.red), bg, sel);
+                        }
+                        Col::Map => {
+                            let map = info.map(|i| i.map.clone()).unwrap_or_default();
+                            cell(&mut row, map, Some(p.red), bg, sel);
+                        }
+                        Col::Players => {
+                            cell(&mut row, s.players_text(), players_color, bg, sel);
+                        }
+                        Col::Ping => {
+                            cell(&mut row, s.ping_text(), red, bg, sel);
+                        }
+                        Col::Version => {
+                            cell(&mut row, s.version_text(), red, bg, sel);
+                        }
+                        Col::Location => {
+                            cell(&mut row, provider.clone(), red, bg, sel);
+                        }
+                        Col::AddOn => {
+                            cell(&mut row, s.addons_short(), red, bg, sel);
+                        }
+                        Col::AntiCheat => {
+                            cell(&mut row, s.anticheat(), red, bg, sel);
+                        }
+                        Col::Ranking => {
+                            cell(&mut row, s.ranking().0, red, bg, sel);
+                        }
+                        Col::Limits => {
+                            cell(&mut row, s.limits(), red, bg, sel);
+                        }
+                        Col::Comment => {
+                            comment_rect = cell(&mut row, s.comment.clone(), red, bg, sel);
+                        }
+                        Col::GameName | Col::GameAddress => {}
+                    }
+                }
+
+                let response = row.response();
+                let on_comment = response
+                    .interact_pointer_pos()
+                    .or(response.hover_pos())
+                    .is_some_and(|pos| comment_rect.contains(pos));
+                if response.clicked() || response.secondary_clicked() {
+                    actions.push(Action::Select(s.id));
+                }
+                if response.double_clicked() {
+                    if on_comment {
+                        actions.push(Action::EditComment(s.id));
+                    } else if opts.connect_on_double_click {
+                        actions.push(Action::Connect(s.id));
+                    }
+                }
+                response.context_menu(|ui| server_context_menu(ui, s, opts.other_lists, actions));
+            });
+        });
+    if let Some(i) = autosize_request {
+        request_autosize(ui, "servers", i);
+    }
+}
+
+/// "Change ID" submenu: the # of a server is its position in the list.
+fn change_id_menu(ui: &mut Ui, id: ServerId, actions: &mut Vec<Action>) {
+    ui.menu_button("Change ID", |ui| {
+        if ui.button("Increase\t+").clicked() {
+            actions.push(Action::MoveServer(id, 1));
+            ui.close();
+        }
+        if ui.button("Decrease\t-").clicked() {
+            actions.push(Action::MoveServer(id, -1));
+            ui.close();
+        }
+        if ui.button("Set").clicked() {
+            actions.push(Action::OpenDialog(Dialog::SetId(id, String::new())));
+            ui.close();
+        }
+        ui.separator();
+        if ui
+            .button("Set all server IDs to current sequence")
+            .clicked()
+        {
+            actions.push(Action::RenumberServers);
+            ui.close();
+        }
+    });
+}
+
+/// Right-click menu of the server list, laid out like HLSW's.
+fn server_context_menu(ui: &mut Ui, s: &Server, other_lists: &[String], actions: &mut Vec<Action>) {
+    let id = s.id;
+    if ui.button("Connect...").clicked() {
+        actions.push(Action::Connect(id));
+        ui.close();
+    }
+    copy_menu(ui, s, actions);
+    ui.separator();
+    if ui.button("Delete\tDel").clicked() {
+        actions.push(Action::Remove(id));
+        ui.close();
+    }
+    list_menus(ui, id, other_lists, actions);
+    ui.separator();
+    change_id_menu(ui, id, actions);
+    if ui.button("Reset Average Ping").clicked() {
+        actions.push(Action::ResetPing(id));
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("Properties...").clicked() {
+        actions.push(Action::OpenDialog(props_dialog(s)));
+        ui.close();
+    }
+    if ui.button("Trace Route...").clicked() {
+        actions.push(Action::TraceRoute(id));
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("Rcon Status Command").clicked() {
+        actions.push(Action::RconStatus(id));
+        ui.close();
+    }
+}
+
+fn copy_menu(ui: &mut Ui, s: &Server, actions: &mut Vec<Action>) {
+    ui.menu_button("Copy", |ui| {
+        let name = s.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
+        let items = [
+            ("Address", s.address.to_string()),
+            ("Name", name.clone()),
+            ("Address + Name", format!("{} {name}", s.address)),
+            (
+                "steam://connect link",
+                format!("steam://connect/{}", s.address),
+            ),
+        ];
+        for (label, text) in items {
+            if ui.button(label).clicked() {
+                actions.push(Action::CopyText(text));
+                ui.close();
+            }
+        }
+    });
+}
+
+fn list_menus(ui: &mut Ui, id: ServerId, other_lists: &[String], actions: &mut Vec<Action>) {
+    ui.add_enabled_ui(!other_lists.is_empty(), |ui| {
+        ui.menu_button("Move to Server List", |ui| {
+            for name in other_lists {
+                if ui.button(name).clicked() {
+                    actions.push(Action::MoveToList(id, name.clone()));
+                    ui.close();
+                }
+            }
+        });
+        ui.menu_button("Copy to Server List", |ui| {
+            for name in other_lists {
+                if ui.button(name).clicked() {
+                    actions.push(Action::CopyToList(id, name.clone()));
+                    ui.close();
+                }
+            }
+        });
+    });
+}
+
+fn props_dialog(s: &Server) -> Dialog {
+    Dialog::ServerProperties(
+        s.id,
+        ServerPropsDraft {
+            address: s.address.to_string(),
+            comment: s.comment.clone(),
+            rcon_password: s.rcon_password.clone(),
+            save_password: s.save_password,
+        },
+    )
+}
+
+/// Entries of the "Server" menu.
+fn server_menu_items(ui: &mut Ui, s: &Server, other_lists: &[String], actions: &mut Vec<Action>) {
+    let id = s.id;
+    if ui.button("Connect...\tCtrl+G").clicked() {
+        actions.push(Action::Connect(id));
+        ui.close();
+    }
+    copy_menu(ui, s, actions);
+    ui.separator();
+    if ui.button("Delete\tCtrl+D").clicked() {
+        actions.push(Action::Remove(id));
+        ui.close();
+    }
+    list_menus(ui, id, other_lists, actions);
+    ui.separator();
+    if ui.button("Find\tCtrl+F").clicked() {
+        actions.push(Action::FocusSearch);
+        ui.close();
+    }
+    if ui.button("Edit comment...").clicked() {
+        actions.push(Action::EditComment(id));
+        ui.close();
+    }
+    change_id_menu(ui, id, actions);
+    if ui.button("Reset Average Ping").clicked() {
+        actions.push(Action::ResetPing(id));
+        ui.close();
+    }
+    if ui.button("Properties...\tCtrl+P").clicked() {
+        actions.push(Action::OpenDialog(props_dialog(s)));
+        ui.close();
+    }
+    if ui.button("Trace Route...\tCtrl+T").clicked() {
+        actions.push(Action::TraceRoute(id));
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("Rcon Status Command").clicked() {
+        actions.push(Action::RconStatus(id));
+        ui.close();
+    }
+}
+
+fn sorted_servers(
+    servers: &[Server],
+    locations: &[(String, String)],
+    (col, ascending): (Col, bool),
+) -> Vec<usize> {
+    fn text(s: Option<&String>) -> String {
+        s.map(|s| s.to_lowercase()).unwrap_or_default()
+    }
+    let mut order: Vec<usize> = (0..servers.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (x, y) = (&servers[a], &servers[b]);
+        let (xi, yi) = (x.info.as_ref(), y.info.as_ref());
+        let ord = match col {
+            Col::Index => a.cmp(&b),
+            Col::Address => x.address.to_string().cmp(&y.address.to_string()),
+            Col::Name => text(xi.map(|i| &i.name)).cmp(&text(yi.map(|i| &i.name))),
+            Col::Game => x.game_short().cmp(&y.game_short()),
+            Col::Map => text(xi.map(|i| &i.map)).cmp(&text(yi.map(|i| &i.map))),
+            Col::Players => xi.map(|i| i.players).cmp(&yi.map(|i| i.players)),
+            Col::Ping => x.ping.unwrap_or(u32::MAX).cmp(&y.ping.unwrap_or(u32::MAX)),
+            Col::Version => text(xi.map(|i| &i.version)).cmp(&text(yi.map(|i| &i.version))),
+            Col::Location => locations[a]
+                .1
+                .to_lowercase()
+                .cmp(&locations[b].1.to_lowercase()),
+            Col::AddOn => x.addons_short().cmp(&y.addons_short()),
+            Col::AntiCheat => x.anticheat().cmp(&y.anticheat()),
+            Col::Ranking => x.ranking().0.cmp(&y.ranking().0),
+            Col::Limits => x.limits().cmp(&y.limits()),
+            Col::Comment => x.comment.to_lowercase().cmp(&y.comment.to_lowercase()),
+            Col::GameName => x
+                .game_short()
+                .cmp(&y.game_short())
+                .then_with(|| text(xi.map(|i| &i.name)).cmp(&text(yi.map(|i| &i.name)))),
+            Col::GameAddress => x
+                .game_short()
+                .cmp(&y.game_short())
+                .then_with(|| x.address.to_string().cmp(&y.address.to_string())),
+        };
+        let ord = if ascending { ord } else { ord.reverse() };
+        ord.then(a.cmp(&b))
+    });
+    order
+}
+
+/// Returns true when the comment was edited.
+/// `location`: `Some(None)` = LAN address, `None` = not known (yet).
+fn info_panel(
+    ui: &mut Ui,
+    p: &Palette,
+    server_mut: Option<&mut Server>,
+    location: Option<Option<GeoInfo>>,
+    flags: Option<&Flags>,
+    show_graph: bool,
+) -> bool {
+    let mut comment_changed = false;
+    ScrollArea::vertical()
+        .id_salt("info_scroll")
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            let server = server_mut.as_deref();
+            ui.add_space(2.0);
+            // Title (HLSW shows the server name as a link) and the ping graph.
+            let title = server.map(|s| {
+                s.info
+                    .as_ref()
+                    .map(|i| i.name.clone())
+                    .unwrap_or_else(|| s.address.to_string())
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(3.0);
+                match &title {
+                    Some(t) => ui.add(Label::new(RichText::new(t).strong().size(15.0)).wrap()),
+                    None => ui.label(""),
+                };
+            });
+            if show_graph {
+                ui.horizontal(|ui| {
+                    ui.add_space(3.0);
+                    // The graph grows with the panel (drag the panel border to enlarge it).
+                    let width = (ui.available_width() - 6.0).max(100.0);
+                    let height = (width * 0.12).clamp(40.0, 120.0);
+                    ping_graph(
+                        ui,
+                        p,
+                        egui::vec2(width, height),
+                        server.map(|s| &s.ping_history),
+                        PING_HISTORY,
+                    );
+                });
+            }
+            ui.add_space(8.0);
+
+            let Some(s) = server else {
+                ui.label(RichText::new("No server selected.").color(p.weak_text));
+                return;
+            };
+            let text = |t: String| RichText::new(if t.is_empty() { "-".to_string() } else { t });
+
+            ui.spacing_mut().interact_size.y = 14.0;
+            egui::Grid::new("info_grid")
+                .num_columns(2)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    let row = |ui: &mut Ui, key: &str, value: RichText| {
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                            ui.label(RichText::new(key).color(p.weak_text));
+                        });
+                        ui.add(Label::new(value).wrap());
+                        ui.end_row();
+                    };
+                    row(ui, "Address", text(s.address.to_string()));
+                    let ping = match (&s.state, s.ping) {
+                        (QueryState::Online, Some(ms)) => {
+                            let avg = s
+                                .avg_ping()
+                                .map(|a| format!(" (Ø {a:.1} ms)"))
+                                .unwrap_or_default();
+                            RichText::new(format!("{ms} ms{avg}"))
+                        }
+                        (QueryState::Offline(e), _) => RichText::new(e).color(p.red),
+                        _ => RichText::new("querying…").color(p.weak_text),
+                    };
+                    row(ui, "Ping", ping);
+                    match &location {
+                        Some(Some(g)) if !g.country.is_empty() => {
+                            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                                ui.label(RichText::new("Location").color(p.weak_text));
+                            });
+                            ui.horizontal(|ui| {
+                                if let Some(f) = flags.filter(|f| f.has(&g.country_code)) {
+                                    f.show(ui, &g.country_code, 11.0);
+                                }
+                                ui.label(g.place());
+                            });
+                            ui.end_row();
+                            let provider = if g.asn.is_empty() {
+                                g.provider().to_string()
+                            } else {
+                                format!("{} ({})", g.provider(), g.asn)
+                            };
+                            row(ui, "Provider", text(provider));
+                        }
+                        Some(Some(_)) => row(ui, "Location", text("unknown".into())),
+                        Some(None) => row(ui, "Location", text("Local network".into())),
+                        None => {}
+                    }
+                    if let Some(i) = &s.info {
+                        row(
+                            ui,
+                            "Game",
+                            text(format!(
+                                "{} ({}, AppID {})",
+                                i.game,
+                                i.folder,
+                                i.real_app_id()
+                            )),
+                        );
+                        let mut players = format!("{} / {}", i.players, i.max_players);
+                        if i.bots > 0 {
+                            players += &format!(" ({} bots)", i.bots);
+                        }
+                        let pc = if s.humans() > 0 { p.green } else { p.text };
+                        row(ui, "Players", RichText::new(players).color(pc));
+                        let next = s
+                            .rule("sm_nextmap")
+                            .filter(|n| !n.is_empty())
+                            .map(|n| format!("  ({n} next)"))
+                            .unwrap_or_default();
+                        row(ui, "Map", text(format!("{}{next}", i.map)));
+                        row(ui, "Limits", text(s.limits()));
+                        let ff = match s.rule("mp_friendlyfire") {
+                            Some("0") => "No",
+                            Some(_) => "Yes",
+                            None => "",
+                        };
+                        row(ui, "Friendly Fire", text(ff.into()));
+                        row(
+                            ui,
+                            "Server Type",
+                            text(format!("{}, {}", i.server_type_name(), i.os_name())),
+                        );
+                        row(ui, "Version", text(i.version.clone()));
+                        row(ui, "AddOns", text(s.addons_compact()));
+                        row(
+                            ui,
+                            "Anti-Cheat",
+                            text(if i.vac {
+                                "Valve Anti-Cheat".into()
+                            } else {
+                                "None".into()
+                            }),
+                        );
+                        row(
+                            ui,
+                            "Password",
+                            text(if i.passworded {
+                                "Yes".into()
+                            } else {
+                                "No".into()
+                            }),
+                        );
+                        if let Some(k) = &i.keywords {
+                            row(ui, "Tags", text(k.clone()));
+                        }
+                        if let Some(id) = i.steam_id {
+                            row(ui, "Steam ID", text(id.to_string()));
+                        }
+                        if let Some(port) = i.tv_port {
+                            row(
+                                ui,
+                                "SourceTV",
+                                text(format!(
+                                    "{} (port {port})",
+                                    i.tv_name.as_deref().unwrap_or("")
+                                )),
+                            );
+                        }
+                    }
+                    if let Some(t) = s.last_seen {
+                        let ago = (chrono::Local::now() - t).num_seconds().max(0);
+                        row(ui, "Last Seen", text(format!("{ago} s ago")));
+                    }
+                    if let Some(c) = &s.last_connected {
+                        row(ui, "Last Connected", text(c.clone()));
+                    }
+                });
+
+            if let Some(s) = server_mut {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(80.0, 18.0),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.label(RichText::new("Comment").color(p.weak_text));
+                        },
+                    );
+                    let r = ui
+                        .add(
+                            TextEdit::singleline(&mut s.comment)
+                                .id_salt("info_comment")
+                                .hint_text("add a note for this server")
+                                .desired_width(ui.available_width() - 8.0),
+                        )
+                        .with_edit_menu();
+                    if r.lost_focus() || (r.changed() && !r.has_focus()) {
+                        comment_changed = true;
+                    }
+                });
+            }
+        });
+    comment_changed
+}
+
+/// The hatched ping strip from HLSW's info panel, with the ping history drawn on top.
+/// Contents of the Trace Route window.
+fn trace_view(
+    ui: &mut Ui,
+    p: &Palette,
+    trace: &mut crate::trace::TraceRoute,
+    flags: Option<&Flags>,
+    geo: &HashMap<IpAddr, GeoInfo>,
+) {
+    ui.horizontal(|ui| {
+        let running = trace.running();
+        let r = ui
+            .add(
+                TextEdit::singleline(&mut trace.target)
+                    .hint_text("IP address or host name")
+                    .desired_width(ui.available_width() - 90.0),
+            )
+            .with_edit_menu();
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+        let label = if running { "Stop" } else { "Start" };
+        if ui.add_sized([80.0, 22.0], Button::new(label)).clicked() || enter {
+            if running && !enter {
+                trace.stop_trace();
+                trace.status = "Stopped".into();
+            } else {
+                trace.start(ui.ctx());
+            }
+        }
+    });
+    ui.add_space(4.0);
+    egui::Panel::bottom("trace_legend")
+        .frame(Frame::new().fill(p.window))
+        .show_separator_line(false)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (color, text) in [
+                    (Color32::BLACK, "Different Route"),
+                    (Color32::from_rgb(255, 0, 0), "Timeout"),
+                ] {
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 14.0), Sense::hover());
+                    ui.painter().rect_filled(rect, 0.0, color);
+                    ui.label(text);
+                    ui.add_space(30.0);
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(&trace.status).color(p.weak_text));
+                });
+            });
+        });
+    egui::CentralPanel::default()
+        .frame(Frame::new().fill(p.window))
+        .show(ui, |ui| {
+            list_frame(ui, p, |ui| {
+                let row_h = 32.0;
+                let mut prev_avg: Option<f32> = None;
+                let rows: Vec<_> = trace
+                    .hops
+                    .iter()
+                    .map(|h| {
+                        let avg = h.avg();
+                        let diff = match (avg, prev_avg) {
+                            (Some(a), Some(b)) => Some(a - b),
+                            (Some(a), None) => Some(a),
+                            _ => None,
+                        };
+                        if avg.is_some() {
+                            prev_avg = avg;
+                        }
+                        (h, avg, diff)
+                    })
+                    .collect();
+                let autosize = take_autosize(ui, "trace");
+                let widths = [24.0, 50.0, 50.0, 44.0, 110.0, 200.0, 170.0];
+                let mut table = styled_table(ui, "trace");
+                for (i, w) in widths.iter().enumerate() {
+                    table = table.column(
+                        Column::initial(*w)
+                            .at_least(20.0)
+                            .clip(true)
+                            .auto_size_this_frame(autosize == Some(i)),
+                    );
+                }
+                let mut autosize_request = None;
+                table
+                    .column(Column::remainder().at_least(120.0))
+                    .header(HEADER_HEIGHT, |mut h| {
+                        for (i, title) in [
+                            "#",
+                            "Ping",
+                            "Ø Ping",
+                            "Diff",
+                            "IP",
+                            "Reverse DNS",
+                            "Provider",
+                            "Ping Graph",
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            h.col(|ui| {
+                                if plain_header(ui, p, title) {
+                                    autosize_request = Some(i);
+                                }
+                            });
+                        }
+                    })
+                    .body(|body| {
+                        body.rows(row_h, rows.len(), |mut row| {
+                            let i = row.index();
+                            let (h, avg, diff) = &rows[i];
+                            let right = |ui: &mut Ui, text: RichText| {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.label(text);
+                                });
+                            };
+                            row.col(|ui| {
+                                if h.changed {
+                                    ui.painter().rect_filled(
+                                        ui.max_rect().expand2(egui::vec2(3.0, 0.0)),
+                                        0.0,
+                                        Color32::BLACK,
+                                    );
+                                    ui.label(
+                                        RichText::new((i + 1).to_string()).color(Color32::WHITE),
+                                    );
+                                } else {
+                                    ui.label((i + 1).to_string());
+                                }
+                            });
+                            row.col(|ui| match h.last() {
+                                Some(Some(ms)) => right(ui, RichText::new(ms.to_string())),
+                                Some(None) => right(ui, RichText::new("Timeout").color(p.red)),
+                                None => {}
+                            });
+                            row.col(|ui| {
+                                right(
+                                    ui,
+                                    RichText::new(
+                                        avg.map(|a| format!("{a:.1}")).unwrap_or_default(),
+                                    ),
+                                )
+                            });
+                            row.col(|ui| {
+                                right(
+                                    ui,
+                                    RichText::new(
+                                        diff.map(|d| format!("{d:.1}")).unwrap_or_default(),
+                                    ),
+                                )
+                            });
+                            row.col(|ui| {
+                                let text =
+                                    h.ip.map(|ip| ip.to_string()).unwrap_or_else(|| "*".into());
+                                right(ui, RichText::new(text));
+                            });
+                            row.col(|ui| {
+                                ui.add(Label::new(&h.rdns).wrap_mode(fit(ui)));
+                            });
+                            row.col(|ui| {
+                                let Some(ip) = h.ip else { return };
+                                if !geo::is_public(ip) {
+                                    ui.label("LAN");
+                                } else if let Some(g) = geo.get(&ip) {
+                                    if let Some(f) = flags.filter(|f| f.has(&g.country_code)) {
+                                        f.show(ui, &g.country_code, 11.0).on_hover_text(g.place());
+                                    }
+                                    ui.add(Label::new(g.provider()).wrap_mode(fit(ui)));
+                                }
+                            });
+                            row.col(|ui| {
+                                let size = egui::vec2(ui.available_width().max(60.0), row_h - 4.0);
+                                ping_graph(ui, p, size, Some(&h.pings), crate::trace::HISTORY);
+                            });
+                        });
+                    });
+                if let Some(i) = autosize_request {
+                    request_autosize(ui, "trace", i);
+                }
+            });
+        });
+}
+
+/// Bar color like HLSW: green for normal ping, orange for a raised one, red for a high one.
+/// A ping counts as raised/high when it is high in absolute terms (≥ 100 / 200 ms) or
+/// compared to the average of the graph (spikes).
+fn ping_color(ping: u32, avg: f32) -> Color32 {
+    let ping = ping as f32;
+    if ping >= 200.0 || ping > avg * 4.0 + 40.0 {
+        Color32::from_rgb(235, 30, 30)
+    } else if ping >= 100.0 || ping > avg * 2.0 + 15.0 {
+        Color32::from_rgb(255, 150, 0)
+    } else {
+        Color32::from_rgb(40, 210, 40)
+    }
+}
+
+/// HLSW ping graph: hatched gray area with one bar per query, fills from the left and
+/// scrolls once full. Timeouts are full-height red bars.
+fn ping_graph(
+    ui: &mut Ui,
+    p: &Palette,
+    size: egui::Vec2,
+    history: Option<&VecDeque<Option<u32>>>,
+    capacity: usize,
+) {
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    let empty: VecDeque<Option<u32>> = VecDeque::new();
+    let history = history.unwrap_or(&empty);
+    let step = rect.width() / capacity.max(2) as f32;
+    let filled = rect.left() + step * history.len() as f32;
+
+    // Hatched gray background over the whole graph, vertical gradient like HLSW.
+    {
+        let mut mesh = egui::Mesh::default();
+        mesh.add_colored_rect(rect, p.graph_bg);
+        let (top, bottom) = (p.graph_bg, p.graph_hatch);
+        for (i, v) in mesh.vertices.iter_mut().enumerate() {
+            v.color = if i < 2 { top } else { bottom };
+        }
+        painter.add(mesh);
+        let mut x = rect.left() - rect.height();
+        while x < rect.right() {
+            painter.line_segment(
+                [
+                    egui::pos2(x, rect.bottom()),
+                    egui::pos2(x + rect.height(), rect.top()),
+                ],
+                Stroke::new(1.0, p.graph_hatch),
+            );
+            x += 4.0;
+        }
+    }
+    // Empty part: blue base line with tick marks.
+    if filled < rect.right() {
+        let y = rect.bottom() - 2.0;
+        painter.hline(
+            egui::Rangef::new(filled, rect.right()),
+            y,
+            Stroke::new(1.0, p.graph_line),
+        );
+        let mut tx = rect.left() + 12.0;
+        while tx < rect.right() {
+            if tx > filled {
+                painter.vline(
+                    tx,
+                    egui::Rangef::new(y - 3.0, y),
+                    Stroke::new(1.0, p.graph_line),
+                );
+            }
+            tx += 12.0;
+        }
+    }
+
+    // Scale from the 90th percentile, not the maximum: a single huge ping (an answer that
+    // arrived just before the timeout) would otherwise squash all other bars. Bars above the
+    // scale are clipped at the top; their peak label shows the real value.
+    let max = {
+        let mut sorted: Vec<u32> = history.iter().flatten().copied().collect();
+        sorted.sort_unstable();
+        let p90 = sorted
+            .get((sorted.len() * 9 / 10).min(sorted.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0);
+        (p90 as f32 * 1.6).max(80.0)
+    };
+    let (sum, count) = history
+        .iter()
+        .flatten()
+        .fold((0u64, 0u64), |(s, n), &p| (s + p as u64, n + 1));
+    let avg = if count > 0 {
+        sum as f32 / count as f32
+    } else {
+        0.0
+    };
+    let bar_w = step.max(1.0);
+    // 3D look: every bar casts a soft shadow to the upper right (depth) and has a vertical
+    // gradient (light top, dark foot) with a bright cap; wide bars also get lit / shaded
+    // edges. Everything goes into two meshes, so long histories stay cheap.
+    let depth = (rect.height() * 0.06).clamp(1.5, 3.0);
+    let mut shadow = egui::Mesh::default();
+    let mut bars = egui::Mesh::default();
+    let shade = |c: Color32, t: f32| c.lerp_to_gamma(Color32::BLACK, t);
+    let light = |c: Color32, t: f32| c.lerp_to_gamma(Color32::WHITE, t);
+    let gradient = |mesh: &mut egui::Mesh, r: egui::Rect, top: Color32, bottom: Color32| {
+        let start = mesh.vertices.len();
+        mesh.add_colored_rect(r, top);
+        for v in &mut mesh.vertices[start + 2..] {
+            v.color = bottom;
+        }
+    };
+    for (i, sample) in history.iter().enumerate() {
+        let x = rect.left() + step * i as f32;
+        let (top, color) = match sample {
+            Some(ping) => (
+                // at least 2 px, so a 0 ms answer is still visible
+                rect.bottom()
+                    - 1.0
+                    - ((*ping as f32 / max).min(1.0) * (rect.height() - 2.0)).max(2.0),
+                ping_color(*ping, avg),
+            ),
+            None => (rect.top(), Color32::from_rgb(255, 0, 0)),
+        };
+        // Timeouts are wider so a single one is visible, like in HLSW.
+        let w = if sample.is_none() {
+            bar_w.max(4.0)
+        } else {
+            bar_w
+        };
+        let bar = egui::Rect::from_min_max(egui::pos2(x, top), egui::pos2(x + w, rect.bottom()));
+        shadow.add_colored_rect(
+            bar.translate(egui::vec2(depth, -depth)).intersect(rect),
+            Color32::from_black_alpha(45),
+        );
+        gradient(&mut bars, bar, light(color, 0.35), shade(color, 0.35));
+        if bar.height() >= 3.0 {
+            // bright cap on top
+            bars.add_colored_rect(
+                egui::Rect::from_min_size(bar.min, egui::vec2(w, 1.0)),
+                light(color, 0.7),
+            );
+        }
+        if w >= 3.0 {
+            // lit left edge, shaded right edge
+            bars.add_colored_rect(
+                egui::Rect::from_min_size(bar.min, egui::vec2(1.0, bar.height())),
+                Color32::from_white_alpha(70),
+            );
+            bars.add_colored_rect(
+                egui::Rect::from_min_max(egui::pos2(bar.right() - 1.0, bar.top()), bar.max),
+                Color32::from_black_alpha(70),
+            );
+        }
+    }
+    painter.add(shadow);
+    painter.add(bars);
+
+    // Glossy reflection over the upper half.
+    let gloss = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.center().y));
+    let mut mesh = egui::Mesh::default();
+    gradient(
+        &mut mesh,
+        gloss,
+        Color32::from_white_alpha(70),
+        Color32::from_white_alpha(0),
+    );
+    painter.add(mesh);
+
+    // Sunken frame: dark top / left, light bottom / right.
+    let dark = Stroke::new(1.0, shade(p.list_border, 0.35));
+    let lit = Stroke::new(1.0, Color32::from_white_alpha(200));
+    let r = rect.shrink(0.5);
+    painter.line_segment([r.left_bottom(), r.left_top()], dark);
+    painter.line_segment([r.left_top(), r.right_top()], dark);
+    painter.line_segment([r.right_top(), r.right_bottom()], lit);
+    painter.line_segment([r.right_bottom(), r.left_bottom()], lit);
+    let inner = rect.shrink(1.5);
+    painter.line_segment(
+        [inner.left_bottom(), inner.left_top()],
+        Stroke::new(1.0, Color32::from_black_alpha(40)),
+    );
+    painter.line_segment(
+        [inner.left_top(), inner.right_top()],
+        Stroke::new(1.0, Color32::from_black_alpha(40)),
+    );
+
+    graph_labels(
+        ui, &painter, &response, rect, history, step, max, avg, capacity,
+    );
+}
+
+/// Numbers in the ping graph: scale lines, the average, labelled peaks, the current
+/// value, and the value under the mouse. Small graphs (trace route rows) only get the
+/// peaks and the hover value.
+#[allow(clippy::too_many_arguments)]
+fn graph_labels(
+    ui: &Ui,
+    painter: &egui::Painter,
+    response: &egui::Response,
+    rect: egui::Rect,
+    history: &VecDeque<Option<u32>>,
+    step: f32,
+    max: f32,
+    avg: f32,
+    capacity: usize,
+) {
+    if history.is_empty() {
+        return;
+    }
+    let y_of = |v: f32| rect.bottom() - 1.0 - (v / max).min(1.0) * (rect.height() - 2.0);
+    let x_of = |i: usize| rect.left() + step * i as f32 + step.max(1.0) / 2.0;
+    let small = egui::FontId::proportional(9.0);
+    let ink = Color32::from_gray(40);
+    // Text with a light halo, kept inside the graph.
+    let label = |pos: egui::Pos2, align: egui::Align2, text: String, color: Color32| {
+        let galley = painter.layout_no_wrap(text, small.clone(), color);
+        let mut r = align
+            .anchor_size(pos, galley.size())
+            .expand2(egui::vec2(2.0, 0.0));
+        let dx =
+            (rect.left() + 1.0 - r.left()).max(0.0) - (r.right() - rect.right() + 1.0).max(0.0);
+        let dy =
+            (rect.top() + 1.0 - r.top()).max(0.0) - (r.bottom() - rect.bottom() + 1.0).max(0.0);
+        r = r.translate(egui::vec2(dx, dy));
+        painter.rect_filled(r, 2.0, Color32::from_white_alpha(170));
+        painter.galley(r.min + egui::vec2(2.0, 0.0), galley, color);
+        r
+    };
+    let tall = rect.height() >= 40.0;
+
+    if tall {
+        // Scale: up to three "nice" grid lines with their value on the left.
+        let target = max / 3.0;
+        let magnitude = 10f32.powf(target.log10().floor());
+        let nice = [1.0, 2.0, 2.5, 5.0, 10.0]
+            .iter()
+            .map(|m| m * magnitude)
+            .find(|s| *s >= target)
+            .unwrap_or(target);
+        let mut v = nice;
+        while v < max {
+            let y = y_of(v);
+            if y > rect.top() + 6.0 {
+                painter.hline(
+                    rect.x_range(),
+                    y,
+                    Stroke::new(1.0, Color32::from_black_alpha(25)),
+                );
+                label(
+                    egui::pos2(rect.left() + 3.0, y),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{v}"),
+                    Color32::from_gray(110),
+                );
+            }
+            v += nice;
+        }
+        // Average: dashed line with its value on the right.
+        if avg > 0.0 {
+            let y = y_of(avg);
+            painter.add(egui::Shape::dashed_line(
+                &[egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                Stroke::new(1.0, Color32::from_rgb(30, 90, 200)),
+                5.0,
+                3.0,
+            ));
+            label(
+                egui::pos2(rect.right() - 3.0, y - 1.0),
+                egui::Align2::RIGHT_BOTTOM,
+                format!("Ø {avg:.0} ms"),
+                Color32::from_rgb(30, 70, 170),
+            );
+        }
+    }
+
+    // Peaks: local maxima clearly above the average, biggest first, never overlapping.
+    let window = (capacity / 25).max(4);
+    let mut peaks: Vec<(usize, u32)> = history
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| v.map(|v| (i, v)))
+        .filter(|&(i, v)| {
+            (v as f32) > avg * 1.4 + 8.0
+                && history
+                    .range(i.saturating_sub(window)..(i + window + 1).min(history.len()))
+                    .flatten()
+                    .all(|&o| o <= v)
+        })
+        .collect();
+    peaks.sort_by_key(|p| std::cmp::Reverse(p.1));
+    let mut placed: Vec<egui::Rect> = Vec::new();
+    for (i, v) in peaks.into_iter().take(if tall { 8 } else { 3 }) {
+        let pos = egui::pos2(x_of(i), y_of(v as f32) - 1.0);
+        let text = v.to_string();
+        let size = painter
+            .layout_no_wrap(text.clone(), small.clone(), ink)
+            .size();
+        let probe = egui::Align2::CENTER_BOTTOM
+            .anchor_size(pos, size)
+            .expand(3.0);
+        if placed.iter().any(|r| r.intersects(probe)) {
+            continue;
+        }
+        placed.push(label(pos, egui::Align2::CENTER_BOTTOM, text, ink));
+    }
+
+    // Current value at the newest bar.
+    if tall && let Some(last) = history.back() {
+        let i = history.len() - 1;
+        let (text, y, color) = match last {
+            Some(v) => (format!("{v} ms"), y_of(*v as f32), ink),
+            None => (
+                "Timeout".to_string(),
+                rect.top() + 10.0,
+                Color32::from_rgb(200, 0, 0),
+            ),
+        };
+        let pos = egui::pos2(x_of(i) + 4.0, y);
+        let size = painter
+            .layout_no_wrap(text.clone(), small.clone(), color)
+            .size();
+        let probe = egui::Align2::LEFT_BOTTOM.anchor_size(pos, size).expand(2.0);
+        if !placed.iter().any(|r| r.intersects(probe)) {
+            label(pos, egui::Align2::LEFT_BOTTOM, text, color);
+        }
+    }
+
+    // Mouse over the graph: cursor line and the value of that query.
+    if let Some(pos) = response.hover_pos() {
+        let i = ((pos.x - rect.left()) / step).floor().max(0.0) as usize;
+        if let Some(sample) = history.get(i) {
+            let x = x_of(i);
+            painter.vline(
+                x,
+                rect.y_range(),
+                Stroke::new(1.0, Color32::from_black_alpha(120)),
+            );
+            let text = match sample {
+                Some(v) => format!("{v} ms"),
+                None => "Timeout".to_string(),
+            };
+            label(
+                egui::pos2(x + 4.0, rect.top() + 2.0),
+                egui::Align2::LEFT_TOP,
+                text,
+                Color32::BLACK,
+            );
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
+/// Search field above a list. Returns the lower-cased search text.
+fn filter_bar(
+    ui: &mut Ui,
+    p: &Palette,
+    id: &str,
+    text: &mut String,
+    hint: &str,
+    total: usize,
+) -> String {
+    ui.horizontal(|ui| {
+        ui.label("Filter:");
+        ui.add(
+            TextEdit::singleline(text)
+                .id_salt(id)
+                .hint_text(hint)
+                .desired_width(200.0),
+        )
+        .with_edit_menu();
+        if !text.is_empty() && ui.small_button("x").on_hover_text("Clear filter").clicked() {
+            text.clear();
+        }
+        ui.label(RichText::new(format!("{total} total")).color(p.weak_text));
+    });
+    ui.add_space(2.0);
+    text.trim().to_lowercase()
+}
+
+struct PlayerRow {
+    player: Player,
+    status: Option<StatusPlayer>,
+    country: String,
+    country_name: String,
+    provider: String,
+    log: Option<LogPlayer>,
+}
+
+#[derive(Default)]
+struct PlayerTableData<'a> {
+    server: Option<ServerId>,
+    /// Visible columns (titles), see [`PLAYER_COLUMNS`].
+    shown: &'a [String],
+    generation: u32,
+    rows: Vec<PlayerRow>,
+    flags: Option<&'a Flags>,
+    has_status: bool,
+    rcon_ok: bool,
+}
+
+/// All columns of HLSW's players list: (title, available, initial width, minimum width).
+/// Columns openHLSW has no data for are shown greyed out in the header menu, like HLSW does
+/// for games that do not provide them. Kills, deaths, teams, damage and health come from the
+/// server log (Get Log / Auto Update Status), ID, Global ID, ping, loss, rate, slot and
+/// address from RCON `status`, country and provider from the address.
+const PLAYER_COLUMNS: [(&str, bool, f32, f32); 31] = [
+    ("Country", true, 20.0, 20.0),
+    ("#", true, 24.0, 20.0),
+    ("Name", true, 200.0, 80.0),
+    ("Score", true, 40.0, 30.0),
+    ("Frags", true, 40.0, 30.0),
+    ("Kills", true, 36.0, 30.0),
+    ("Deaths", true, 44.0, 30.0),
+    ("Skill", false, 40.0, 30.0),
+    ("Time", true, 62.0, 50.0),
+    ("ID", true, 30.0, 20.0),
+    ("Global ID", true, 150.0, 60.0),
+    ("Global ID Database Names", false, 120.0, 60.0),
+    ("Global ID Database Comment", false, 120.0, 60.0),
+    ("Ping", true, 36.0, 30.0),
+    ("Loss", true, 34.0, 30.0),
+    ("Honor (AAO)", false, 50.0, 30.0),
+    ("Rate", true, 56.0, 30.0),
+    ("QPort", false, 50.0, 30.0),
+    ("Slot", true, 34.0, 24.0),
+    ("Addr", true, 140.0, 60.0),
+    ("Country Name", true, 100.0, 50.0),
+    ("Provider", true, 150.0, 60.0),
+    ("Team", true, 70.0, 40.0),
+    ("Bot", true, 34.0, 24.0),
+    ("Model", false, 70.0, 40.0),
+    ("Extra", false, 70.0, 40.0),
+    ("Statistics (Frags,Death,Efficiency)", true, 110.0, 60.0),
+    ("Statistics - Teamkills", true, 60.0, 40.0),
+    ("Statistics - Suicides", true, 60.0, 40.0),
+    ("Statistics - Damage (HP,Armor)", true, 90.0, 50.0),
+    ("Health (HP,Armor)", true, 70.0, 40.0),
+];
+
+/// Sort key of a players list cell.
+#[derive(PartialEq, PartialOrd)]
+enum CellKey {
+    Num(f64),
+    Text(String),
+}
+
+/// Text and sort key of one players list cell.
+fn player_cell(r: &PlayerRow, title: &str) -> (String, CellKey) {
+    let st = r.status.as_ref();
+    let log = r.log.as_ref();
+    let num = |v: Option<f64>| v.map_or(CellKey::Num(-1.0), CellKey::Num);
+    let text = |t: String| {
+        let k = CellKey::Text(t.to_lowercase());
+        (t, k)
+    };
+    let parsed = |t: String| {
+        let k = num(t.trim().trim_end_matches('%').parse().ok());
+        (t, k)
+    };
+    match title {
+        "Country" => text(r.country.to_uppercase()),
+        "#" => (String::new(), CellKey::Num(r.player.index as f64)),
+        "Name" => text(r.player.name.clone()),
+        "Score" | "Frags" => (
+            r.player.score.to_string(),
+            CellKey::Num(r.player.score as f64),
+        ),
+        "Kills" => match log {
+            Some(l) => (l.kills.to_string(), CellKey::Num(l.kills as f64)),
+            None => (String::new(), num(None)),
+        },
+        "Deaths" => match log {
+            Some(l) => (l.deaths.to_string(), CellKey::Num(l.deaths as f64)),
+            None => (String::new(), num(None)),
+        },
+        "Time" => (
+            format_duration(r.player.duration),
+            CellKey::Num(r.player.duration as f64),
+        ),
+        "ID" => parsed(st.map(|s| s.userid.to_string()).unwrap_or_default()),
+        "Global ID" => text(st.map(|s| s.steam_id.clone()).unwrap_or_default()),
+        "Ping" => parsed(st.map(|s| s.ping.clone()).unwrap_or_default()),
+        "Loss" => parsed(st.map(|s| s.loss.clone()).unwrap_or_default()),
+        "Rate" => parsed(st.map(|s| s.rate.clone()).unwrap_or_default()),
+        "Slot" => parsed(
+            st.and_then(|s| s.slot)
+                .map(|n| n.to_string())
+                .unwrap_or_default(),
+        ),
+        "Addr" => {
+            let addr = st
+                .and_then(|s| s.ip)
+                .map(|ip| match st.and_then(|s| s.port) {
+                    Some(port) => SocketAddr::new(ip, port).to_string(),
+                    None => ip.to_string(),
+                });
+            text(addr.unwrap_or_default())
+        }
+        "Country Name" => text(r.country_name.clone()),
+        "Provider" => text(r.provider.clone()),
+        "Team" => text(log.map(|l| l.team.clone()).unwrap_or_default()),
+        "Bot" => {
+            let bot = st.is_some_and(|s| {
+                s.steam_id.eq_ignore_ascii_case("BOT") || s.state.eq_ignore_ascii_case("BOT")
+            });
+            text(if bot { "BOT".into() } else { String::new() })
+        }
+        "Statistics (Frags,Death,Efficiency)" => match log {
+            Some(l) => {
+                let eff = if l.kills + l.deaths > 0 {
+                    l.kills as f64 * 100.0 / (l.kills + l.deaths) as f64
+                } else {
+                    0.0
+                };
+                (
+                    format!("{} / {} / {eff:.0}%", l.kills, l.deaths),
+                    CellKey::Num(eff),
+                )
+            }
+            None => (String::new(), num(None)),
+        },
+        "Statistics - Teamkills" => match log {
+            Some(l) => (l.teamkills.to_string(), CellKey::Num(l.teamkills as f64)),
+            None => (String::new(), num(None)),
+        },
+        "Statistics - Suicides" => match log {
+            Some(l) => (l.suicides.to_string(), CellKey::Num(l.suicides as f64)),
+            None => (String::new(), num(None)),
+        },
+        "Statistics - Damage (HP,Armor)" => match log {
+            Some(l) => (
+                format!("{} / {}", l.damage_hp, l.damage_armor),
+                CellKey::Num(l.damage_hp as f64),
+            ),
+            None => (String::new(), num(None)),
+        },
+        "Health (HP,Armor)" => match log.and_then(|l| l.health) {
+            Some((hp, armor)) => (format!("{hp} / {armor}"), CellKey::Num(hp as f64)),
+            None => (String::new(), num(None)),
+        },
+        _ => (String::new(), num(None)),
+    }
+}
+
+fn players_table(
+    ui: &mut Ui,
+    p: &Palette,
+    data: &PlayerTableData<'_>,
+    needle: &str,
+    sort: &mut (PlayerCol, bool),
+    actions: &mut Vec<Action>,
+) {
+    let mut list: Vec<&PlayerRow> = data
+        .rows
+        .iter()
+        .filter(|r| {
+            needle.is_empty()
+                || r.player.name.to_lowercase().contains(needle)
+                || r.status.as_ref().is_some_and(|s| {
+                    s.steam_id.to_lowercase().contains(needle)
+                        || s.ip.is_some_and(|ip| ip.to_string().contains(needle))
+                })
+        })
+        .collect();
+    list.sort_by(|a, b| {
+        let ord = player_cell(a, sort.0)
+            .1
+            .partial_cmp(&player_cell(b, sort.0).1)
+            .unwrap_or(Ordering::Equal);
+        if sort.1 { ord } else { ord.reverse() }
+    });
+
+    let autosize = take_autosize(ui, "players");
+    let mut autosize_request = None;
+    let visible = |title: &str| title == "Name" || data.shown.iter().any(|h| h == title);
+    let columns: Vec<_> = PLAYER_COLUMNS
+        .iter()
+        .filter(|c| c.1 && visible(c.0))
+        .collect();
+    // Unavailable columns are listed greyed out, like in HLSW.
+    let menu_items: Vec<(&str, bool, bool)> = PLAYER_COLUMNS
+        .iter()
+        .map(|c| (c.0, c.1 && visible(c.0), c.1 && c.0 != "Name"))
+        .collect();
+    // Double click on a header / separator: fit the column to all players.
+    let fit_width = autosize.and_then(|i| columns.get(i)).map(|&&(title, ..)| {
+        fit_column(
+            ui,
+            title,
+            list.iter().enumerate().map(|(n, r)| match title {
+                "#" => (format!("{:02}", n + 1), 0.0),
+                _ => (player_cell(r, title).0, 0.0),
+            }),
+        )
+    });
+    let table_id = format!("players{}", data.generation);
+    let mut table = styled_table(ui, &table_id).sense(Sense::click());
+    for (i, &&(title, _, w, min)) in columns.iter().enumerate() {
+        table = table.column(if title == "Country" {
+            Column::exact(w)
+        } else {
+            sized(
+                Column::initial(w).at_least(min).clip(true),
+                fit_width.filter(|_| autosize == Some(i)),
+            )
+        });
+    }
+    table
+        .column(Column::remainder())
+        .header(HEADER_HEIGHT, |mut h| {
+            for (i, &&(title, ..)) in columns.iter().enumerate() {
+                h.col(|ui| {
+                    let label = if title == "Country" { "" } else { title };
+                    let (auto, resp) = sort_header(ui, p, label, title, sort);
+                    if auto {
+                        autosize_request = Some(i);
+                    }
+                    resp.context_menu(|ui| column_menu(ui, true, &menu_items, actions));
+                });
+            }
+            h.col(|ui| {
+                let resp = header_cell(ui, p, |ui| {
+                    if !data.has_status && data.server.is_some() {
+                        let hint = if data.rcon_ok {
+                            "loading status…"
+                        } else {
+                            "Global ID / Addr / Ping need RCON (Rcon Config → Test)"
+                        };
+                        ui.add(
+                            Label::new(RichText::new(hint).color(p.weak_text)).wrap_mode(fit(ui)),
+                        );
+                    }
+                });
+                resp.context_menu(|ui| column_menu(ui, true, &menu_items, actions));
+            });
+        })
+        .body(|body| {
+            body.rows(ROW_HEIGHT, list.len(), |mut row| {
+                let r = list[row.index()];
+                let n = row.index() + 1;
+                for &&(title, ..) in &columns {
+                    row.col(|ui| match title {
+                        "Country" => {
+                            if let Some(f) = data.flags.filter(|f| f.has(&r.country)) {
+                                let tip = if r.country_name.is_empty() {
+                                    r.country.to_uppercase()
+                                } else {
+                                    r.country_name.clone()
+                                };
+                                f.show(ui, &r.country, 11.0).on_hover_text(tip);
+                            }
+                        }
+                        "#" => {
+                            ui.label(format!("{n:02}"));
+                        }
+                        _ => {
+                            let text = player_cell(r, title).0;
+                            ui.add(Label::new(text).wrap_mode(fit(ui)).selectable(false));
+                        }
+                    });
+                }
+                row.col(|_| {});
+
+                let Some(server) = data.server else { return };
+                row.response()
+                    .context_menu(|ui| player_context_menu(ui, data, server, r, &list, actions));
+            });
+        });
+    if let Some(i) = autosize_request {
+        request_autosize(ui, "players", i);
+    }
+}
+
+/// Tab separated copy of the visible player table (HLSW "Copy → Whole Table").
+fn players_as_text(list: &[&PlayerRow]) -> String {
+    let mut out = String::from("#\tName\tFrags\tTime\tPing\tLoss\tSteam ID\tIP\n");
+    for (i, r) in list.iter().enumerate() {
+        let st = r.status.as_ref();
+        let f = |g: fn(&StatusPlayer) -> String| st.map(g).unwrap_or_default();
+        out.push_str(&format!(
+            "{:02}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            i + 1,
+            r.player.name,
+            r.player.score,
+            format_duration(r.player.duration),
+            f(|s| s.ping.clone()),
+            f(|s| s.loss.clone()),
+            f(|s| s.steam_id.clone()),
+            f(|s| s.ip.map(|ip| ip.to_string()).unwrap_or_default()),
+        ));
+    }
+    out
+}
+
+const BAN_DURATIONS: [(&str, u32); 6] = [
+    ("Permanent", 0),
+    ("5 minutes", 5),
+    ("30 minutes", 30),
+    ("1 hour", 60),
+    ("1 day", 1440),
+    ("1 week", 10080),
+];
+
+/// Right-click menu of the player list, laid out like HLSW's.
+fn player_context_menu(
+    ui: &mut Ui,
+    data: &PlayerTableData<'_>,
+    server: ServerId,
+    r: &PlayerRow,
+    list: &[&PlayerRow],
+    actions: &mut Vec<Action>,
+) {
+    let st = r.status.as_ref();
+    let steam_id = st.map(|s| s.steam_id.clone()).unwrap_or_default();
+    let addr = st
+        .and_then(|s| s.ip)
+        .map(|ip| match st.and_then(|s| s.port) {
+            Some(port) => SocketAddr::new(ip, port).to_string(),
+            None => ip.to_string(),
+        });
+    let mut copy = |ui: &mut Ui, label: &str, text: Option<String>| {
+        if ui
+            .add_enabled(
+                text.as_deref().is_some_and(|t| !t.is_empty()),
+                Button::new(label),
+            )
+            .clicked()
+        {
+            actions.push(Action::CopyText(text.unwrap_or_default()));
+            ui.close();
+        }
+    };
+    ui.menu_button("Copy", |ui| {
+        copy(ui, "Name", Some(r.player.name.clone()));
+        copy(ui, "Steam ID", Some(steam_id.clone()));
+        copy(ui, "Addr", addr.clone());
+        ui.separator();
+        copy(ui, "Whole Table", Some(players_as_text(list)));
+    });
+    ui.separator();
+    if ui
+        .add_enabled(data.rcon_ok, Button::new("Rcon Status Command"))
+        .clicked()
+    {
+        actions.push(Action::RconStatus(server));
+        ui.close();
+    }
+    ui.separator();
+    // Everything below needs the userid from RCON `status`.
+    let Some(st) = st else {
+        for label in [
+            "Kick",
+            "Kick & Connect",
+            "Ban ID",
+            "Ban ID Kick",
+            "Ban IP",
+            "Ban IP Kick",
+        ] {
+            ui.add_enabled(false, Button::new(label))
+                .on_disabled_hover_text("Needs RCON (Rcon Config → Test)");
+        }
+        return;
+    };
+    if ui.button("Kick").clicked() {
+        actions.push(Action::KickPlayer(server, st.userid));
+        ui.close();
+    }
+    if ui.button("Kick & Connect").clicked() {
+        actions.push(Action::KickAndConnect(server, st.userid));
+        ui.close();
+    }
+    ui.separator();
+    let ip = st.ip.map(|ip| ip.to_string());
+    for (label, by_ip, kick) in [
+        ("Ban ID", false, false),
+        ("Ban ID Kick", false, true),
+        ("Ban IP", true, false),
+        ("Ban IP Kick", true, true),
+    ] {
+        let target = if by_ip {
+            ip.clone()
+        } else {
+            Some(st.steam_id.clone())
+        };
+        let Some(target) = target else {
+            ui.add_enabled(false, Button::new(label));
+            continue;
+        };
+        ui.menu_button(label, |ui| {
+            for (dur, minutes) in BAN_DURATIONS {
+                if ui.button(dur).clicked() {
+                    actions.push(Action::BanPlayer {
+                        id: server,
+                        userid: st.userid,
+                        target: target.clone(),
+                        ip: by_ip,
+                        kick,
+                        minutes,
+                    });
+                    ui.close();
+                }
+            }
+        });
+    }
+}
+
+/// Players from RCON `status`. Handles the Source formats
+/// `#  2 "Name" STEAM_1:0:1 01:00 30 0 active 1.2.3.4:27005`,
+/// `# 2 1 "Name" [U:1:2] 01:00 30 0 active 196608 1.2.3.4:27005` (CS:GO) and
+/// CS2's `  2   01:00  30  0  active 786432 1.2.3.4:27005 'Name'`.
+fn parse_status_players(text: &str) -> Vec<StatusPlayer> {
+    let parse_ip = |t: &str| -> Option<IpAddr> {
+        t.parse::<SocketAddr>()
+            .ok()
+            .map(|a| a.ip())
+            .or_else(|| t.parse().ok())
+    };
+    let parse_port = |t: &str| t.parse::<SocketAddr>().ok().map(|a| a.port());
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            // Source / CS:GO
+            let (Some(first), Some(last)) = (rest.find('"'), rest.rfind('"')) else {
+                continue;
+            };
+            if last <= first {
+                continue;
+            }
+            let Some(userid) = rest[..first]
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.parse().ok())
+            else {
+                continue;
+            };
+            let name = rest[first + 1..last].to_string();
+            let t: Vec<&str> = rest[last + 1..].split_whitespace().collect();
+            // GoldSrc: # slot "name" userid uniqueid frag time ping loss adr
+            if let Some(uid) = t.first().and_then(|x| x.parse::<u32>().ok())
+                && t.len() >= 2
+            {
+                let get = |i: usize| t.get(i).copied().unwrap_or_default().to_string();
+                out.push(StatusPlayer {
+                    userid: uid,
+                    name,
+                    steam_id: get(1),
+                    connected: get(3),
+                    ping: get(4),
+                    loss: get(5),
+                    state: String::new(),
+                    ip: t.get(6).and_then(|a| parse_ip(a)),
+                    port: t.get(6).and_then(|a| parse_port(a)),
+                    slot: rest[..first]
+                        .split_whitespace()
+                        .next()
+                        .and_then(|x| x.parse().ok()),
+                    rate: String::new(),
+                });
+                continue;
+            }
+            let steam_id = t.first().copied().unwrap_or_default().to_string();
+            let mut p = StatusPlayer {
+                userid,
+                name,
+                steam_id,
+                connected: String::new(),
+                ping: String::new(),
+                loss: String::new(),
+                state: String::new(),
+                ip: None,
+                port: None,
+                slot: rest[..first]
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|t| t.parse().ok()),
+                rate: String::new(),
+            };
+            if t.len() >= 5 {
+                p.connected = t[1].to_string();
+                p.ping = t[2].to_string();
+                p.loss = t[3].to_string();
+                p.state = t[4].to_string();
+                p.ip = t.last().and_then(|a| parse_ip(a));
+                p.port = t.last().and_then(|a| parse_port(a));
+                if t.len() >= 7 {
+                    p.rate = t[5].to_string(); // CS:GO: ... state rate adr
+                }
+            } else if t.len() >= 2 {
+                p.state = t[t.len() - 1].to_string(); // bots: "BOT active"
+            }
+            out.push(p);
+        } else if trimmed.ends_with('\'') && trimmed.contains(" '") {
+            // CS2: id time ping loss state rate adr 'name'
+            let start = trimmed.find(" '").unwrap_or(0);
+            let name = trimmed[start + 2..trimmed.len() - 1].to_string();
+            let t: Vec<&str> = trimmed[..start].split_whitespace().collect();
+            let Some(userid) = t.first().and_then(|x| x.parse::<u32>().ok()) else {
+                continue;
+            };
+            if userid == 65535 || t.len() < 5 {
+                continue; // "[NoChan]" placeholder line
+            }
+            out.push(StatusPlayer {
+                userid,
+                name,
+                steam_id: String::new(),
+                connected: t[1].to_string(),
+                ping: t[2].to_string(),
+                loss: t[3].to_string(),
+                state: t[4].to_string(),
+                ip: t.last().and_then(|a| parse_ip(a)),
+                port: t.last().and_then(|a| parse_port(a)),
+                slot: Some(userid),
+                rate: t.get(5).map(|r| r.to_string()).unwrap_or_default(),
+            });
+        }
+    }
+    out
+}
+
+fn rules_table(
+    ui: &mut Ui,
+    p: &Palette,
+    rules: &[Rule],
+    needle: &str,
+    server: Option<(ServerId, bool)>,
+    actions: &mut Vec<Action>,
+) {
+    let all = rules;
+    let rules: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| {
+            needle.is_empty()
+                || r.key.to_lowercase().contains(needle)
+                || r.value.to_lowercase().contains(needle)
+        })
+        .collect();
+    let autosize = take_autosize(ui, "rules");
+    let mut autosize_request = None;
+    // Double click on a header / separator: fit the column to all (filtered) rules.
+    let fit_width = |col: usize| {
+        (autosize == Some(col)).then(|| {
+            let header = ["", "Key", "Value"][col];
+            fit_column(
+                ui,
+                header,
+                rules.iter().enumerate().map(|(n, r)| match col {
+                    0 => (format!("{:02}", n + 1), 0.0),
+                    1 => (r.key.clone(), 0.0),
+                    _ => (r.value.clone(), 0.0),
+                }),
+            )
+        })
+    };
+    let (fit0, fit1, fit2) = (fit_width(0), fit_width(1), fit_width(2));
+    styled_table(ui, "rules")
+        .sense(Sense::click())
+        .column(sized(Column::initial(20.0).at_least(14.0), fit0))
+        .column(sized(
+            Column::initial(122.0).at_least(60.0).clip(true),
+            fit1,
+        ))
+        .column(sized(
+            Column::initial(240.0).at_least(60.0).clip(true),
+            fit2,
+        ))
+        .column(Column::remainder())
+        .header(HEADER_HEIGHT, |mut h| {
+            for (i, title) in ["", "Key", "Value"].into_iter().enumerate() {
+                h.col(|ui| {
+                    if plain_header(ui, p, title) {
+                        autosize_request = Some(i);
+                    }
+                });
+            }
+            h.col(|ui| {
+                header_cell(ui, p, |_| {});
+            });
+        })
+        .body(|body| {
+            body.rows(ROW_HEIGHT, rules.len(), |mut row| {
+                let r = rules[row.index()];
+                let n = row.index() + 1;
+                row.col(|ui| {
+                    ui.label(format!("{n:02}"));
+                });
+                row.col(|ui| {
+                    ui.add(Label::new(&r.key).wrap_mode(fit(ui)));
+                });
+                row.col(|ui| {
+                    ui.add(Label::new(&r.value).wrap_mode(fit(ui)));
+                });
+                row.col(|_| {});
+                row.response()
+                    .context_menu(|ui| rule_context_menu(ui, r, all, server, actions));
+            });
+        });
+    if let Some(i) = autosize_request {
+        request_autosize(ui, "rules", i);
+    }
+}
+
+/// Right-click menu of the server rules (cvars), laid out like HLSW's.
+fn rule_context_menu(
+    ui: &mut Ui,
+    r: &Rule,
+    all: &[Rule],
+    server: Option<(ServerId, bool)>,
+    actions: &mut Vec<Action>,
+) {
+    ui.menu_button("Copy", |ui| {
+        let items = [
+            ("Key", r.key.clone()),
+            ("Value", r.value.clone()),
+            ("Both", format!("{} \"{}\"", r.key, r.value)),
+        ];
+        for (label, text) in items {
+            if ui.button(label).clicked() {
+                actions.push(Action::CopyText(text));
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button("All Rules").clicked() {
+            let text: String = all
+                .iter()
+                .map(|r| format!("{} \"{}\"\n", r.key, r.value))
+                .collect();
+            actions.push(Action::CopyText(text));
+            ui.close();
+        }
+        if ui.button("All Keys").clicked() {
+            let text: String = all.iter().map(|r| format!("{}\n", r.key)).collect();
+            actions.push(Action::CopyText(text));
+            ui.close();
+        }
+    });
+    let rcon = server.filter(|(_, ok)| *ok);
+    let r_btn = ui
+        .add_enabled(rcon.is_some(), Button::new("Change Value..."))
+        .on_disabled_hover_text("Needs RCON (Rcon Config → Test)");
+    if r_btn.clicked()
+        && let Some((id, _)) = rcon
+    {
+        actions.push(Action::OpenDialog(Dialog::ChangeRule(
+            id,
+            r.key.clone(),
+            r.value.clone(),
+        )));
+        ui.close();
+    }
+}
+
+fn rcon_status_text(status: &RconStatus, p: &Palette) -> RichText {
+    match status {
+        RconStatus::Unknown => RichText::new("Unknown"),
+        RconStatus::Connecting => RichText::new("Connecting…"),
+        RconStatus::Ok => RichText::new("OK").color(p.green),
+        RconStatus::BadPassword => RichText::new("Bad password").color(p.red),
+        RconStatus::Error(e) => RichText::new(e).color(p.red),
+    }
+}
+
+fn format_duration(seconds: f32) -> String {
+    let s = seconds.max(0.0) as u64;
+    format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
+}
+
+fn format_rate(bytes_per_sec: u64) -> String {
+    if bytes_per_sec < 1024 {
+        format!("{bytes_per_sec} Bytes/s")
+    } else {
+        format!("{:.2} KiB/s", bytes_per_sec as f64 / 1024.0)
+    }
+}
+
+fn open_url(url: &str) -> std::io::Result<()> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn()?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(url).spawn()?;
+    }
+    Ok(())
+}
+
+/// Shortest useful refresh interval: one query per tick must fit into the per-server
+/// query budget (srcds `sv_max_queries_sec`), otherwise the extra ticks are just skipped.
+fn min_interval(max_queries_per_sec: f32) -> f32 {
+    (1.0 / max_queries_per_sec.max(0.1)).clamp(0.1, 10.0)
+}
+
+fn sanitize_interval(secs: f32, max_queries_per_sec: f32) -> f32 {
+    let min = min_interval(max_queries_per_sec);
+    if secs.is_finite() {
+        secs.clamp(min, 3600.0)
+    } else {
+        min
+    }
+}
+
+/// Refresh interval editor (seconds, min_interval … 3600). Returns true when it should be saved.
+fn interval_edit(ui: &mut Ui, value: &mut f32, max_queries_per_sec: f32) -> bool {
+    let min = min_interval(max_queries_per_sec);
+    let r = ui
+        .add(DragValue::new(value).range(min..=3600.0).speed(0.05).max_decimals(2).suffix(" s"))
+        .on_hover_text(format!(
+            "Refresh interval. srcds answers only sv_max_queries_sec queries per second per IP; \
+             with the query limit of {max_queries_per_sec:.1}/s (Settings → Misc) the minimum is {min:.2} s."
+        ));
+    *value = sanitize_interval(*value, max_queries_per_sec);
+    r.drag_stopped() || r.lost_focus()
+}
+
+/// `listid` / `listip` output: "1 STEAM_1:0:123 : permanent" / "2 1.2.3.4 : 30.000 min".
+fn parse_ban_list(text: &str, is_ip: bool) -> Vec<BanEntry> {
+    text.lines()
+        .filter_map(|line| {
+            let (left, duration) = line.trim().split_once(" : ")?;
+            let mut parts = left.split_whitespace();
+            parts.next()?.parse::<u32>().ok()?;
+            let ident = parts.next()?.to_string();
+            Some(BanEntry {
+                is_ip,
+                ident,
+                duration: duration.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Maps that ship with the game. srcds' `maps *` skips maps packed in VPK files, so the
+/// default maps would be missing from Change Level without this list.
+fn stock_maps(app_id: u32, folder: &str) -> &'static [&'static str] {
+    match (app_id, folder.to_ascii_lowercase().as_str()) {
+        (240, _) => &[
+            "cs_assault",
+            "cs_compound",
+            "cs_havana",
+            "cs_italy",
+            "cs_militia",
+            "cs_office",
+            "de_aztec",
+            "de_cbble",
+            "de_chateau",
+            "de_dust",
+            "de_dust2",
+            "de_inferno",
+            "de_nuke",
+            "de_piranesi",
+            "de_port",
+            "de_prodigy",
+            "de_tides",
+            "de_train",
+        ],
+        (730, _) => &[
+            "ar_baggage",
+            "ar_pool_day",
+            "ar_shoots",
+            "cs_italy",
+            "cs_office",
+            "de_ancient",
+            "de_anubis",
+            "de_dust2",
+            "de_inferno",
+            "de_mirage",
+            "de_nuke",
+            "de_overpass",
+            "de_train",
+            "de_vertigo",
+        ],
+        (300, _) => &[
+            "dod_anzio",
+            "dod_argentan",
+            "dod_avalanche",
+            "dod_colmar",
+            "dod_donner",
+            "dod_flash",
+            "dod_jagd",
+            "dod_kalt",
+            "dod_palermo",
+        ],
+        (320, _) => &[
+            "dm_lockdown",
+            "dm_overwatch",
+            "dm_powerhouse",
+            "dm_resistance",
+            "dm_runoff",
+            "dm_steamlab",
+            "dm_underpass",
+            "halls3",
+        ],
+        (440, _) => &[
+            "cp_badlands",
+            "cp_dustbowl",
+            "cp_granary",
+            "cp_gorge",
+            "cp_gravelpit",
+            "cp_process_final",
+            "cp_well",
+            "ctf_2fort",
+            "ctf_doublecross",
+            "ctf_turbine",
+            "koth_harvest_final",
+            "koth_viaduct",
+            "pl_badwater",
+            "pl_goldrush",
+            "pl_upward",
+            "plr_hightower",
+        ],
+        (_, "cstrike" | "czero") => &[
+            "as_oilrig",
+            "cs_747",
+            "cs_assault",
+            "cs_backalley",
+            "cs_estate",
+            "cs_havana",
+            "cs_italy",
+            "cs_militia",
+            "cs_office",
+            "cs_siege",
+            "de_airstrip",
+            "de_aztec",
+            "de_cbble",
+            "de_chateau",
+            "de_dust",
+            "de_dust2",
+            "de_inferno",
+            "de_nuke",
+            "de_piranesi",
+            "de_prodigy",
+            "de_storm",
+            "de_survivor",
+            "de_torn",
+            "de_train",
+            "de_vertigo",
+        ],
+        _ => &[],
+    }
+}
+
+/// `maps *` output: every token ending in ".bsp", without path and extension.
+fn parse_map_list(text: &str) -> Vec<String> {
+    let mut maps: Vec<String> = text
+        .split_whitespace()
+        .filter_map(|t| t.strip_suffix(".bsp"))
+        .map(|t| t.rsplit(['/', '\\']).next().unwrap_or(t).to_string())
+        .filter(|m| !m.is_empty() && !m.contains(['*', '?']))
+        .collect();
+    maps.sort_by_key(|m| m.to_lowercase());
+    maps.dedup();
+    maps
+}
+
+/// The little yellow star HLSW shows for servers with an RCON password.
+fn star(ui: &mut Ui, size: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), Sense::hover());
+    let c = rect.center();
+    let (outer, inner) = (size * 0.5, size * 0.21);
+    let point = |i: usize, r: f32| {
+        let a = -std::f32::consts::FRAC_PI_2 + (i % 10) as f32 * std::f32::consts::PI / 5.0;
+        egui::pos2(c.x + r * a.cos(), c.y + r * a.sin())
+    };
+    let fill = Color32::from_rgb(255, 204, 0);
+    let stroke = Stroke::new(1.0, Color32::from_rgb(196, 140, 0));
+    // A star is not convex: draw the inner pentagon plus five tips.
+    let pentagon: Vec<egui::Pos2> = (0..5).map(|k| point(2 * k + 1, inner)).collect();
+    ui.painter()
+        .add(egui::Shape::convex_polygon(pentagon, fill, Stroke::NONE));
+    for k in 0..5 {
+        let tip = vec![
+            point(2 * k + 9, inner),
+            point(2 * k, outer),
+            point(2 * k + 1, inner),
+        ];
+        ui.painter()
+            .add(egui::Shape::convex_polygon(tip, fill, Stroke::NONE));
+    }
+    let outline: Vec<egui::Pos2> = (0..10)
+        .map(|i| point(i, if i % 2 == 0 { outer } else { inner }))
+        .collect();
+    ui.painter().add(egui::Shape::closed_line(outline, stroke));
+    response
+}
+
+/// Right-click menu for text fields: Cut / Copy / Paste / Select All
+/// (Ctrl+X/C/V/A work everywhere anyway).
+pub(crate) trait EditMenu {
+    fn with_edit_menu(self) -> Self;
+}
+
+impl EditMenu for egui::Response {
+    fn with_edit_menu(self) -> Self {
+        let field = self.clone();
+        self.context_menu(|ui| {
+            let ctx = ui.ctx().clone();
+            let mut command = None;
+            if ui.button("Cut\tCtrl+X").clicked() {
+                command = Some(egui::ViewportCommand::RequestCut);
+            }
+            if ui.button("Copy\tCtrl+C").clicked() {
+                command = Some(egui::ViewportCommand::RequestCopy);
+            }
+            if ui.button("Paste\tCtrl+V").clicked() {
+                command = Some(egui::ViewportCommand::RequestPaste);
+            }
+            ui.separator();
+            if ui.button("Select All\tCtrl+A").clicked() {
+                if let Some(mut state) = egui::TextEdit::load_state(&ctx, field.id) {
+                    let all = egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(usize::MAX / 2),
+                    );
+                    state.cursor.set_char_range(Some(all));
+                    state.store(&ctx, field.id);
+                }
+                field.request_focus();
+                ui.close();
+            }
+            if let Some(command) = command {
+                // The text field gets the focus back and receives the clipboard event.
+                field.request_focus();
+                ctx.send_viewport_cmd(command);
+                ui.close();
+            }
+        });
+        self
+    }
+}
+
+/// Small square switch button (console C * F D E A, auto scroll S).
+fn toggle_button(ui: &mut Ui, p: &Palette, label: &str, on: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
+    let (bg, border) = if on {
+        (p.button_active_bg, p.button_hover_border)
+    } else if response.hovered() {
+        (p.button_hover_bg, p.button_hover_border)
+    } else {
+        (p.button_bg, p.button_border)
+    };
+    ui.painter().rect_filled(rect, 0.0, bg);
+    ui.painter()
+        .rect_stroke(rect, 0.0, Stroke::new(1.0, border), StrokeKind::Inside);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(10.0),
+        p.text,
+    );
+    response
+}
+
+/// "C" switch: srcds log line in readable form, e.g.
+/// `10/18/2026 - 20:29:31: "Bob<2><STEAM_1:0:1><CT>" say "hi"` → `Bob: hi`.
+fn translate_log(line: &str) -> String {
+    // drop the date/time prefix (the console shows its own time)
+    let mut text = match line.split_once(": ") {
+        Some((stamp, rest)) if stamp.contains(" - ") => rest.to_string(),
+        _ => line.to_string(),
+    };
+    if let Some(chat) = parse_chat_line(line) {
+        let team = if chat.team_only { "(Team) " } else { "" };
+        return format!("{team}{}: {}", chat.name, chat.text);
+    }
+    // "Name<uid><steamid><team>" -> Name
+    let mut out = String::with_capacity(text.len());
+    while let Some(start) = text.find('"') {
+        let Some(len) = text[start + 1..].find('"') else {
+            break;
+        };
+        let quoted = &text[start + 1..start + 1 + len];
+        out.push_str(&text[..start]);
+        let mut parts = quoted.rsplitn(4, '<');
+        let player = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some(_), Some(_), Some(_), Some(name)) if quoted.ends_with('>') => name.to_string(),
+            _ => quoted.to_string(),
+        };
+        out.push_str(&player);
+        text = text[start + len + 2..].to_string();
+    }
+    out.push_str(&text);
+    out
+}
+
+/// "*" switch: hide the rcon password in console lines.
+fn mask_password(text: &str, password: Option<&str>) -> String {
+    let mut out = match password {
+        Some(pw) => text.replace(pw, "********"),
+        None => text.to_string(),
+    };
+    if let Some(pos) = out.find("rcon_password ") {
+        let start = pos + "rcon_password ".len();
+        let end = out[start..]
+            .find(char::is_whitespace)
+            .map_or(out.len(), |e| start + e);
+        out.replace_range(start..end, "********");
+    }
+    out
+}
+
+/// Server list file / pasted text: openHLSW JSON export, or one address per line
+/// (`host:port [comment]`; `#` / `//` lines are ignored; commas and semicolons separate too).
+fn parse_server_list_file(text: &str) -> Vec<SavedServer> {
+    if let Ok(list) = serde_json::from_str::<SavedList>(text) {
+        return list.servers;
+    }
+    if let Ok(servers) = serde_json::from_str::<Vec<SavedServer>>(text) {
+        return servers;
+    }
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
+            continue;
+        }
+        // "a:1, b:2" or "a:1 comment"
+        if line.contains([',', ';']) {
+            for part in line.split([',', ';']) {
+                if let Some(addr) = ServerAddress::parse(part.trim()) {
+                    out.push(SavedServer {
+                        address: addr.to_string(),
+                        rcon_password: None,
+                        comment: String::new(),
+                        last_connected: None,
+                        info: None,
+                        last_seen: None,
+                    });
+                }
+            }
+            continue;
+        }
+        let (first, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        if let Some(addr) = ServerAddress::parse(first) {
+            out.push(SavedServer {
+                address: addr.to_string(),
+                rcon_password: None,
+                comment: rest.trim().to_string(),
+                last_connected: None,
+                info: None,
+                last_seen: None,
+            });
+        }
+    }
+    out
+}
+
+fn merge_maps(maps: &mut Vec<String>, new: Vec<String>) {
+    maps.extend(new);
+    maps.sort_by_key(|m| m.to_lowercase());
+    maps.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+}
+
+/// `listmaps` output: one map name per line (mapcycle), header lines are skipped.
+fn parse_map_cycle(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .map(|l| l.strip_suffix(".bsp").unwrap_or(l))
+        .filter(|l| {
+            !l.is_empty()
+                && l.len() < 64
+                && l.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '$'))
+                && l.chars().any(|c| c.is_ascii_alphabetic())
+        })
+        .map(String::from)
+        .collect()
+}
+
+/// User ids from `status`: lines like `#  2 "Name" STEAM_1:0:1 ...` or `# 2 1 "Name" [U:1:2] ...`.
+fn parse_status_userids(text: &str) -> Vec<u32> {
+    parse_status_players(text)
+        .iter()
+        .map(|p| p.userid)
+        .collect()
+}
+
+/// `"Name<2><STEAM_1:0:1><CT>"` at the start of `text` → (name, team, rest after it).
+fn parse_log_actor(text: &str) -> Option<(String, String, &str)> {
+    let text = text.trim_start().strip_prefix('"')?;
+    let end = text.find(">\"")?;
+    let actor = &text[..end + 1];
+    let rest = &text[end + 2..];
+    // name<userid><steamid><team> — the name may contain '<', so split from the right.
+    let mut parts = actor.rsplitn(4, '<');
+    let team = parts.next()?.trim_end_matches('>').to_string();
+    parts.next()?;
+    parts.next()?;
+    let name = parts.next()?.to_string();
+    Some((name, team, rest))
+}
+
+/// Value of a `(key "value")` property in a log line.
+fn log_property<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    let start = text.find(&format!("({key} \""))? + key.len() + 3;
+    let end = text[start..].find('"')?;
+    Some(&text[start..start + end])
+}
+
+/// Updates kills, deaths, team kills, suicides, damage, health and teams from one log line
+/// (Source and GoldSrc log format). A new map starts the statistics over.
+fn apply_log_stats(players: &mut HashMap<String, LogPlayer>, line: &str) {
+    let Some((_, event)) = line.split_once(": ") else {
+        return;
+    };
+    if event.starts_with("Started map") || event.starts_with("Loading map") {
+        players.clear();
+        return;
+    }
+    let Some((name, team, rest)) = parse_log_actor(event) else {
+        return;
+    };
+    let real_team = |t: &str| !t.is_empty() && t != "Unassigned" && t != "Console";
+    if real_team(&team) {
+        players.entry(name.clone()).or_default().team = team.clone();
+    }
+    // Skip the position "[x y z]" that CS:GO / CS2 write after the actor.
+    let rest = rest.trim_start();
+    let rest = if rest.starts_with('[') {
+        rest.split_once(']').map_or(rest, |(_, r)| r.trim_start())
+    } else {
+        rest
+    };
+    if let Some(victim) = rest.strip_prefix("killed ") {
+        let Some((vname, vteam, _)) = parse_log_actor(victim) else {
+            return;
+        };
+        let killer = players.entry(name.clone()).or_default();
+        killer.kills += 1;
+        if real_team(&team) && team == vteam && vname != name {
+            killer.teamkills += 1;
+        }
+        let v = players.entry(vname).or_default();
+        v.deaths += 1;
+        if real_team(&vteam) {
+            v.team = vteam;
+        }
+    } else if rest.starts_with("committed suicide") {
+        let p = players.entry(name).or_default();
+        p.suicides += 1;
+        p.deaths += 1;
+    } else if let Some(victim) = rest.strip_prefix("attacked ") {
+        let Some((vname, _, props)) = parse_log_actor(victim) else {
+            return;
+        };
+        let num = |k: &str| log_property(props, k).and_then(|v| v.parse::<i32>().ok());
+        let a = players.entry(name).or_default();
+        a.damage_hp += num("damage").unwrap_or(0).max(0) as u32;
+        a.damage_armor += num("damage_armor").unwrap_or(0).max(0) as u32;
+        if let Some(hp) = num("health") {
+            players.entry(vname).or_default().health = Some((hp, num("armor").unwrap_or(0)));
+        }
+    } else if let Some(t) = rest.strip_prefix("joined team \"") {
+        let t = t.trim_end_matches('"');
+        if real_team(t) {
+            players.entry(name).or_default().team = t.to_string();
+        }
+    } else if let Some(new) = rest.strip_prefix("changed name to \"")
+        && let Some(stats) = players.remove(&name)
+    {
+        players.insert(new.trim_end_matches('"').to_string(), stats);
+    }
+}
+
+/// `10/18/2026 - 19:22:33: "Bob<2><STEAM_1:0:1><CT>" say "hi"` → chat line.
+fn parse_chat_line(line: &str) -> Option<ChatLine> {
+    let (stamp, rest) = line.split_once(": ")?;
+    let time = stamp.rsplit(' ').next().unwrap_or_default().to_string();
+    let (player, team_only, text) = if let Some((p, t)) = rest.split_once("\" say_team \"") {
+        (p, true, t)
+    } else {
+        let (p, t) = rest.split_once("\" say \"")?;
+        (p, false, t)
+    };
+    let player = player.strip_prefix('"')?;
+    // name<userid><steamid><team> — the name itself may contain '<', so split from the right.
+    let mut parts = player.rsplitn(4, '<');
+    let team = parts.next()?.trim_end_matches('>').to_string();
+    parts.next()?;
+    parts.next()?;
+    let name = parts.next()?.to_string();
+    let text = text.strip_suffix('"').unwrap_or(text).to_string();
+    Some(ChatLine {
+        time,
+        name,
+        team,
+        team_only,
+        text,
+    })
+}
+
+/// Appends a log line to `<config dir>/logs/<server>/<YYYY-MM-DD>.<ext>`.
+fn append_log_file(server: &str, line: &str, ext: &str) {
+    use std::io::Write as _;
+    let Some(base) = config::path().and_then(|p| p.parent().map(|d| d.join("logs"))) else {
+        return;
+    };
+    let dir = base.join(server.replace([':', '[', ']', '/', '\\'], "_"));
+    // Log lines start with "MM/DD/YYYY - hh:mm:ss: ".
+    let date = line
+        .get(..10)
+        .and_then(|d| {
+            let mut it = d.split('/');
+            Some(format!("{}-{}-{}", it.nth(2)?, d.get(..2)?, d.get(3..5)?))
+        })
+        .unwrap_or_else(|| "log".into());
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(format!("{date}.{ext}")))
+    {
+        let _ = writeln!(f, "L {line}");
+    }
+}
+
+/// Plays a .wav file without blocking (PowerShell on Windows, paplay/aplay on Linux).
+fn play_sound(file: &str) {
+    use std::process::{Command, Stdio};
+    let file = file.to_string();
+    std::thread::spawn(move || {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let script = format!(
+                "(New-Object Media.SoundPlayer '{}').PlaySync()",
+                file.replace('\'', "''")
+            );
+            let _ = Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .creation_flags(0x0800_0000)
+                .status();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = Command::new("afplay").arg(&file).status();
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let ok = Command::new("paplay")
+                .arg(&file)
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            if !ok {
+                let _ = Command::new("aplay")
+                    .args(["-q", &file])
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        }
+        let _ = Stdio::null();
+    });
+}
+
+fn run_shell(command: &str) -> std::io::Result<()> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        Command::new("cmd")
+            .args(["/C", command])
+            .creation_flags(0x0800_0000)
+            .spawn()?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new("sh").args(["-c", command]).spawn()?;
+    }
+    Ok(())
+}
+
+/// Common srcds console commands and cvars for Tab completion.
+const CONSOLE_COMMANDS: &[&str] = &[
+    "addip",
+    "banid",
+    "bot_add",
+    "bot_kick",
+    "bot_quota",
+    "changelevel",
+    "cvarlist",
+    "echo",
+    "exec",
+    "find",
+    "help",
+    "hostname",
+    "kick",
+    "kickid",
+    "listid",
+    "listip",
+    "log",
+    "logaddress_add",
+    "logaddress_del",
+    "logaddress_delall",
+    "logaddress_list",
+    "maps",
+    "meta",
+    "mp_friendlyfire",
+    "mp_maxrounds",
+    "mp_restartgame",
+    "mp_roundtime",
+    "mp_timelimit",
+    "mp_warmup_end",
+    "mp_winlimit",
+    "nextlevel",
+    "plugin_print",
+    "quit",
+    "removeid",
+    "removeip",
+    "say",
+    "sm",
+    "sm plugins list",
+    "sm_kick",
+    "sm_ban",
+    "sm_map",
+    "sm_rcon",
+    "stats",
+    "status",
+    "sv_alltalk",
+    "sv_cheats",
+    "sv_gravity",
+    "sv_password",
+    "sv_tags",
+    "tv_record",
+    "tv_stoprecord",
+    "users",
+    "version",
+    "writeid",
+    "writeip",
+];
+
+/// Completes the command word to the longest common prefix of all matches.
+/// Returns the new text (if it changed) and the candidates.
+fn autocomplete(input: &str, history: &[String]) -> (Option<String>, Vec<String>) {
+    let prefix = input.trim_start();
+    if prefix.is_empty() {
+        return (None, Vec::new());
+    }
+    let lower = prefix.to_lowercase();
+    let mut candidates: Vec<String> = CONSOLE_COMMANDS
+        .iter()
+        .map(|c| c.to_string())
+        .chain(history.iter().rev().cloned())
+        .filter(|c| c.to_lowercase().starts_with(&lower) && c.len() > prefix.len())
+        .collect();
+    candidates.sort();
+    candidates.dedup();
+    let Some(first) = candidates.first() else {
+        return (None, candidates);
+    };
+    let mut common = first.clone();
+    for c in &candidates[1..] {
+        let n = common
+            .chars()
+            .zip(c.chars())
+            .take_while(|(a, b)| a.eq_ignore_ascii_case(b))
+            .count();
+        common = common.chars().take(n).collect();
+    }
+    if candidates.len() == 1 {
+        common.push(' ');
+    }
+    let completed = (common.len() > prefix.len()).then_some(common);
+    (completed, candidates)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_chat() {
+        let c = parse_chat_line(
+            r#"10/18/2026 - 19:22:33: "B<o>b<2><STEAM_1:0:1><CT>" say_team "rush b""#,
+        )
+        .unwrap();
+        assert_eq!(
+            (c.time.as_str(), c.name.as_str(), c.team.as_str()),
+            ("19:22:33", "B<o>b", "CT")
+        );
+        assert!(c.team_only);
+        assert_eq!(c.text, "rush b");
+        assert!(
+            parse_chat_line(r#"10/18/2026 - 19:22:33: World triggered "Round_Start""#).is_none()
+        );
+    }
+
+    #[test]
+    fn parses_bans_and_maps() {
+        let bans = parse_ban_list(
+            "ID filter list: 2 entries\n1 STEAM_1:0:123 : permanent\n2 STEAM_1:1:5 : 30.000 min\n",
+            false,
+        );
+        assert_eq!(bans.len(), 2);
+        assert_eq!(
+            (bans[1].ident.as_str(), bans[1].duration.as_str()),
+            ("STEAM_1:1:5", "30.000 min")
+        );
+        let maps = parse_map_list(
+            "Dir:  maps/*.bsp\nPENDING:   (fs) de_dust2.bsp\nPENDING:   (fs) cs_office.bsp\n",
+        );
+        assert_eq!(maps, vec!["cs_office", "de_dust2"]);
+    }
+
+    #[test]
+    fn parses_cycle_and_status() {
+        assert_eq!(
+            parse_map_cycle("Map Cycle:\nde_dust2\ncs_office\n\nUnknown command \"x\"\n"),
+            vec!["de_dust2", "cs_office"]
+        );
+        let st = "# userid name uniqueid connected ping loss state rate adr\n#      2 \"Bob\" STEAM_1:0:1 01:00 30 0 active 80000 1.2.3.4:27005\n#  3 \"BOT Ali\" BOT active\n";
+        assert_eq!(parse_status_userids(st), vec![2, 3]);
+    }
+
+    #[test]
+    fn log_statistics() {
+        let mut p = HashMap::new();
+        let lines = [
+            r#"10/18/2026 - 20:00:00: "Bob<2><STEAM_1:0:1><Unassigned>" joined team "CT""#,
+            r#"10/18/2026 - 20:00:01: "Bob<2><STEAM_1:0:1><CT>" [1 2 3] attacked "Ann<3><STEAM_1:0:2><TERRORIST>" [4 5 6] with "ak47" (damage "27") (damage_armor "4") (health "73") (armor "96") (hitgroup "chest")"#,
+            r#"10/18/2026 - 20:00:02: "Bob<2><STEAM_1:0:1><CT>" [1 2 3] killed "Ann<3><STEAM_1:0:2><TERRORIST>" [4 5 6] with "ak47""#,
+            r#"10/18/2026 - 20:00:03: "Bob<2><STEAM_1:0:1><CT>" killed "Cid<4><STEAM_1:0:3><CT>" with "m4a1""#,
+            r#"10/18/2026 - 20:00:04: "Ann<3><STEAM_1:0:2><TERRORIST>" committed suicide with "world""#,
+        ];
+        for l in lines {
+            apply_log_stats(&mut p, l);
+        }
+        let bob = &p["Bob"];
+        assert_eq!((bob.kills, bob.deaths, bob.teamkills), (2, 0, 1));
+        assert_eq!((bob.damage_hp, bob.damage_armor), (27, 4));
+        assert_eq!(bob.team, "CT");
+        let ann = &p["Ann"];
+        assert_eq!(
+            (ann.deaths, ann.suicides, ann.health),
+            (2, 1, Some((73, 96)))
+        );
+        apply_log_stats(
+            &mut p,
+            r#"10/18/2026 - 20:05:00: Started map "de_dust2" (CRC "1")"#,
+        );
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn parses_goldsrc_status() {
+        let text = "#      name userid uniqueid frag time ping loss adr\n\
+                    # 1 \"Bob\"   12 STEAM_0:1:42   7 12:34   48    0 94.31.108.10:27005\n\
+                    # 2 \"bot\"   13 BOT            0 12:00    0    0\n2 users\n";
+        let p = parse_status_players(text);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].userid, 12);
+        assert_eq!(p[0].steam_id, "STEAM_0:1:42");
+        assert_eq!(p[0].ping, "48");
+        assert_eq!(p[0].port, Some(27005));
+        assert_eq!(p[1].steam_id, "BOT");
+        assert_eq!(parse_status_userids(text), vec![12, 13]);
+    }
+
+    #[test]
+    fn parses_status_players() {
+        let css = "hostname: x\n# userid name uniqueid connected ping loss state adr\n#      2 \"Bob \\\"the\\\" Builder\" STEAM_1:0:1234 05:23 45 0 active 1.2.3.4:27005\n#      3 \"BOT Ali\" BOT active\n";
+        let p = parse_status_players(css);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].userid, 2);
+        assert_eq!(p[0].steam_id, "STEAM_1:0:1234");
+        assert_eq!(p[0].ping, "45");
+        assert_eq!(p[0].ip, Some("1.2.3.4".parse().unwrap()));
+        assert_eq!(p[1].steam_id, "BOT");
+        let cs2 = "---------players--------\n  id     time ping loss      state   rate adr name\n65535 [NoChan]    0    0 challenging      0unknown ''\n    2    05:23   45    0     active 786432 5.6.7.8:27005 'Ann'\n";
+        let p = parse_status_players(cs2);
+        assert_eq!(p.len(), 1);
+        assert_eq!((p[0].name.as_str(), p[0].ping.as_str()), ("Ann", "45"));
+        assert_eq!(p[0].ip, Some("5.6.7.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn translates_log_lines() {
+        assert_eq!(
+            translate_log(r#"10/18/2026 - 20:29:31: "Bob<2><STEAM_1:0:1><CT>" say "hi""#),
+            "Bob: hi"
+        );
+        assert_eq!(
+            translate_log(
+                r#"10/18/2026 - 20:29:31: "Bob<2><STEAM_1:0:1><CT>" killed "Al<3><BOT><TERRORIST>" with "ak47""#
+            ),
+            "Bob killed Al with ak47"
+        );
+        assert_eq!(
+            mask_password("rcon_password geheim now", None),
+            "rcon_password ******** now"
+        );
+        assert_eq!(
+            mask_password("pw is geheim", Some("geheim")),
+            "pw is ********"
+        );
+    }
+
+    #[test]
+    fn parses_server_lists() {
+        let l = parse_server_list_file(
+            "# my servers\n1.2.3.4:27015 Clan server\nsteam://connect/5.6.7.8:27016\n\na:1, b:2\n",
+        );
+        let addrs: Vec<&str> = l.iter().map(|s| s.address.as_str()).collect();
+        assert_eq!(addrs, ["1.2.3.4:27015", "5.6.7.8:27016", "a:1", "b:2"]);
+        assert_eq!(l[0].comment, "Clan server");
+    }
+
+    #[test]
+    fn completes_commands() {
+        let (text, _) = autocomplete("chang", &[]);
+        assert_eq!(text.as_deref(), Some("changelevel "));
+        let (text, cands) = autocomplete("mp_w", &[]);
+        assert_eq!(text, None); // mp_warmup_end / mp_winlimit share only "mp_w"
+        assert!(cands.len() >= 2);
+    }
+}

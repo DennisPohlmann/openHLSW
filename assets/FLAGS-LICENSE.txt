@@ -1,0 +1,1 @@
+Country flags rendered from https://github.com/hampusborgos/country-flags (public domain).

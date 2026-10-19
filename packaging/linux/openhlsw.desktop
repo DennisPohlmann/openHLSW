@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=openHLSW
+GenericName=Game Server Browser
+Comment=Game server browser and RCON admin tool (HLSW remake)
+Exec=openhlsw
+Icon=openhlsw
+Terminal=false
+Categories=Game;Network;Utility;
+Keywords=hlsw;rcon;srcds;hlds;server;counter-strike;
+StartupWMClass=openhlsw
