@@ -1,11 +1,26 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+/// Translated text: `tr!("Refresh")` (a `&str`), or with named values
+/// `tr!("Added {n} servers", n = count)` (a `String`). See `i18n`.
+macro_rules! tr {
+    ($s:literal) => {
+        $crate::i18n::t($s)
+    };
+    ($s:literal, $($name:ident = $value:expr),+ $(,)?) => {
+        $crate::i18n::fill(
+            $crate::i18n::t($s),
+            &[$((stringify!($name), &$value as &dyn ::std::fmt::Display)),+],
+        )
+    };
+}
+
 mod app;
 mod config;
 mod flags;
 mod game_icons;
 mod geo;
+mod i18n;
 mod settings;
 mod theme;
 mod trace;

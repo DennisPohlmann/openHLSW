@@ -273,7 +273,9 @@ impl Server {
             .unwrap_or_default();
         match (&self.state, self.ping) {
             (QueryState::Online, Some(p)) => format!("{p}{avg}"),
-            (QueryState::Offline(reason), _) if reason == "Timeout" => format!("Timeout{avg}"),
+            (QueryState::Offline(reason), _) if reason == "Timeout" => {
+                format!("{}{avg}", tr!("Timeout"))
+            }
             (QueryState::Offline(reason), _) => reason.clone(),
             _ => String::new(),
         }
@@ -374,7 +376,7 @@ impl Server {
         }
         let list = self.addon_list();
         if list.is_empty() {
-            return "None".into();
+            return tr!("None").into();
         }
         list.into_iter()
             .map(|(s, _)| s)
@@ -414,7 +416,7 @@ impl Server {
         if self.rules.is_empty() || self.is_gamespy() {
             (String::new(), String::new())
         } else {
-            ("None".into(), "None".into())
+            (tr!("None").into(), tr!("None").into())
         }
     }
 
@@ -442,7 +444,7 @@ impl Server {
             }
         }
         if list.is_empty() {
-            "None".into()
+            tr!("None").into()
         } else {
             list.join(", ")
         }
@@ -469,16 +471,16 @@ impl Server {
                 parts.push(format!("{v} {unit}"));
             }
         };
-        add("mp_timelimit", "min");
-        add("mp_maxrounds", "rounds");
-        add("mp_winlimit", "wins");
-        add("mp_fraglimit", "frags");
+        add("mp_timelimit", tr!("min"));
+        add("mp_maxrounds", tr!("rounds"));
+        add("mp_winlimit", tr!("wins"));
+        add("mp_fraglimit", tr!("frags"));
         if self.is_gamespy() {
-            add("timelimit", "min");
-            add("fraglimit", "frags");
+            add("timelimit", tr!("min"));
+            add("fraglimit", tr!("frags"));
         }
         if parts.is_empty() && !self.rules.is_empty() && !self.is_gamespy() {
-            return "None".into();
+            return tr!("None").into();
         }
         parts.join(", ")
     }
@@ -738,10 +740,10 @@ impl AddGame {
 
     fn label(self) -> &'static str {
         match self {
-            AddGame::Source => "Half-Life 2",
-            AddGame::Cs2 => "Counter-Strike 2",
-            AddGame::GoldSrc => "Half-Life",
-            AddGame::GameSpy2 => "GameSpy 2",
+            AddGame::Source => tr!("Half-Life 2"),
+            AddGame::Cs2 => tr!("Counter-Strike 2"),
+            AddGame::GoldSrc => tr!("Half-Life"),
+            AddGame::GameSpy2 => tr!("GameSpy 2"),
         }
     }
 
@@ -757,9 +759,11 @@ impl AddGame {
     fn hint(self) -> &'static str {
         match self {
             AddGame::GameSpy2 => {
-                "ip:gameport:queryport, e.g. 1.2.3.4:23459:34567 (Deer Hunter 2005), Enter to add"
+                tr!(
+                    "ip:gameport:queryport, e.g. 1.2.3.4:23459:34567 (Deer Hunter 2005), Enter to add"
+                )
             }
-            _ => "host:port or steam://connect/… and press Enter to add",
+            _ => tr!("host:port or steam://connect/… and press Enter to add"),
         }
     }
 
@@ -796,7 +800,7 @@ fn unwrap_paragraphs(text: &str) -> String {
 /// third-party parts.
 fn license_view(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-        ui.heading("openHLSW");
+        ui.heading(tr!("openHLSW"));
         ui.label(format!(
             "Copyright (C) 2026 {COPYRIGHT_HOLDER}\n\n\
              This program is free software: you can redistribute it and/or modify it under the \
@@ -807,29 +811,29 @@ fn license_view(ui: &mut Ui) {
              PARTICULAR PURPOSE. See the GNU General Public License for more details."
         ));
         ui.add_space(8.0);
-        ui.heading("Game icons");
+        ui.heading(tr!("Game icons"));
         ui.label(unwrap_paragraphs(GAME_ICONS_NOTICE));
         ui.add_space(8.0);
-        ui.heading("Country flags");
+        ui.heading(tr!("Country flags"));
         ui.label(unwrap_paragraphs(FLAGS_NOTICE));
         ui.add_space(8.0);
-        ui.heading("Tahoma font (Wine)");
+        ui.heading(tr!("Tahoma font (Wine)"));
         ui.label(unwrap_paragraphs(FONT_NOTICE));
-        egui::CollapsingHeader::new("GNU Lesser General Public License v2.1 (full text)")
+        egui::CollapsingHeader::new(tr!("GNU Lesser General Public License v2.1 (full text)"))
             .default_open(false)
             .show(ui, |ui| {
                 ui.label(RichText::new(LGPL_TEXT).monospace().size(11.0));
             });
         ui.add_space(8.0);
-        ui.heading("Other components");
+        ui.heading(tr!("Other components"));
         ui.label(
-            "openHLSW is built with Rust libraries (egui/eframe, serde and others) under the MIT \
+            tr!("openHLSW is built with Rust libraries (egui/eframe, serde and others) under the MIT \
              and/or Apache-2.0 licenses, and egui's bundled fonts (Ubuntu Font Licence, \
              SIL Open Font License, MIT). Fallback fonts for other scripts come from your \
-             system. Server locations come from ip-api.com.",
+             system. Server locations come from ip-api.com."),
         );
         ui.add_space(8.0);
-        egui::CollapsingHeader::new("GNU General Public License v3.0 (full text)")
+        egui::CollapsingHeader::new(tr!("GNU General Public License v3.0 (full text)"))
             .default_open(false)
             .show(ui, |ui| {
                 ui.label(RichText::new(LICENSE_TEXT).monospace().size(11.0));
@@ -926,6 +930,7 @@ impl OpenHlswApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
         let config = config::load();
+        crate::i18n::set_language(config.settings.language);
         theme::install_fonts(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx, config.settings.theme);
         cc.egui_ctx
@@ -978,7 +983,7 @@ impl OpenHlswApp {
             search: String::new(),
             join_password: String::new(),
             hide_join_password: true,
-            status_message: "Ready".into(),
+            status_message: tr!("Ready").into(),
             auto_update_status: config.auto_update_status,
             hide_password: config.hide_rcon_password,
             last_list_refresh: None,
@@ -1091,7 +1096,7 @@ impl OpenHlswApp {
         self.add_saved_servers(&target.servers);
         self.selected = self.servers.first().map(|s| s.id);
         self.last_list_refresh = None;
-        self.status_message = format!("Server list: {}", self.list_name);
+        self.status_message = tr!("Server list: {list_name}", list_name = self.list_name);
         self.save_config();
     }
 
@@ -1284,7 +1289,13 @@ impl OpenHlswApp {
         }
         let result = worker::spawn_log_listener(&self.notifier, self.settings.log_port)
             .map(|_| self.settings.log_port)
-            .map_err(|e| format!("Cannot listen on UDP port {}: {e}", self.settings.log_port));
+            .map_err(|e| {
+                tr!(
+                    "Cannot listen on UDP port {log_port}: {e}",
+                    log_port = self.settings.log_port,
+                    e = e
+                )
+            });
         self.log_listener = Some(result.clone());
         result
     }
@@ -1354,13 +1365,22 @@ impl OpenHlswApp {
                         cmd.current_dir(dir);
                     }
                     match cmd.spawn() {
-                        Ok(_) => format!("Started {game} – join {addr} in the game"),
-                        Err(e) => format!("Could not start {exe}: {e}"),
+                        Ok(_) => tr!(
+                            "Started {game} – join {addr} in the game",
+                            game = game,
+                            addr = addr
+                        ),
+                        Err(e) => tr!("Could not start {exe}: {e}", exe = exe, e = e),
                     }
                 }
-                None => format!(
-                    "Set the path of {} in Settings → My Games to start it (server: {addr})",
-                    if game.is_empty() { "the game" } else { &game }
+                None => tr!(
+                    "Set the path of {game} in Settings → My Games to start it (server: {addr})",
+                    game = if game.is_empty() {
+                        tr!("the game")
+                    } else {
+                        &game
+                    },
+                    addr = addr
                 ),
             };
             return;
@@ -1392,10 +1412,10 @@ impl OpenHlswApp {
             open_url(&url)
         };
         if let Err(e) = result {
-            self.status_message = format!("Could not start the game: {e}");
+            self.status_message = tr!("Could not start the game: {e}", e = e);
             return;
         }
-        self.status_message = format!("Connecting to {addr}");
+        self.status_message = tr!("Connecting to {addr}", addr = addr);
         let now = chrono::Local::now().format("%d.%m.%Y %H:%M:%S").to_string();
         if let Some(s) = self.server_mut(id) {
             s.last_connected = Some(now.clone());
@@ -1419,7 +1439,7 @@ impl OpenHlswApp {
                 .replace("%ip%", &host)
                 .replace("%port%", &port);
             if let Err(e) = run_shell(&command) {
-                self.status_message = format!("Could not run {command}: {e}");
+                self.status_message = tr!("Could not run {command}: {e}", command = command, e = e);
             }
         }
         match self.settings.on_connect {
@@ -1547,14 +1567,11 @@ impl OpenHlswApp {
                             RconTag::Maps => {
                                 let found = parse_map_list(&text);
                                 if found.is_empty() {
-                                    s.append_console(&format!(
-                                        "*** maps * returned no map names. Server answer:\n{}",
-                                        if text.trim().is_empty() {
-                                            "(empty)"
+                                    s.append_console(&tr!("*** maps * returned no map names. Server answer:\n{answer}", answer = if text.trim().is_empty() {
+                                            tr!("(empty)")
                                         } else {
                                             text.trim_end()
-                                        }
-                                    ));
+                                        }));
                                 }
                                 merge_maps(&mut s.maps, found);
                                 // `maps *` does not list maps inside the game's VPK files, so
@@ -1571,10 +1588,10 @@ impl OpenHlswApp {
                                 merge_maps(&mut s.maps, parse_map_cycle(&text));
                                 s.maps_loading = false;
                                 s.maps_status = if s.maps.is_empty() {
-                                    "No maps found. The server's answer is in the Console tab."
+                                    tr!("No maps found. The server's answer is in the Console tab.")
                                         .into()
                                 } else {
-                                    format!("{} maps", s.maps.len())
+                                    tr!("{count} maps", count = s.maps.len())
                                 };
                             }
                             RconTag::PlayerStatus => {
@@ -1584,12 +1601,14 @@ impl OpenHlswApp {
                             RconTag::KickAllStatus => {
                                 let ids = parse_status_userids(&text);
                                 for uid in &ids {
-                                    s.rcon.exec(s.kick_cmd(*uid, "Map change"), RconTag::Silent);
+                                    s.rcon
+                                        .exec(s.kick_cmd(*uid, tr!("Map change")), RconTag::Silent);
                                 }
                                 if let Some(map) = s.pending_change.take() {
-                                    s.append_console(&format!(
-                                        "*** Kicked {} players, changelevel {map}",
-                                        ids.len()
+                                    s.append_console(&tr!(
+                                        "*** Kicked {count} players, changelevel {map}",
+                                        count = ids.len(),
+                                        map = map
                                     ));
                                     s.rcon.exec(format!("changelevel {map}"), RconTag::Console);
                                 }
@@ -1598,7 +1617,7 @@ impl OpenHlswApp {
                         RconEvent::Error(msg) => {
                             if s.maps_loading {
                                 s.maps_loading = false;
-                                s.maps_status = format!("Could not load maps: {msg}");
+                                s.maps_status = tr!("Could not load maps: {msg}", msg = msg);
                             }
                             s.pending_change = None;
                             s.append_console(&format!("*** {msg}"));
@@ -1606,14 +1625,20 @@ impl OpenHlswApp {
                         RconEvent::LogStarted(Ok(target)) => {
                             let internet = s.log_target.map(|(_, i)| i).unwrap_or(false);
                             s.log_target = Some((target, internet));
-                            s.append_console(&format!("*** Server log is now sent to {target}"));
-                            self.status_message =
-                                format!("Receiving log of {} on {target}", s.address);
+                            s.append_console(&tr!(
+                                "*** Server log is now sent to {target}",
+                                target = target
+                            ));
+                            self.status_message = tr!(
+                                "Receiving log of {address} on {target}",
+                                address = s.address,
+                                target = target
+                            );
                         }
                         RconEvent::LogStarted(Err(e)) => {
                             s.log_target = None;
-                            s.append_console(&format!("*** Get Log failed: {e}"));
-                            self.status_message = format!("Get Log failed: {e}");
+                            s.append_console(&tr!("*** Get Log failed: {e}", e = e));
+                            self.status_message = tr!("Get Log failed: {e}", e = e);
                         }
                     }
                 }
@@ -1628,7 +1653,7 @@ impl OpenHlswApp {
                     }
                     Err(e) => {
                         self.geo_pending.clear(); // try again on the next round
-                        self.status_message = format!("Location lookup failed: {e}");
+                        self.status_message = tr!("Location lookup failed: {e}", e = e);
                     }
                 },
             }
@@ -1692,7 +1717,7 @@ impl OpenHlswApp {
             settings: self.settings.clone(),
         };
         if let Err(e) = config::save(&config) {
-            self.status_message = format!("Could not save settings: {e}");
+            self.status_message = tr!("Could not save settings: {e}", e = e);
         }
     }
 
@@ -1719,24 +1744,26 @@ impl OpenHlswApp {
                     return;
                 }
                 let Some(address) = ServerAddress::parse(&input) else {
-                    self.status_message = format!("Invalid address: {input}");
+                    self.status_message = tr!("Invalid address: {input}", input = input);
                     return;
                 };
                 if self.add_game == AddGame::GameSpy2 && address.query_port.is_none() {
                     // GameSpy 2 answers on a separate query port.
-                    self.status_message = format!(
-                        "GameSpy 2 servers need the query port: ip:gameport:queryport (e.g. {}:{}:34567)",
-                        address.host, address.port
+                    self.status_message = tr!(
+                        "GameSpy 2 servers need the query port: ip:gameport:queryport (e.g. {host}:{port}:34567)",
+                        host = address.host,
+                        port = address.port
                     );
                     return;
                 }
                 if let Some(existing) = self.servers.iter().find(|s| s.address == address) {
                     let id = existing.id;
-                    self.status_message = format!("{address} is already in the list");
+                    self.status_message =
+                        tr!("{address} is already in the list", address = address);
                     self.apply(Action::Select(id), ctx);
                 } else {
                     let id = self.alloc_id();
-                    self.status_message = format!("Added {address}");
+                    self.status_message = tr!("Added {address}", address = address);
                     let mut server = Server::new(id, address, &self.notifier);
                     server.console_cache = self.settings.console_cache.max(1);
                     self.servers.push(server);
@@ -1750,7 +1777,7 @@ impl OpenHlswApp {
             Action::Remove(id) => {
                 let Some(idx) = self.index_of(id) else { return };
                 let removed = self.servers.remove(idx);
-                self.status_message = format!("Removed {}", removed.address);
+                self.status_message = tr!("Removed {address}", address = removed.address);
                 if self.selected == Some(id) {
                     self.selected = self
                         .servers
@@ -1761,19 +1788,20 @@ impl OpenHlswApp {
             }
             Action::Connect(id) => self.connect(id, ctx),
             Action::CopyText(text) => {
-                self.status_message = format!("Copied {text}");
+                self.status_message = tr!("Copied {text}", text = text);
                 ctx.copy_text(text);
             }
             Action::OpenUrl(url) => {
                 self.status_message = match open_url(&url) {
-                    Ok(()) => format!("Opened {url}"),
-                    Err(e) => format!("Could not open {url}: {e}"),
+                    Ok(()) => tr!("Opened {url}", url = url),
+                    Err(e) => tr!("Could not open {url}: {e}", url = url, e = e),
                 };
             }
             Action::NewList(name) => {
                 let name = name.trim().to_string();
                 if name.is_empty() || self.list_names().contains(&name) {
-                    self.status_message = format!("A server list named \"{name}\" already exists");
+                    self.status_message =
+                        tr!("A server list named \"{name}\" already exists", name = name);
                     return;
                 }
                 let current = SavedList {
@@ -1784,7 +1812,10 @@ impl OpenHlswApp {
                 self.servers.clear();
                 self.selected = None;
                 self.list_order.clear();
-                self.status_message = format!("Created server list {}", self.list_name);
+                self.status_message = tr!(
+                    "Created server list {list_name}",
+                    list_name = self.list_name
+                );
                 self.save_config();
             }
             Action::OpenList(name) => self.switch_list(&name, true),
@@ -1794,9 +1825,11 @@ impl OpenHlswApp {
                     Some(next) => {
                         let old = self.list_name.clone();
                         self.switch_list(&next, false);
-                        self.status_message = format!("Deleted server list {old}");
+                        self.status_message = tr!("Deleted server list {old}", old = old);
                     }
-                    None => self.status_message = "The last server list cannot be deleted".into(),
+                    None => {
+                        self.status_message = tr!("The last server list cannot be deleted").into()
+                    }
                 }
             }
             Action::RenameList(name) => {
@@ -1808,9 +1841,9 @@ impl OpenHlswApp {
             }
             Action::ImportList => {
                 let Some(path) = rfd::FileDialog::new()
-                    .set_title("Import server list")
-                    .add_filter("Server list", &["txt", "json", "cfg"])
-                    .add_filter("All files", &["*"])
+                    .set_title(tr!("Import server list"))
+                    .add_filter(tr!("Server list"), &["txt", "json", "cfg"])
+                    .add_filter(tr!("All files"), &["*"])
                     .pick_file()
                 else {
                     return;
@@ -1819,25 +1852,27 @@ impl OpenHlswApp {
                     Ok(text) => {
                         let saved = parse_server_list_file(&text);
                         let added = self.add_saved_servers(&saved);
-                        self.status_message = format!(
-                            "Imported {added} of {} servers from {}",
-                            saved.len(),
-                            path.display()
+                        self.status_message = tr!(
+                            "Imported {added} of {count} servers from {path}",
+                            added = added,
+                            count = saved.len(),
+                            path = path.display()
                         );
                         self.last_list_refresh = None;
                         self.save_config();
                     }
                     Err(e) => {
-                        self.status_message = format!("Could not read {}: {e}", path.display())
+                        self.status_message =
+                            tr!("Could not read {path}: {e}", path = path.display(), e = e)
                     }
                 }
             }
             Action::ExportList => {
                 let Some(path) = rfd::FileDialog::new()
-                    .set_title("Export server list")
+                    .set_title(tr!("Export server list"))
                     .set_file_name(format!("{}.txt", self.list_name))
-                    .add_filter("Text (one address per line)", &["txt"])
-                    .add_filter("openHLSW JSON", &["json"])
+                    .add_filter(tr!("Text (one address per line)"), &["txt"])
+                    .add_filter(tr!("openHLSW JSON"), &["json"])
                     .save_file()
                 else {
                     return;
@@ -1873,18 +1908,18 @@ impl OpenHlswApp {
                         + "\n"
                 };
                 self.status_message = match std::fs::write(&path, content) {
-                    Ok(()) => format!(
-                        "Exported {} servers to {}",
-                        self.servers.len(),
-                        path.display()
+                    Ok(()) => tr!(
+                        "Exported {count} servers to {path}",
+                        count = self.servers.len(),
+                        path = path.display()
                     ),
-                    Err(e) => format!("Could not write {}: {e}", path.display()),
+                    Err(e) => tr!("Could not write {path}: {e}", path = path.display(), e = e),
                 };
             }
             Action::MultiInsert(text) => {
                 let saved = parse_server_list_file(&text);
                 let added = self.add_saved_servers(&saved);
-                self.status_message = format!("Added {added} servers");
+                self.status_message = tr!("Added {added} servers", added = added);
                 self.last_list_refresh = None;
                 self.save_config();
             }
@@ -1903,9 +1938,9 @@ impl OpenHlswApp {
                     if self.selected == Some(id) {
                         self.selected = self.servers.first().map(|s| s.id);
                     }
-                    self.status_message = format!("Moved server to {target}");
+                    self.status_message = tr!("Moved server to {target}", target = target);
                 } else {
-                    self.status_message = format!("Copied server to {target}");
+                    self.status_message = tr!("Copied server to {target}", target = target);
                 }
                 self.save_config();
             }
@@ -1978,7 +2013,8 @@ impl OpenHlswApp {
                 {
                     let _ = std::fs::create_dir_all(&dir);
                     if let Err(e) = open_url(&dir.display().to_string()) {
-                        self.status_message = format!("Could not open {}: {e}", dir.display());
+                        self.status_message =
+                            tr!("Could not open {dir}: {e}", dir = dir.display(), e = e);
                     }
                 }
             }
@@ -2052,12 +2088,12 @@ impl OpenHlswApp {
             Action::FetchMaps(id) => {
                 if let Some(s) = self.server_mut(id) {
                     if s.rcon_password.is_empty() {
-                        s.maps_status = "No RCON password set (Rcon Config tab).".into();
+                        s.maps_status = tr!("No RCON password set (Rcon Config tab).").into();
                         return;
                     }
                     s.maps.clear();
                     s.maps_loading = true;
-                    s.maps_status = "Loading maps…".into();
+                    s.maps_status = tr!("Loading maps…").into();
                     s.configure_rcon();
                     s.rcon.exec("maps *", RconTag::Maps);
                     s.rcon.exec("listmaps", RconTag::MapCycle);
@@ -2103,7 +2139,7 @@ impl OpenHlswApp {
                 let kick_all = self.settings.kick_all_on_map_change;
                 if let Some(s) = self.server_mut(id) {
                     if s.rcon_password.is_empty() {
-                        s.maps_status = "No RCON password set (Rcon Config tab).".into();
+                        s.maps_status = tr!("No RCON password set (Rcon Config tab).").into();
                         return;
                     }
                     s.configure_rcon();
@@ -2115,8 +2151,8 @@ impl OpenHlswApp {
                         s.append_console(&format!("] changelevel {map}"));
                         s.rcon.exec(format!("changelevel {map}"), RconTag::Console);
                     }
-                    s.maps_status = format!("Changing level to {map}…");
-                    self.status_message = format!("Changing level to {map}");
+                    s.maps_status = tr!("Changing level to {map}…", map = map);
+                    self.status_message = tr!("Changing level to {map}", map = map);
                 }
             }
             Action::Say(id) => {
@@ -2156,12 +2192,12 @@ impl OpenHlswApp {
                         port,
                         public_ip,
                     });
-                    self.status_message = format!("Requesting log of {}…", s.address);
+                    self.status_message = tr!("Requesting log of {address}…", address = s.address);
                 }
             }
             Action::KickPlayer(id, userid) => {
                 if let Some(s) = self.server_mut(id) {
-                    let cmd = s.kick_cmd(userid, "Kicked by admin");
+                    let cmd = s.kick_cmd(userid, tr!("Kicked by admin"));
                     s.append_console(&format!("] {cmd}"));
                     s.configure_rcon();
                     s.rcon.exec(cmd, RconTag::Console);
@@ -2186,7 +2222,7 @@ impl OpenHlswApp {
                     if ip {
                         cmds.push(format!("addip {minutes} {target}"));
                         if kick {
-                            cmds.push(s.kick_cmd(userid, "Banned by admin"));
+                            cmds.push(s.kick_cmd(userid, tr!("Banned by admin")));
                         }
                     } else {
                         // banid with the Steam ID keeps working after the player left.
@@ -2239,7 +2275,7 @@ impl OpenHlswApp {
                         .unwrap_or(usize::MAX)
                 });
                 self.save_config();
-                self.status_message = "Server IDs set to the current sequence".into();
+                self.status_message = tr!("Server IDs set to the current sequence").into();
             }
             Action::ToggleColumn { players, title } => {
                 let v = &mut self.settings.view;
@@ -2298,6 +2334,9 @@ impl OpenHlswApp {
                 if new.text_size != self.settings.text_size {
                     ctx.set_zoom_factor(new.text_size.zoom());
                 }
+                if new.language != self.settings.language {
+                    crate::i18n::set_language(new.language);
+                }
                 let port_changed = new.log_port != self.settings.log_port;
                 self.settings = new;
                 if let Some(dialog) = &mut self.settings_dialog {
@@ -2305,7 +2344,9 @@ impl OpenHlswApp {
                 }
                 if port_changed && self.log_listener.is_some() {
                     self.status_message = match self.ensure_log_listener() {
-                        Ok(port) => format!("Listening for server logs on UDP port {port}"),
+                        Ok(port) => {
+                            tr!("Listening for server logs on UDP port {port}", port = port)
+                        }
                         Err(e) => e,
                     };
                 }
@@ -2380,7 +2421,7 @@ impl eframe::App for OpenHlswApp {
                             .iter()
                             .map(|s| match self.location_of(s) {
                                 Some(Some(g)) => (g.country_code.clone(), g.provider().to_string()),
-                                Some(None) => (String::new(), "LAN".into()),
+                                Some(None) => (String::new(), tr!("LAN").into()),
                                 None => (String::new(), String::new()),
                             })
                             .collect();
@@ -2525,36 +2566,36 @@ impl OpenHlswApp {
             .filter(|n| *n != self.list_name)
             .collect();
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("View Connect Log").clicked() {
+            ui.menu_button(tr!("File"), |ui| {
+                if ui.button(tr!("View Connect Log")).clicked() {
                     actions.push(Action::OpenDialog(Dialog::ConnectLog));
                     ui.close();
                 }
-                if ui.button("View openHLSW AppData Directory").clicked() {
+                if ui.button(tr!("View openHLSW AppData Directory")).clicked() {
                     actions.push(Action::OpenAppData);
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Minimize (no traffic)\tCtrl+M").clicked() {
+                if ui.button(tr!("Minimize (no traffic)\tCtrl+M")).clicked() {
                     actions.push(Action::Minimize { no_traffic: true });
                     ui.close();
                 }
-                if ui.button("Minimize").clicked() {
+                if ui.button(tr!("Minimize")).clicked() {
                     actions.push(Action::Minimize { no_traffic: false });
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Exit").clicked() {
+                if ui.button(tr!("Exit")).clicked() {
                     actions.push(Action::Quit);
                 }
             });
-            ui.menu_button("Server list", |ui| {
-                if ui.button("New...").clicked() {
+            ui.menu_button(tr!("Server list"), |ui| {
+                if ui.button(tr!("New...")).clicked() {
                     actions.push(Action::OpenDialog(Dialog::NewList(String::new())));
                     ui.close();
                 }
                 ui.add_enabled_ui(!other_lists.is_empty(), |ui| {
-                    ui.menu_button("Open", |ui| {
+                    ui.menu_button(tr!("Open"), |ui| {
                         for name in &other_lists {
                             if ui.button(name).clicked() {
                                 actions.push(Action::OpenList(name.clone()));
@@ -2564,65 +2605,65 @@ impl OpenHlswApp {
                     });
                 });
                 if ui
-                    .add_enabled(!other_lists.is_empty(), Button::new("Delete"))
+                    .add_enabled(!other_lists.is_empty(), Button::new(tr!("Delete")))
                     .clicked()
                 {
                     actions.push(Action::OpenDialog(Dialog::ConfirmDeleteList));
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Import...").clicked() {
+                if ui.button(tr!("Import...")).clicked() {
                     actions.push(Action::ImportList);
                     ui.close();
                 }
-                if ui.button("Export...").clicked() {
+                if ui.button(tr!("Export...")).clicked() {
                     actions.push(Action::ExportList);
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Multi Server Insert...\tCtrl+I").clicked() {
+                if ui.button(tr!("Multi Server Insert...\tCtrl+I")).clicked() {
                     actions.push(Action::OpenDialog(Dialog::MultiInsert(String::new())));
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Refresh\tF5").clicked() {
+                if ui.button(tr!("Refresh\tF5")).clicked() {
                     actions.push(Action::RefreshAll);
                     ui.close();
                 }
                 if ui
-                    .add_enabled(selected.is_some(), Button::new("Update\tF6"))
+                    .add_enabled(selected.is_some(), Button::new(tr!("Update\tF6")))
                     .clicked()
                 {
                     actions.push(Action::Refresh(selected.unwrap_or_default()));
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Properties...\tCtrl+O").clicked() {
+                if ui.button(tr!("Properties...\tCtrl+O")).clicked() {
                     actions.push(Action::OpenDialog(Dialog::ListProperties(
                         self.list_name.clone(),
                     )));
                     ui.close();
                 }
             });
-            ui.menu_button("Server", |ui| {
+            ui.menu_button(tr!("Server"), |ui| {
                 ui.add_enabled_ui(selected.is_some(), |ui| {
                     if let Some(s) = selected.and_then(|id| self.server(id)) {
                         server_menu_items(ui, s, &other_lists, actions);
                     }
                 });
             });
-            ui.menu_button("Settings", |ui| {
-                if ui.button("Settings...").clicked() {
+            ui.menu_button(tr!("Settings"), |ui| {
+                if ui.button(tr!("Settings...")).clicked() {
                     actions.push(Action::OpenSettings(SettingsTab::Misc));
                     ui.close();
                 }
-                ui.menu_button("Sort Server List", |ui| {
+                ui.menu_button(tr!("Sort Server List"), |ui| {
                     for (label, col) in [
-                        ("Unsorted", Col::Index),
-                        ("Name", Col::Name),
-                        ("IP/Port", Col::Address),
-                        ("Game + Name", Col::GameName),
-                        ("Game + IP/Port", Col::GameAddress),
+                        (tr!("Unsorted"), Col::Index),
+                        (tr!("Name"), Col::Name),
+                        (tr!("IP/Port"), Col::Address),
+                        (tr!("Game + Name"), Col::GameName),
+                        (tr!("Game + IP/Port"), Col::GameAddress),
                     ] {
                         if ui.radio(self.sort.0 == col, label).clicked() {
                             self.sort = (col, true);
@@ -2631,30 +2672,30 @@ impl OpenHlswApp {
                     }
                 });
             });
-            ui.menu_button("View", |ui| {
+            ui.menu_button(tr!("View"), |ui| {
                 let v = &mut self.settings.view;
                 let mut changed = false;
                 changed |= ui
-                    .checkbox(&mut v.rcon_section, "Rcon Section\tCtrl+R")
+                    .checkbox(&mut v.rcon_section, tr!("Rcon Section\tCtrl+R"))
                     .changed();
                 changed |= ui
-                    .checkbox(&mut v.server_list, "Server List\tCtrl+L")
+                    .checkbox(&mut v.server_list, tr!("Server List\tCtrl+L"))
                     .changed();
-                changed |= ui.checkbox(&mut v.rules, "Rules\tCtrl+U").changed();
+                changed |= ui.checkbox(&mut v.rules, tr!("Rules\tCtrl+U")).changed();
                 ui.separator();
-                changed |= ui.checkbox(&mut v.password, "Password").changed();
-                changed |= ui.checkbox(&mut v.filter, "Filter").changed();
-                changed |= ui.checkbox(&mut v.comment, "Comment").changed();
+                changed |= ui.checkbox(&mut v.password, tr!("Password")).changed();
+                changed |= ui.checkbox(&mut v.filter, tr!("Filter")).changed();
+                changed |= ui.checkbox(&mut v.comment, tr!("Comment")).changed();
                 ui.separator();
-                changed |= ui.checkbox(&mut v.toolbar, "Toolbar").changed();
-                changed |= ui.checkbox(&mut v.status_bar, "Status Bar").changed();
+                changed |= ui.checkbox(&mut v.toolbar, tr!("Toolbar")).changed();
+                changed |= ui.checkbox(&mut v.status_bar, tr!("Status Bar")).changed();
                 ui.separator();
-                changed |= ui.checkbox(&mut v.ping_graph, "Ping Graph").changed();
+                changed |= ui.checkbox(&mut v.ping_graph, tr!("Ping Graph")).changed();
                 if changed {
                     actions.push(Action::SaveConfig);
                 }
                 ui.separator();
-                ui.menu_button("Skin", |ui| {
+                ui.menu_button(tr!("Skin"), |ui| {
                     for theme in [Theme::Light, Theme::Dark] {
                         if ui
                             .radio(self.settings.theme == theme, theme.label())
@@ -2667,12 +2708,12 @@ impl OpenHlswApp {
                 });
             });
             ui.menu_button("?", |ui| {
-                if ui.button("License...").clicked() {
+                if ui.button(tr!("License...")).clicked() {
                     self.show_license = true;
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("About openHLSW").clicked() {
+                if ui.button(tr!("About openHLSW")).clicked() {
                     self.show_about = true;
                     ui.close();
                 }
@@ -2681,10 +2722,14 @@ impl OpenHlswApp {
     }
 
     fn toolbar(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
-        const LABEL_W: f32 = 52.0;
+        // Right-aligned labels of the first two rows, as wide as the longer (translated) one.
+        let label_w = text_width(ui, tr!("Server list:"))
+            .max(text_width(ui, tr!("IP/Port:")))
+            .max(52.0)
+            + 2.0;
         let label = |ui: &mut Ui, text: &str| {
             ui.allocate_ui_with_layout(
-                egui::vec2(LABEL_W, 18.0),
+                egui::vec2(label_w, 18.0),
                 Layout::right_to_left(Align::Center),
                 |ui| {
                     ui.label(text);
@@ -2694,7 +2739,7 @@ impl OpenHlswApp {
 
         // Server list: [Custom server list ▼]                         N servers
         ui.horizontal(|ui| {
-            label(ui, "Server list:");
+            label(ui, tr!("Server list:"));
             let width = (ui.available_width() - 100.0).max(150.0);
             let names = self.list_names();
             egui::ComboBox::from_id_salt("server_list_source")
@@ -2710,13 +2755,13 @@ impl OpenHlswApp {
                     }
                 });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(format!("{} servers", self.servers.len()));
+                ui.label(tr!("{count} servers", count = self.servers.len()));
             });
         });
 
         // IP/Port: [Half-Life 2 ▼] [address ...................]
         ui.horizontal(|ui| {
-            label(ui, "IP/Port:");
+            label(ui, tr!("IP/Port:"));
             if let Some(icons) = &self.game_icons {
                 icons.show(ui, self.add_game.icon(), 16.0);
             }
@@ -2746,13 +2791,20 @@ impl OpenHlswApp {
                     TextEdit::singleline(&mut self.address_input)
                         .align(egui::Align2::LEFT_CENTER)
                         .hint_text(hint)
-                        .desired_width(ui.available_width() - 40.0),
+                        // Leave room for the (translated) "Add" button.
+                        .desired_width(
+                            ui.available_width()
+                                - text_width(ui, tr!("Add"))
+                                - 2.0 * ui.spacing().button_padding.x
+                                - ui.spacing().item_spacing.x
+                                - 2.0,
+                        ),
                 )
                 .with_edit_menu();
             if input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                 actions.push(Action::Add);
             }
-            if ui.button("Add").clicked() {
+            if ui.button(tr!("Add")).clicked() {
                 actions.push(Action::Add);
             }
         });
@@ -2768,25 +2820,29 @@ impl OpenHlswApp {
                 let selected = self.selected;
                 let id = selected.unwrap_or_default();
                 if ui
-                    .add_enabled(selected.is_some(), Button::new("Refresh"))
+                    .add_enabled(selected.is_some(), Button::new(tr!("Refresh")))
                     .on_hover_text("F5")
                     .clicked()
                 {
                     actions.push(Action::Refresh(id));
                 }
-                if ui.button("Refresh all").on_hover_text("Shift+F5").clicked() {
+                if ui
+                    .button(tr!("Refresh all"))
+                    .on_hover_text(tr!("Shift+F5"))
+                    .clicked()
+                {
                     actions.push(Action::RefreshAll);
                 }
                 if ui
-                    .add_enabled(selected.is_some(), Button::new("Connect"))
-                    .on_hover_text("Join via Steam")
+                    .add_enabled(selected.is_some(), Button::new(tr!("Connect")))
+                    .on_hover_text(tr!("Join via Steam"))
                     .clicked()
                 {
                     actions.push(Action::Connect(id));
                 }
                 if ui
-                    .add_enabled(selected.is_some(), Button::new("Remove"))
-                    .on_hover_text("Del")
+                    .add_enabled(selected.is_some(), Button::new(tr!("Remove")))
+                    .on_hover_text(tr!("Del"))
                     .clicked()
                 {
                     actions.push(Action::Remove(id));
@@ -2794,7 +2850,7 @@ impl OpenHlswApp {
                 toolbar_separator(ui, p);
             }
             if view.password {
-                ui.label("Password:");
+                ui.label(tr!("Password:"));
                 ui.add(
                     TextEdit::singleline(&mut self.join_password)
                         .align(egui::Align2::LEFT_CENTER)
@@ -2802,17 +2858,17 @@ impl OpenHlswApp {
                         .desired_width(110.0),
                 )
                 .with_edit_menu()
-                .on_hover_text("Server password used by Connect");
-                ui.checkbox(&mut self.hide_join_password, "Hide");
+                .on_hover_text(tr!("Server password used by Connect"));
+                ui.checkbox(&mut self.hide_join_password, tr!("Hide"));
                 toolbar_separator(ui, p);
             }
             if view.filter {
-                ui.label("Search:");
+                ui.label(tr!("Search:"));
                 let search = ui
                     .add(
                         TextEdit::singleline(&mut self.search)
                             .align(egui::Align2::LEFT_CENTER)
-                            .hint_text("Name, map, address")
+                            .hint_text(tr!("Name, map, address"))
                             .desired_width(160.0),
                     )
                     .with_edit_menu();
@@ -2821,7 +2877,7 @@ impl OpenHlswApp {
             }
             if view.toolbar {
                 if ui
-                    .checkbox(&mut self.settings.auto_refresh, "Auto refresh every")
+                    .checkbox(&mut self.settings.auto_refresh, tr!("Auto refresh every"))
                     .changed()
                 {
                     actions.push(Action::SaveConfig);
@@ -2840,10 +2896,10 @@ impl OpenHlswApp {
             ui.label(&self.status_message);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let (sent, recv) = self.traffic.rate;
-                ui.label(format!(
-                    "Send: {} Recv: {}",
-                    format_rate(sent),
-                    format_rate(recv)
+                ui.label(tr!(
+                    "Send: {sent} Recv: {received}",
+                    sent = format_rate(sent),
+                    received = format_rate(recv)
                 ));
                 toolbar_separator(ui, p);
                 let online = self
@@ -2851,7 +2907,11 @@ impl OpenHlswApp {
                     .iter()
                     .filter(|s| s.state == QueryState::Online)
                     .count();
-                ui.label(format!("{online}/{} online", self.servers.len()));
+                ui.label(tr!(
+                    "{online}/{count} online",
+                    online = online,
+                    count = self.servers.len()
+                ));
                 toolbar_separator(ui, p);
             });
         });
@@ -2898,7 +2958,7 @@ impl OpenHlswApp {
                     p,
                     "rules_filter",
                     &mut self.rules_filter,
-                    "cvar or value",
+                    tr!("cvar or value"),
                     rules.len(),
                 );
                 list_frame(ui, p, |ui| {
@@ -2925,7 +2985,7 @@ impl OpenHlswApp {
                 p,
                 "player_filter",
                 &mut self.player_filter,
-                "player name",
+                tr!("player name"),
                 0,
             );
             list_frame(ui, p, |ui| {
@@ -2955,7 +3015,7 @@ impl OpenHlswApp {
                     country: g.map(|g| g.country_code.clone()).unwrap_or_default(),
                     country_name: g.map(|g| g.country.clone()).unwrap_or_default(),
                     provider: if lan {
-                        "LAN".into()
+                        tr!("LAN").into()
                     } else {
                         g.map(|g| g.provider().to_string()).unwrap_or_default()
                     },
@@ -2978,7 +3038,7 @@ impl OpenHlswApp {
             p,
             "player_filter",
             &mut self.player_filter,
-            "name, Steam ID or IP",
+            tr!("name, Steam ID or IP"),
             total,
         );
         list_frame(ui, p, |ui| {
@@ -3005,7 +3065,9 @@ impl OpenHlswApp {
             )
             .show(ui, |ui| {
                 let Some(idx) = self.selected_index() else {
-                    ui.add_enabled_ui(false, |ui| ui.label("Select a server in the list first."));
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.label(tr!("Select a server in the list first."))
+                    });
                     return;
                 };
                 match self.tab {
@@ -3025,7 +3087,7 @@ impl OpenHlswApp {
         let id = s.id;
 
         ui.horizontal_top(|ui| {
-            group_box(ui, p, "Rcon Password", 200.0, |ui| {
+            group_box(ui, p, tr!("Rcon Password"), 200.0, |ui| {
                 egui::Grid::new("rcon_pw_grid")
                     .num_columns(2)
                     .spacing([8.0, 5.0])
@@ -3044,17 +3106,17 @@ impl OpenHlswApp {
                         if pw.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                             actions.push(Action::RconTest(id));
                         }
-                        if ui.add_sized([75.0, 18.0], Button::new("Test")).clicked() {
+                        if ui.add(Button::new(tr!("Test")).min_size(egui::vec2(75.0, 18.0))).clicked() {
                             actions.push(Action::RconTest(id));
                         }
                         ui.end_row();
 
                         ui.horizontal(|ui| {
-                            ui.label("Status:");
+                            ui.label(tr!("Status:"));
                             ui.label(rcon_status_text(&s.rcon_status, p));
                         });
                         if ui
-                            .add_sized([75.0, 18.0], Button::new("Disconnect"))
+                            .add(Button::new(tr!("Disconnect")).min_size(egui::vec2(75.0, 18.0)))
                             .clicked()
                         {
                             actions.push(Action::RconDisconnect(id));
@@ -3062,14 +3124,14 @@ impl OpenHlswApp {
                         ui.end_row();
 
                         ui.horizontal(|ui| {
-                            if ui.checkbox(hide, "Hide").changed() {
+                            if ui.checkbox(hide, tr!("Hide")).changed() {
                                 actions.push(Action::SaveConfig);
                             }
                             ui.add_space(14.0);
                             if ui
-                                .checkbox(&mut s.save_password, "Save")
+                                .checkbox(&mut s.save_password, tr!("Save"))
                                 .on_hover_text(
-                                    "Stores the password in plain text in the settings file",
+                                    tr!("Stores the password in plain text in the settings file"),
                                 )
                                 .changed()
                             {
@@ -3077,8 +3139,8 @@ impl OpenHlswApp {
                             }
                         });
                         if ui
-                            .add(Button::new("Properties...").min_size(egui::vec2(75.0, 18.0)))
-                            .on_hover_text("Log port and public IP")
+                            .add(Button::new(tr!("Properties...")).min_size(egui::vec2(75.0, 18.0)))
+                            .on_hover_text(tr!("Log port and public IP"))
                             .clicked()
                         {
                             actions.push(Action::OpenSettings(SettingsTab::Connections));
@@ -3088,20 +3150,20 @@ impl OpenHlswApp {
             });
 
             let log_on_map_change = &mut self.settings.log_on_map_change;
-            group_box(ui, p, "Receive Server Log", 120.0, |ui| {
+            group_box(ui, p, tr!("Receive Server Log"), 120.0, |ui| {
                 let active = s.log_target.is_some();
                 if ui
-                    .add_sized([110.0, 18.0], Button::new("Get Log (Internet)"))
+                    .add(Button::new(tr!("Get Log (Internet)")).min_size(egui::vec2(110.0, 18.0)))
                     .on_hover_text(
-                        "Server sends its log to your public IP (port must be forwarded)",
+                        tr!("Server sends its log to your public IP (port must be forwarded)"),
                     )
                     .clicked()
                 {
                     actions.push(Action::StartLog { id, internet: true });
                 }
                 if ui
-                    .add_sized([110.0, 18.0], Button::new("Get Log (LAN)"))
-                    .on_hover_text("Server sends its log to your local IP")
+                    .add(Button::new(tr!("Get Log (LAN)")).min_size(egui::vec2(110.0, 18.0)))
+                    .on_hover_text(tr!("Server sends its log to your local IP"))
                     .clicked()
                 {
                     actions.push(Action::StartLog {
@@ -3110,7 +3172,7 @@ impl OpenHlswApp {
                     });
                 }
                 if ui
-                    .checkbox(log_on_map_change, "Retrieve log on map\nchange")
+                    .checkbox(log_on_map_change, tr!("Retrieve log on map\nchange"))
                     .changed()
                 {
                     actions.push(Action::SaveConfig);
@@ -3123,9 +3185,9 @@ impl OpenHlswApp {
             ui.vertical(|ui| {
                 ui.add_space(10.0);
                 if ui
-                    .checkbox(auto_update, "Auto Update Status")
+                    .checkbox(auto_update, tr!("Auto Update Status"))
                     .on_hover_text(
-                        "Regularly sends `status` (Steam IDs, IPs, ping) and sets up the server log (logaddress_add) for the Console and Chat tabs",
+                        tr!("Regularly sends `status` (Steam IDs, IPs, ping) and sets up the server log (logaddress_add) for the Console and Chat tabs"),
                     )
                     .changed()
                 {
@@ -3134,9 +3196,9 @@ impl OpenHlswApp {
                 let mut off = false;
                 ui.add_enabled(
                     false,
-                    egui::Checkbox::new(&mut off, "Enable Admin Notification"),
+                    egui::Checkbox::new(&mut off, tr!("Enable Admin Notification")),
                 )
-                .on_disabled_hover_text("Not implemented yet");
+                .on_disabled_hover_text(tr!("Not implemented yet"));
             });
         });
         // Keep the panel height stable when switching tabs.
@@ -3184,12 +3246,12 @@ impl OpenHlswApp {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let o = &mut self.settings.console;
                 let switches: [(&str, &str, &mut bool); 6] = [
-                    ("C", "Translate Log", &mut o.translate_log),
-                    ("*", "Hide rcon password", &mut o.hide_rcon_password),
-                    ("F", "Hide rcon feedback", &mut o.hide_feedback),
-                    ("D", "Show date", &mut o.show_date),
-                    ("E", "Show empty lines", &mut o.show_empty),
-                    ("A", "Hide automatic", &mut o.hide_automatic),
+                    ("C", tr!("Translate Log"), &mut o.translate_log),
+                    ("*", tr!("Hide rcon password"), &mut o.hide_rcon_password),
+                    ("F", tr!("Hide rcon feedback"), &mut o.hide_feedback),
+                    ("D", tr!("Show date"), &mut o.show_date),
+                    ("E", tr!("Show empty lines"), &mut o.show_empty),
+                    ("A", tr!("Hide automatic"), &mut o.hide_automatic),
                 ];
                 for (label, tip, flag) in switches {
                     if toggle_button(ui, p, label, *flag)
@@ -3226,9 +3288,9 @@ impl OpenHlswApp {
                                 .align(egui::Align2::LEFT_CENTER)
                                 .id_salt("console_input_field")
                                 .font(TextStyle::Monospace)
-                                .hint_text(
-                                    "RCON command, e.g. status  (Up/Down: history, Tab: complete)",
-                                )
+                                .hint_text(tr!(
+                                    "RCON command, e.g. status  (Up/Down: history, Tab: complete)"
+                                ))
                                 .desired_width(width),
                         )
                         .with_edit_menu();
@@ -3255,7 +3317,7 @@ impl OpenHlswApp {
                     egui::Popup::menu(&arrow).show(|ui| {
                         ui.set_min_width(width);
                         if history.is_empty() {
-                            ui.label("No commands yet");
+                            ui.label(tr!("No commands yet"));
                         }
                         for cmd in history.iter().rev().take(30) {
                             if ui.button(RichText::new(cmd).monospace()).clicked() {
@@ -3287,25 +3349,29 @@ impl OpenHlswApp {
                         }
                     }
                     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui.add_sized([60.0, 18.0], Button::new("Send")).clicked() || enter {
+                    if ui
+                        .add(Button::new(tr!("Send")).min_size(egui::vec2(60.0, 18.0)))
+                        .clicked()
+                        || enter
+                    {
                         actions.push(Action::SendConsole(id));
                         resp.request_focus();
                     }
                     if ui
-                        .add_sized([60.0, 18.0], Button::new("Complete"))
+                        .add(Button::new(tr!("Complete")).min_size(egui::vec2(60.0, 18.0)))
                         .clicked()
                     {
                         complete = true;
                         resp.request_focus();
                     }
                     if toggle_button(ui, p, "S", *autoscroll)
-                        .on_hover_text("Auto scroll")
+                        .on_hover_text(tr!("Auto scroll"))
                         .clicked()
                     {
                         *autoscroll = !*autoscroll;
                     }
                     if toggle_button(ui, p, "X", false)
-                        .on_hover_text("Clear console")
+                        .on_hover_text(tr!("Clear console"))
                         .clicked()
                     {
                         actions.push(Action::ClearConsole(id));
@@ -3433,7 +3499,7 @@ impl OpenHlswApp {
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("trace_route"),
             egui::ViewportBuilder::default()
-                .with_title("openHLSW Trace Route")
+                .with_title(tr!("openHLSW Trace Route"))
                 .with_inner_size([860.0, 560.0])
                 .with_min_inner_size([500.0, 300.0]),
             |ui, _class| {
@@ -3458,14 +3524,14 @@ impl OpenHlswApp {
         let mut open = true;
         let mut close = false;
         let title = match &dialog {
-            Dialog::NewList(_) => "New server list",
-            Dialog::ListProperties(_) => "Server list properties",
-            Dialog::MultiInsert(_) => "Multi Server Insert",
-            Dialog::ServerProperties(..) => "Server properties",
-            Dialog::ConfirmDeleteList => "Delete server list",
-            Dialog::ConnectLog => "Connect Log",
-            Dialog::ChangeRule(..) => "Change Value",
-            Dialog::SetId(..) => "Change ID",
+            Dialog::NewList(_) => tr!("New server list"),
+            Dialog::ListProperties(_) => tr!("Server list properties"),
+            Dialog::MultiInsert(_) => tr!("Multi Server Insert"),
+            Dialog::ServerProperties(..) => tr!("Server properties"),
+            Dialog::ConfirmDeleteList => tr!("Delete server list"),
+            Dialog::ConnectLog => tr!("Connect Log"),
+            Dialog::ChangeRule(..) => tr!("Change Value"),
+            Dialog::SetId(..) => tr!("Change ID"),
         };
         let list_name = self.list_name.clone();
         let connect_log = &self.connect_log;
@@ -3482,14 +3548,18 @@ impl OpenHlswApp {
                     ui.add_space(6.0);
                     let mut r = (false, false);
                     ui.horizontal(|ui| {
-                        r.0 = ui.add_sized([75.0, 22.0], Button::new("OK")).clicked();
-                        r.1 = ui.add_sized([75.0, 22.0], Button::new("Cancel")).clicked();
+                        r.0 = ui
+                            .add(Button::new(tr!("OK")).min_size(egui::vec2(75.0, 22.0)))
+                            .clicked();
+                        r.1 = ui
+                            .add(Button::new(tr!("Cancel")).min_size(egui::vec2(75.0, 22.0)))
+                            .clicked();
                     });
                     r
                 };
                 match &mut dialog {
                     Dialog::NewList(name) | Dialog::ListProperties(name) => {
-                        ui.label("Name:");
+                        ui.label(tr!("Name:"));
                         let r = ui
                             .add(
                                 TextEdit::singleline(name)
@@ -3515,11 +3585,13 @@ impl OpenHlswApp {
                         close |= cancel;
                     }
                     Dialog::MultiInsert(text) => {
-                        ui.label("Paste server addresses (one per line, or separated by commas):");
+                        ui.label(tr!(
+                            "Paste server addresses (one per line, or separated by commas):"
+                        ));
                         ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                             ui.add(
                                 TextEdit::multiline(text)
-                                    .hint_text("1.2.3.4:27015\nexample.org:27016 my comment")
+                                    .hint_text(tr!("1.2.3.4:27015\nexample.org:27016 my comment"))
                                     .desired_rows(12)
                                     .desired_width(f32::INFINITY),
                             )
@@ -3537,7 +3609,7 @@ impl OpenHlswApp {
                             .num_columns(2)
                             .spacing([8.0, 6.0])
                             .show(ui, |ui| {
-                                ui.label("IP/Port:");
+                                ui.label(tr!("IP/Port:"));
                                 ui.add(
                                     TextEdit::singleline(&mut draft.address)
                                         .align(egui::Align2::LEFT_CENTER)
@@ -3545,7 +3617,7 @@ impl OpenHlswApp {
                                 )
                                 .with_edit_menu();
                                 ui.end_row();
-                                ui.label("Comment:");
+                                ui.label(tr!("Comment:"));
                                 ui.add(
                                     TextEdit::singleline(&mut draft.comment)
                                         .align(egui::Align2::LEFT_CENTER)
@@ -3553,7 +3625,7 @@ impl OpenHlswApp {
                                 )
                                 .with_edit_menu();
                                 ui.end_row();
-                                ui.label("Rcon password:");
+                                ui.label(tr!("Rcon password:"));
                                 ui.add(
                                     TextEdit::singleline(&mut draft.rcon_password)
                                         .align(egui::Align2::LEFT_CENTER)
@@ -3563,12 +3635,15 @@ impl OpenHlswApp {
                                 .with_edit_menu();
                                 ui.end_row();
                                 ui.label("");
-                                ui.checkbox(&mut draft.save_password, "Save Rcon password");
+                                ui.checkbox(&mut draft.save_password, tr!("Save Rcon password"));
                                 ui.end_row();
                             });
                         let valid = ServerAddress::parse(&draft.address).is_some();
                         if !valid {
-                            ui.colored_label(Color32::from_rgb(220, 60, 60), "Invalid address");
+                            ui.colored_label(
+                                Color32::from_rgb(220, 60, 60),
+                                tr!("Invalid address"),
+                            );
                         }
                         let (ok, cancel) = ok_cancel(ui);
                         if ok && valid {
@@ -3578,7 +3653,7 @@ impl OpenHlswApp {
                         close |= cancel;
                     }
                     Dialog::SetId(id, text) => {
-                        ui.label("New ID (position in the server list):");
+                        ui.label(tr!("New ID (position in the server list):"));
                         let r = ui
                             .add(
                                 TextEdit::singleline(text)
@@ -3600,7 +3675,7 @@ impl OpenHlswApp {
                         close |= cancel;
                     }
                     Dialog::ChangeRule(id, key, value) => {
-                        ui.label(format!("New value of {key}:"));
+                        ui.label(tr!("New value of {key}:", key = key));
                         let r = ui
                             .add(
                                 TextEdit::singleline(value)
@@ -3620,8 +3695,9 @@ impl OpenHlswApp {
                         close |= cancel;
                     }
                     Dialog::ConfirmDeleteList => {
-                        ui.label(format!(
-                            "Delete the server list \"{list_name}\" and all its servers?"
+                        ui.label(tr!(
+                            "Delete the server list \"{list_name}\" and all its servers?",
+                            list_name = list_name
                         ));
                         let (ok, cancel) = ok_cancel(ui);
                         if ok {
@@ -3636,14 +3712,17 @@ impl OpenHlswApp {
                             .stick_to_bottom(true)
                             .show(ui, |ui| {
                                 if connect_log.is_empty() {
-                                    ui.label("No connections yet.");
+                                    ui.label(tr!("No connections yet."));
                                 }
                                 for line in connect_log {
                                     ui.label(RichText::new(line).monospace());
                                 }
                             });
                         ui.add_space(4.0);
-                        if ui.add_sized([75.0, 22.0], Button::new("Close")).clicked() {
+                        if ui
+                            .add(Button::new(tr!("Close")).min_size(egui::vec2(75.0, 22.0)))
+                            .clicked()
+                        {
                             close = true;
                         }
                     }
@@ -3670,12 +3749,16 @@ impl OpenHlswApp {
                             TextEdit::singleline(input)
                                 .align(egui::Align2::LEFT_CENTER)
                                 .id_salt("chat_input_field")
-                                .hint_text("Message to all players (rcon say)")
+                                .hint_text(tr!("Message to all players (rcon say)"))
                                 .desired_width((ui.available_width() - 60.0).max(100.0)),
                         )
                         .with_edit_menu();
                     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui.add_sized([50.0, 18.0], Button::new("Say")).clicked() || enter {
+                    if ui
+                        .add(Button::new(tr!("Say")).min_size(egui::vec2(50.0, 18.0)))
+                        .clicked()
+                        || enter
+                    {
                         actions.push(Action::Say(id));
                         resp.request_focus();
                     }
@@ -3690,7 +3773,7 @@ impl OpenHlswApp {
                     ui.horizontal(|ui| {
                         ui.add_space(4.0);
                         ui.label(
-                            RichText::new("Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.")
+                            RichText::new(tr!("Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it."))
                                 .color(p.weak_text),
                         );
                     });
@@ -3702,9 +3785,9 @@ impl OpenHlswApp {
                     .column(Column::initial(160.0).at_least(60.0).clip(true))
                     .column(Column::remainder().clip(true))
                     .header(HEADER_HEIGHT, |mut h| {
-                        h.col(|ui| { plain_header(ui, p, "Time"); });
-                        h.col(|ui| { plain_header(ui, p, "Name"); });
-                        h.col(|ui| { plain_header(ui, p, "Message"); });
+                        h.col(|ui| { plain_header(ui, p, tr!("Time")); });
+                        h.col(|ui| { plain_header(ui, p, tr!("Name")); });
+                        h.col(|ui| { plain_header(ui, p, tr!("Message")); });
                     })
                     .body(|body| {
                         body.rows(ROW_HEIGHT, s.chat.len(), |mut row| {
@@ -3725,7 +3808,7 @@ impl OpenHlswApp {
                                 ui.add(Label::new(name).wrap_mode(fit(ui)));
                             });
                             row.col(|ui| {
-                                let prefix = if c.team_only { "(Team) " } else { "" };
+                                let prefix = if c.team_only { tr!("(Team) ") } else { "" };
                                 ui.add(Label::new(format!("{prefix}{}", c.text)).wrap_mode(fit(ui)));
                             });
                         });
@@ -3749,13 +3832,16 @@ impl OpenHlswApp {
             .exact_size(250.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.add_sized([80.0, 18.0], Button::new("Refresh")).clicked() {
+                    if ui
+                        .add(Button::new(tr!("Refresh")).min_size(egui::vec2(80.0, 18.0)))
+                        .clicked()
+                    {
                         actions.push(Action::FetchBans(id));
                     }
                     if ui
                         .add_enabled(
                             s.ban_selected.is_some(),
-                            Button::new("Unban").min_size(egui::vec2(80.0, 18.0)),
+                            Button::new(tr!("Unban")).min_size(egui::vec2(80.0, 18.0)),
                         )
                         .clicked()
                     {
@@ -3763,24 +3849,30 @@ impl OpenHlswApp {
                     }
                 });
                 ui.add_space(6.0);
-                ui.label("Steam ID or IP:");
+                ui.label(tr!("Steam ID or IP:"));
                 ui.add(
                     TextEdit::singleline(ban_input)
                         .align(egui::Align2::LEFT_CENTER)
-                        .hint_text("STEAM_1:0:123 / 1.2.3.4")
+                        .hint_text(tr!("STEAM_1:0:123 / 1.2.3.4"))
                         .desired_width(230.0),
                 )
                 .with_edit_menu();
                 ui.horizontal(|ui| {
-                    ui.label("Minutes:");
+                    ui.label(tr!("Minutes:"));
                     ui.add(DragValue::new(ban_minutes).range(0..=525_600));
-                    ui.label(RichText::new("0 = permanent").color(p.weak_text));
+                    ui.label(RichText::new(tr!("0 = permanent")).color(p.weak_text));
                 });
                 ui.horizontal(|ui| {
-                    if ui.add_sized([80.0, 18.0], Button::new("Ban ID")).clicked() {
+                    if ui
+                        .add(Button::new(tr!("Ban ID")).min_size(egui::vec2(80.0, 18.0)))
+                        .clicked()
+                    {
                         actions.push(Action::AddBan { id, ip: false });
                     }
-                    if ui.add_sized([80.0, 18.0], Button::new("Ban IP")).clicked() {
+                    if ui
+                        .add(Button::new(tr!("Ban IP")).min_size(egui::vec2(80.0, 18.0)))
+                        .clicked()
+                    {
                         actions.push(Action::AddBan { id, ip: true });
                     }
                 });
@@ -3803,13 +3895,13 @@ impl OpenHlswApp {
                                 plain_header(ui, p, "#");
                             });
                             h.col(|ui| {
-                                plain_header(ui, p, "Type");
+                                plain_header(ui, p, tr!("Type"));
                             });
                             h.col(|ui| {
-                                plain_header(ui, p, "Steam ID / IP");
+                                plain_header(ui, p, tr!("Steam ID / IP"));
                             });
                             h.col(|ui| {
-                                plain_header(ui, p, "Duration");
+                                plain_header(ui, p, tr!("Duration"));
                             });
                         })
                         .body(|body| {
@@ -3821,7 +3913,7 @@ impl OpenHlswApp {
                                     ui.label(format!("{:02}", i + 1));
                                 });
                                 row.col(|ui| {
-                                    ui.label(if b.is_ip { "IP" } else { "ID" });
+                                    ui.label(if b.is_ip { tr!("IP") } else { "ID" });
                                 });
                                 row.col(|ui| {
                                     ui.add(
@@ -3864,7 +3956,10 @@ impl OpenHlswApp {
             .show_separator_line(false)
             .exact_size(170.0)
             .show(ui, |ui| {
-                if ui.add_sized([150.0, 20.0], Button::new("Update")).clicked() {
+                if ui
+                    .add(Button::new(tr!("Update")).min_size(egui::vec2(150.0, 20.0)))
+                    .clicked()
+                {
                     actions.push(Action::FetchMaps(id));
                 }
                 ui.add_space(4.0);
@@ -3872,19 +3967,22 @@ impl OpenHlswApp {
                 if ui
                     .add_enabled(
                         target.is_some(),
-                        Button::new("Change Level").min_size(egui::vec2(150.0, 20.0)),
+                        Button::new(tr!("Change Level")).min_size(egui::vec2(150.0, 20.0)),
                     )
                     .clicked()
                     && let Some(map) = target
                 {
                     actions.push(Action::ChangeLevel(id, map));
                 }
-                if ui.checkbox(kick_all, "Kick all on map\nchange").changed() {
+                if ui
+                    .checkbox(kick_all, tr!("Kick all on map\nchange"))
+                    .changed()
+                {
                     actions.push(Action::SaveConfig);
                 }
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Current:").color(p.weak_text));
+                    ui.label(RichText::new(tr!("Current:")).color(p.weak_text));
                     ui.label(RichText::new(&current).color(p.red));
                 });
                 if !s.maps_status.is_empty() {
@@ -3907,7 +4005,7 @@ impl OpenHlswApp {
                                 plain_header(ui, p, "#");
                             });
                             h.col(|ui| {
-                                plain_header(ui, p, "Map");
+                                plain_header(ui, p, tr!("Map"));
                             });
                         })
                         .body(|body| {
@@ -3966,29 +4064,31 @@ impl OpenHlswApp {
         }
 
         let mut show_about = self.show_about;
-        egui::Window::new("About openHLSW")
+        egui::Window::new(tr!("About openHLSW"))
             .open(&mut show_about)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(format!("openHLSW v{}", env!("CARGO_PKG_VERSION")));
-                ui.label("Free game server browser and RCON admin tool.");
-                ui.label("A remake of HLSW. Not affiliated with the original HLSW authors.");
+                ui.label(tr!("Free game server browser and RCON admin tool."));
+                ui.label(tr!(
+                    "A remake of HLSW. Not affiliated with the original HLSW authors."
+                ));
                 ui.add_space(6.0);
                 ui.label(format!("Copyright (C) 2026 {COPYRIGHT_HOLDER}"));
-                ui.label("License: GNU General Public License v3.0 or later");
-                if ui.button("License...").clicked() {
+                ui.label(tr!("License: GNU General Public License v3.0 or later"));
+                if ui.button(tr!("License...")).clicked() {
                     self.show_license = true;
                 }
                 ui.add_space(6.0);
                 if let Some(path) = config::path() {
-                    ui.weak(format!("Settings: {}", path.display()));
+                    ui.weak(tr!("Settings: {path}", path = path.display()));
                 }
             });
         self.show_about = show_about;
 
         let mut show_license = self.show_license;
-        egui::Window::new("License")
+        egui::Window::new(tr!("License"))
             .open(&mut show_license)
             .collapsible(false)
             .resizable(true)
@@ -4000,7 +4100,7 @@ impl OpenHlswApp {
         if let Some((id, text)) = &mut self.editing_comment {
             let id = *id;
             let mut open = true;
-            egui::Window::new("Comment")
+            egui::Window::new(tr!("Comment"))
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
@@ -4017,14 +4117,14 @@ impl OpenHlswApp {
                         r.request_focus();
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("OK").clicked() || enter {
+                        if ui.button(tr!("OK")).clicked() || enter {
                             if let Some(s) = self.servers.iter_mut().find(|s| s.id == id) {
                                 s.comment = text.trim().to_string();
                             }
                             actions.push(Action::SaveConfig);
                             close = true;
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(tr!("Cancel")).clicked() {
                             close = true;
                         }
                     });
@@ -4128,7 +4228,7 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         for &(title, tab) in tabs {
-            let galley = WidgetText::from(title).into_galley(
+            let galley = WidgetText::from(crate::i18n::t(title)).into_galley(
                 ui,
                 Some(TextWrapMode::Extend),
                 f32::INFINITY,
@@ -4172,7 +4272,7 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(
                     clicked = Some(t);
                 }
             } else {
-                resp.on_hover_text("Not implemented yet");
+                resp.on_hover_text(tr!("Not implemented yet"));
             }
         }
     });
@@ -4256,7 +4356,11 @@ fn sort_header<C: PartialEq + Copy + Send + Sync + 'static>(
 ) -> (bool, egui::Response) {
     let edge = separator_double_clicked(ui);
     let resp = header_cell(ui, p, |ui| {
-        ui.add(Label::new(title).selectable(false).wrap_mode(fit(ui)));
+        ui.add(
+            Label::new(crate::i18n::t(title))
+                .selectable(false)
+                .wrap_mode(fit(ui)),
+        );
         if sort.0 == col {
             // Drawn by hand: the bundled UI fonts have no arrow glyphs.
             let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), Sense::hover());
@@ -4307,7 +4411,10 @@ fn column_menu(
     for &(title, visible, optional) in columns {
         let mut on = visible;
         if ui
-            .add_enabled(optional, egui::Checkbox::new(&mut on, title))
+            .add_enabled(
+                optional,
+                egui::Checkbox::new(&mut on, crate::i18n::t(title)),
+            )
             .clicked()
         {
             actions.push(Action::ToggleColumn {
@@ -4317,7 +4424,7 @@ fn column_menu(
         }
     }
     ui.separator();
-    if ui.button("Reset column width").clicked() {
+    if ui.button(tr!("Reset column width")).clicked() {
         actions.push(Action::ResetColumns { players });
         ui.close();
     }
@@ -4576,7 +4683,7 @@ fn server_table(
                                 }
                                 ui.add(Label::new(num).selectable(false));
                                 if !s.rcon_password.is_empty() {
-                                    star(ui, 12.0).on_hover_text("RCON password set");
+                                    star(ui, 12.0).on_hover_text(tr!("RCON password set"));
                                 }
                             });
                         }
@@ -4672,22 +4779,22 @@ fn server_table(
 
 /// "Change ID" submenu: the # of a server is its position in the list.
 fn change_id_menu(ui: &mut Ui, id: ServerId, actions: &mut Vec<Action>) {
-    ui.menu_button("Change ID", |ui| {
-        if ui.button("Increase\t+").clicked() {
+    ui.menu_button(tr!("Change ID"), |ui| {
+        if ui.button(tr!("Increase\t+")).clicked() {
             actions.push(Action::MoveServer(id, 1));
             ui.close();
         }
-        if ui.button("Decrease\t-").clicked() {
+        if ui.button(tr!("Decrease\t-")).clicked() {
             actions.push(Action::MoveServer(id, -1));
             ui.close();
         }
-        if ui.button("Set").clicked() {
+        if ui.button(tr!("Set")).clicked() {
             actions.push(Action::OpenDialog(Dialog::SetId(id, String::new())));
             ui.close();
         }
         ui.separator();
         if ui
-            .button("Set all server IDs to current sequence")
+            .button(tr!("Set all server IDs to current sequence"))
             .clicked()
         {
             actions.push(Action::RenumberServers);
@@ -4699,48 +4806,48 @@ fn change_id_menu(ui: &mut Ui, id: ServerId, actions: &mut Vec<Action>) {
 /// Right-click menu of the server list, laid out like HLSW's.
 fn server_context_menu(ui: &mut Ui, s: &Server, other_lists: &[String], actions: &mut Vec<Action>) {
     let id = s.id;
-    if ui.button("Connect...").clicked() {
+    if ui.button(tr!("Connect...")).clicked() {
         actions.push(Action::Connect(id));
         ui.close();
     }
     copy_menu(ui, s, actions);
     ui.separator();
-    if ui.button("Delete\tDel").clicked() {
+    if ui.button(tr!("Delete\tDel")).clicked() {
         actions.push(Action::Remove(id));
         ui.close();
     }
     list_menus(ui, id, other_lists, actions);
     ui.separator();
     change_id_menu(ui, id, actions);
-    if ui.button("Reset Average Ping").clicked() {
+    if ui.button(tr!("Reset Average Ping")).clicked() {
         actions.push(Action::ResetPing(id));
         ui.close();
     }
     ui.separator();
-    if ui.button("Properties...").clicked() {
+    if ui.button(tr!("Properties...")).clicked() {
         actions.push(Action::OpenDialog(props_dialog(s)));
         ui.close();
     }
-    if ui.button("Trace Route...").clicked() {
+    if ui.button(tr!("Trace Route...")).clicked() {
         actions.push(Action::TraceRoute(id));
         ui.close();
     }
     ui.separator();
-    if ui.button("Rcon Status Command").clicked() {
+    if ui.button(tr!("Rcon Status Command")).clicked() {
         actions.push(Action::RconStatus(id));
         ui.close();
     }
 }
 
 fn copy_menu(ui: &mut Ui, s: &Server, actions: &mut Vec<Action>) {
-    ui.menu_button("Copy", |ui| {
+    ui.menu_button(tr!("Copy"), |ui| {
         let name = s.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
         let items = [
-            ("Address", s.address.to_string()),
-            ("Name", name.clone()),
-            ("Address + Name", format!("{} {name}", s.address)),
+            (tr!("Address"), s.address.to_string()),
+            (tr!("Name"), name.clone()),
+            (tr!("Address + Name"), format!("{} {name}", s.address)),
             (
-                "steam://connect link",
+                tr!("steam://connect link"),
                 format!("steam://connect/{}", s.address),
             ),
         ];
@@ -4755,7 +4862,7 @@ fn copy_menu(ui: &mut Ui, s: &Server, actions: &mut Vec<Action>) {
 
 fn list_menus(ui: &mut Ui, id: ServerId, other_lists: &[String], actions: &mut Vec<Action>) {
     ui.add_enabled_ui(!other_lists.is_empty(), |ui| {
-        ui.menu_button("Move to Server List", |ui| {
+        ui.menu_button(tr!("Move to Server List"), |ui| {
             for name in other_lists {
                 if ui.button(name).clicked() {
                     actions.push(Action::MoveToList(id, name.clone()));
@@ -4763,7 +4870,7 @@ fn list_menus(ui: &mut Ui, id: ServerId, other_lists: &[String], actions: &mut V
                 }
             }
         });
-        ui.menu_button("Copy to Server List", |ui| {
+        ui.menu_button(tr!("Copy to Server List"), |ui| {
             for name in other_lists {
                 if ui.button(name).clicked() {
                     actions.push(Action::CopyToList(id, name.clone()));
@@ -4789,41 +4896,41 @@ fn props_dialog(s: &Server) -> Dialog {
 /// Entries of the "Server" menu.
 fn server_menu_items(ui: &mut Ui, s: &Server, other_lists: &[String], actions: &mut Vec<Action>) {
     let id = s.id;
-    if ui.button("Connect...\tCtrl+G").clicked() {
+    if ui.button(tr!("Connect...\tCtrl+G")).clicked() {
         actions.push(Action::Connect(id));
         ui.close();
     }
     copy_menu(ui, s, actions);
     ui.separator();
-    if ui.button("Delete\tCtrl+D").clicked() {
+    if ui.button(tr!("Delete\tCtrl+D")).clicked() {
         actions.push(Action::Remove(id));
         ui.close();
     }
     list_menus(ui, id, other_lists, actions);
     ui.separator();
-    if ui.button("Find\tCtrl+F").clicked() {
+    if ui.button(tr!("Find\tCtrl+F")).clicked() {
         actions.push(Action::FocusSearch);
         ui.close();
     }
-    if ui.button("Edit comment...").clicked() {
+    if ui.button(tr!("Edit comment...")).clicked() {
         actions.push(Action::EditComment(id));
         ui.close();
     }
     change_id_menu(ui, id, actions);
-    if ui.button("Reset Average Ping").clicked() {
+    if ui.button(tr!("Reset Average Ping")).clicked() {
         actions.push(Action::ResetPing(id));
         ui.close();
     }
-    if ui.button("Properties...\tCtrl+P").clicked() {
+    if ui.button(tr!("Properties...\tCtrl+P")).clicked() {
         actions.push(Action::OpenDialog(props_dialog(s)));
         ui.close();
     }
-    if ui.button("Trace Route...\tCtrl+T").clicked() {
+    if ui.button(tr!("Trace Route...\tCtrl+T")).clicked() {
         actions.push(Action::TraceRoute(id));
         ui.close();
     }
     ui.separator();
-    if ui.button("Rcon Status Command").clicked() {
+    if ui.button(tr!("Rcon Status Command")).clicked() {
         actions.push(Action::RconStatus(id));
         ui.close();
     }
@@ -4923,7 +5030,7 @@ fn info_panel(
             ui.add_space(8.0);
 
             let Some(s) = server else {
-                ui.label(RichText::new("No server selected.").color(p.weak_text));
+                ui.label(RichText::new(tr!("No server selected.")).color(p.weak_text));
                 return;
             };
             let text = |t: String| RichText::new(if t.is_empty() { "-".to_string() } else { t });
@@ -4940,7 +5047,7 @@ fn info_panel(
                         ui.add(Label::new(value).wrap());
                         ui.end_row();
                     };
-                    row(ui, "Address", text(s.address.to_string()));
+                    row(ui, tr!("Address"), text(s.address.to_string()));
                     let ping = match (&s.state, s.ping) {
                         (QueryState::Online, Some(ms)) => {
                             let avg = s
@@ -4950,13 +5057,13 @@ fn info_panel(
                             RichText::new(format!("{ms} ms{avg}"))
                         }
                         (QueryState::Offline(e), _) => RichText::new(e).color(p.red),
-                        _ => RichText::new("querying…").color(p.weak_text),
+                        _ => RichText::new(tr!("querying…")).color(p.weak_text),
                     };
-                    row(ui, "Ping", ping);
+                    row(ui, tr!("Ping"), ping);
                     match &location {
                         Some(Some(g)) if !g.country.is_empty() => {
                             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                                ui.label(RichText::new("Location").color(p.weak_text));
+                                ui.label(RichText::new(tr!("Location")).color(p.weak_text));
                             });
                             ui.horizontal(|ui| {
                                 if let Some(f) = flags.filter(|f| f.has(&g.country_code)) {
@@ -4970,16 +5077,16 @@ fn info_panel(
                             } else {
                                 format!("{} ({})", g.provider(), g.asn)
                             };
-                            row(ui, "Provider", text(provider));
+                            row(ui, tr!("Provider"), text(provider));
                         }
-                        Some(Some(_)) => row(ui, "Location", text("unknown".into())),
-                        Some(None) => row(ui, "Location", text("Local network".into())),
+                        Some(Some(_)) => row(ui, tr!("Location"), text(tr!("unknown").into())),
+                        Some(None) => row(ui, tr!("Location"), text(tr!("Local network").into())),
                         None => {}
                     }
                     if let Some(i) = &s.info {
                         row(
                             ui,
-                            "Game",
+                            tr!("Game"),
                             text(format!(
                                 "{} ({}, AppID {})",
                                 i.game,
@@ -4989,71 +5096,72 @@ fn info_panel(
                         );
                         let mut players = format!("{} / {}", i.players, i.max_players);
                         if i.bots > 0 {
-                            players += &format!(" ({} bots)", i.bots);
+                            players += &tr!(" ({bots} bots)", bots = i.bots);
                         }
                         let pc = if s.humans() > 0 { p.green } else { p.text };
-                        row(ui, "Players", RichText::new(players).color(pc));
+                        row(ui, tr!("Players"), RichText::new(players).color(pc));
                         let next = s
                             .rule("sm_nextmap")
                             .filter(|n| !n.is_empty())
-                            .map(|n| format!("  ({n} next)"))
+                            .map(|n| tr!("  ({n} next)", n = n))
                             .unwrap_or_default();
-                        row(ui, "Map", text(format!("{}{next}", i.map)));
-                        row(ui, "Limits", text(s.limits()));
+                        row(ui, tr!("Map"), text(format!("{}{next}", i.map)));
+                        row(ui, tr!("Limits"), text(s.limits()));
                         let ff = match s.rule("mp_friendlyfire") {
-                            Some("0") => "No",
-                            Some(_) => "Yes",
+                            Some("0") => tr!("No"),
+                            Some(_) => tr!("Yes"),
                             None => "",
                         };
-                        row(ui, "Friendly Fire", text(ff.into()));
+                        row(ui, tr!("Friendly Fire"), text(ff.into()));
                         row(
                             ui,
-                            "Server Type",
+                            tr!("Server Type"),
                             text(format!("{}, {}", i.server_type_name(), i.os_name())),
                         );
-                        row(ui, "Version", text(i.version.clone()));
-                        row(ui, "AddOns", text(s.addons_compact()));
+                        row(ui, tr!("Version"), text(i.version.clone()));
+                        row(ui, tr!("AddOns"), text(s.addons_compact()));
                         row(
                             ui,
-                            "Anti-Cheat",
+                            tr!("Anti-Cheat"),
                             text(if i.vac {
-                                "Valve Anti-Cheat".into()
+                                tr!("Valve Anti-Cheat").into()
                             } else {
-                                "None".into()
+                                tr!("None").into()
                             }),
                         );
                         row(
                             ui,
-                            "Password",
+                            tr!("Password"),
                             text(if i.passworded {
-                                "Yes".into()
+                                tr!("Yes").into()
                             } else {
-                                "No".into()
+                                tr!("No").into()
                             }),
                         );
                         if let Some(k) = &i.keywords {
-                            row(ui, "Tags", text(k.clone()));
+                            row(ui, tr!("Tags"), text(k.clone()));
                         }
                         if let Some(id) = i.steam_id {
-                            row(ui, "Steam ID", text(id.to_string()));
+                            row(ui, tr!("Steam ID"), text(id.to_string()));
                         }
                         if let Some(port) = i.tv_port {
                             row(
                                 ui,
-                                "SourceTV",
-                                text(format!(
-                                    "{} (port {port})",
-                                    i.tv_name.as_deref().unwrap_or("")
+                                tr!("SourceTV"),
+                                text(tr!(
+                                    "{name} (port {port})",
+                                    name = i.tv_name.as_deref().unwrap_or(""),
+                                    port = port
                                 )),
                             );
                         }
                     }
                     if let Some(t) = s.last_seen {
                         let ago = (chrono::Local::now() - t).num_seconds().max(0);
-                        row(ui, "Last Seen", text(format!("{ago} s ago")));
+                        row(ui, tr!("Last Seen"), text(tr!("{ago} s ago", ago = ago)));
                     }
                     if let Some(c) = &s.last_connected {
-                        row(ui, "Last Connected", text(c.clone()));
+                        row(ui, tr!("Last Connected"), text(c.clone()));
                     }
                 });
 
@@ -5064,7 +5172,7 @@ fn info_panel(
                         egui::vec2(80.0, 18.0),
                         Layout::right_to_left(Align::Center),
                         |ui| {
-                            ui.label(RichText::new("Comment").color(p.weak_text));
+                            ui.label(RichText::new(tr!("Comment")).color(p.weak_text));
                         },
                     );
                     let r = ui
@@ -5072,7 +5180,7 @@ fn info_panel(
                             TextEdit::singleline(&mut s.comment)
                                 .align(egui::Align2::LEFT_CENTER)
                                 .id_salt("info_comment")
-                                .hint_text("add a note for this server")
+                                .hint_text(tr!("add a note for this server"))
                                 .desired_width(ui.available_width() - 8.0),
                         )
                         .with_edit_menu();
@@ -5100,16 +5208,20 @@ fn trace_view(
             .add(
                 TextEdit::singleline(&mut trace.target)
                     .align(egui::Align2::LEFT_CENTER)
-                    .hint_text("IP address or host name")
+                    .hint_text(tr!("IP address or host name"))
                     .desired_width(ui.available_width() - 90.0),
             )
             .with_edit_menu();
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-        let label = if running { "Stop" } else { "Start" };
-        if ui.add_sized([80.0, 22.0], Button::new(label)).clicked() || enter {
+        let label = if running { tr!("Stop") } else { tr!("Start") };
+        if ui
+            .add(Button::new(label).min_size(egui::vec2(80.0, 22.0)))
+            .clicked()
+            || enter
+        {
             if running && !enter {
                 trace.stop_trace();
-                trace.status = "Stopped".into();
+                trace.status = tr!("Stopped").into();
             } else {
                 trace.start(ui.ctx());
             }
@@ -5122,8 +5234,8 @@ fn trace_view(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (color, text) in [
-                    (Color32::BLACK, "Different Route"),
-                    (Color32::from_rgb(255, 0, 0), "Timeout"),
+                    (Color32::BLACK, tr!("Different Route")),
+                    (Color32::from_rgb(255, 0, 0), tr!("Timeout")),
                 ] {
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 14.0), Sense::hover());
                     ui.painter().rect_filled(rect, 0.0, color);
@@ -5174,13 +5286,13 @@ fn trace_view(
                     .header(HEADER_HEIGHT, |mut h| {
                         for (i, title) in [
                             "#",
-                            "Ping",
-                            "Ø Ping",
-                            "Diff",
-                            "IP",
-                            "Reverse DNS",
-                            "Provider",
-                            "Ping Graph",
+                            tr!("Ping"),
+                            tr!("Ø Ping"),
+                            tr!("Diff"),
+                            tr!("IP"),
+                            tr!("Reverse DNS"),
+                            tr!("Provider"),
+                            tr!("Ping Graph"),
                         ]
                         .into_iter()
                         .enumerate()
@@ -5217,7 +5329,7 @@ fn trace_view(
                             });
                             row.col(|ui| match h.last() {
                                 Some(Some(ms)) => right(ui, RichText::new(ms.to_string())),
-                                Some(None) => right(ui, RichText::new("Timeout").color(p.red)),
+                                Some(None) => right(ui, RichText::new(tr!("Timeout")).color(p.red)),
                                 None => {}
                             });
                             row.col(|ui| {
@@ -5247,7 +5359,7 @@ fn trace_view(
                             row.col(|ui| {
                                 let Some(ip) = h.ip else { return };
                                 if !geo::is_public(ip) {
-                                    ui.label("LAN");
+                                    ui.label(tr!("LAN"));
                                 } else if let Some(g) = geo.get(&ip) {
                                     if let Some(f) = flags.filter(|f| f.has(&g.country_code)) {
                                         f.show(ui, &g.country_code, 11.0).on_hover_text(g.place());
@@ -5578,7 +5690,7 @@ fn graph_labels(
         let (text, y, color) = match last {
             Some(v) => (format!("{v} ms"), y_of(*v as f32), ink),
             None => (
-                "Timeout".to_string(),
+                tr!("Timeout").to_string(),
                 rect.top() + 10.0,
                 Color32::from_rgb(200, 0, 0),
             ),
@@ -5605,7 +5717,7 @@ fn graph_labels(
             );
             let text = match sample {
                 Some(v) => format!("{v} ms"),
-                None => "Timeout".to_string(),
+                None => tr!("Timeout").to_string(),
             };
             label(
                 egui::pos2(x + 4.0, rect.top() + 2.0),
@@ -5628,7 +5740,7 @@ fn filter_bar(
     total: usize,
 ) -> String {
     ui.horizontal(|ui| {
-        ui.label("Filter:");
+        ui.label(tr!("Filter:"));
         ui.add(
             TextEdit::singleline(text)
                 .align(egui::Align2::LEFT_CENTER)
@@ -5637,10 +5749,15 @@ fn filter_bar(
                 .desired_width(200.0),
         )
         .with_edit_menu();
-        if !text.is_empty() && ui.small_button("x").on_hover_text("Clear filter").clicked() {
+        if !text.is_empty()
+            && ui
+                .small_button("x")
+                .on_hover_text(tr!("Clear filter"))
+                .clicked()
+        {
             text.clear();
         }
-        ui.label(RichText::new(format!("{total} total")).color(p.weak_text));
+        ui.label(RichText::new(tr!("{total} total", total = total)).color(p.weak_text));
     });
     ui.add_space(2.0);
     text.trim().to_lowercase()
@@ -5891,9 +6008,9 @@ fn players_table(
                 let resp = header_cell(ui, p, |ui| {
                     if !data.has_status && data.server.is_some() {
                         let hint = if data.rcon_ok {
-                            "loading status…"
+                            tr!("loading status…")
                         } else {
-                            "Global ID / Addr / Ping need RCON (Rcon Config → Test)"
+                            tr!("Global ID / Addr / Ping need RCON (Rcon Config → Test)")
                         };
                         ui.add(
                             Label::new(RichText::new(hint).color(p.weak_text)).wrap_mode(fit(ui)),
@@ -6000,27 +6117,27 @@ fn player_context_menu(
         }
     };
     let sid = SteamId::parse(&steam_id);
-    ui.menu_button("Copy", |ui| {
-        copy(ui, "Name", Some(r.player.name.clone()));
+    ui.menu_button(tr!("Copy"), |ui| {
+        copy(ui, tr!("Name"), Some(r.player.name.clone()));
         // Bots and LAN players have no real Steam ID: copy what the server reported.
         copy(
             ui,
-            "Steam ID",
+            tr!("Steam ID"),
             Some(sid.map(|s| s.steam2()).unwrap_or_else(|| steam_id.clone())),
         );
-        copy(ui, "Steam ID3", sid.map(|s| s.steam3()));
-        copy(ui, "Steam ID64", sid.map(|s| s.steam64().to_string()));
-        copy(ui, "Steam Profile URL", sid.map(|s| s.profile_url()));
-        copy(ui, "Addr", addr.clone());
+        copy(ui, tr!("Steam ID3"), sid.map(|s| s.steam3()));
+        copy(ui, tr!("Steam ID64"), sid.map(|s| s.steam64().to_string()));
+        copy(ui, tr!("Steam Profile URL"), sid.map(|s| s.profile_url()));
+        copy(ui, tr!("Addr"), addr.clone());
         ui.separator();
-        copy(ui, "Whole Table", Some(players_as_text(list)));
+        copy(ui, tr!("Whole Table"), Some(players_as_text(list)));
     });
     let profile = ui
-        .add_enabled(sid.is_some(), Button::new("Open Steam Profile"))
+        .add_enabled(sid.is_some(), Button::new(tr!("Open Steam Profile")))
         .on_disabled_hover_text(if st.is_none() {
-            "Needs the Steam ID from RCON status (Rcon Config → Test)"
+            tr!("Needs the Steam ID from RCON status (Rcon Config → Test)")
         } else {
-            "No Steam account (bot or LAN player)"
+            tr!("No Steam account (bot or LAN player)")
         });
     if profile.clicked()
         && let Some(sid) = sid
@@ -6030,7 +6147,7 @@ fn player_context_menu(
     }
     ui.separator();
     if ui
-        .add_enabled(data.rcon_ok, Button::new("Rcon Status Command"))
+        .add_enabled(data.rcon_ok, Button::new(tr!("Rcon Status Command")))
         .clicked()
     {
         actions.push(Action::RconStatus(server));
@@ -6040,33 +6157,33 @@ fn player_context_menu(
     // Everything below needs the userid from RCON `status`.
     let Some(st) = st else {
         for label in [
-            "Kick",
-            "Kick & Connect",
-            "Ban ID",
-            "Ban ID Kick",
-            "Ban IP",
-            "Ban IP Kick",
+            tr!("Kick"),
+            tr!("Kick & Connect"),
+            tr!("Ban ID"),
+            tr!("Ban ID Kick"),
+            tr!("Ban IP"),
+            tr!("Ban IP Kick"),
         ] {
             ui.add_enabled(false, Button::new(label))
-                .on_disabled_hover_text("Needs RCON (Rcon Config → Test)");
+                .on_disabled_hover_text(tr!("Needs RCON (Rcon Config → Test)"));
         }
         return;
     };
-    if ui.button("Kick").clicked() {
+    if ui.button(tr!("Kick")).clicked() {
         actions.push(Action::KickPlayer(server, st.userid));
         ui.close();
     }
-    if ui.button("Kick & Connect").clicked() {
+    if ui.button(tr!("Kick & Connect")).clicked() {
         actions.push(Action::KickAndConnect(server, st.userid));
         ui.close();
     }
     ui.separator();
     let ip = st.ip.map(|ip| ip.to_string());
     for (label, by_ip, kick) in [
-        ("Ban ID", false, false),
-        ("Ban ID Kick", false, true),
-        ("Ban IP", true, false),
-        ("Ban IP Kick", true, true),
+        (tr!("Ban ID"), false, false),
+        (tr!("Ban ID Kick"), false, true),
+        (tr!("Ban IP"), true, false),
+        (tr!("Ban IP Kick"), true, true),
     ] {
         let target = if by_ip {
             ip.clone()
@@ -6079,7 +6196,7 @@ fn player_context_menu(
         };
         ui.menu_button(label, |ui| {
             for (dur, minutes) in BAN_DURATIONS {
-                if ui.button(dur).clicked() {
+                if ui.button(crate::i18n::t(dur)).clicked() {
                     actions.push(Action::BanPlayer {
                         id: server,
                         userid: st.userid,
@@ -6232,7 +6349,7 @@ fn rules_table(
     // Double click on a header / separator: fit the column to all (filtered) rules.
     let fit_width = |col: usize| {
         (autosize == Some(col)).then(|| {
-            let header = ["", "Key", "Value"][col];
+            let header = ["", tr!("Key"), tr!("Value")][col];
             fit_column(
                 ui,
                 header,
@@ -6258,7 +6375,7 @@ fn rules_table(
         ))
         .column(Column::remainder())
         .header(HEADER_HEIGHT, |mut h| {
-            for (i, title) in ["", "Key", "Value"].into_iter().enumerate() {
+            for (i, title) in ["", tr!("Key"), tr!("Value")].into_iter().enumerate() {
                 h.col(|ui| {
                     if plain_header(ui, p, title) {
                         autosize_request = Some(i);
@@ -6300,11 +6417,11 @@ fn rule_context_menu(
     server: Option<(ServerId, bool)>,
     actions: &mut Vec<Action>,
 ) {
-    ui.menu_button("Copy", |ui| {
+    ui.menu_button(tr!("Copy"), |ui| {
         let items = [
-            ("Key", r.key.clone()),
-            ("Value", r.value.clone()),
-            ("Both", format!("{} \"{}\"", r.key, r.value)),
+            (tr!("Key"), r.key.clone()),
+            (tr!("Value"), r.value.clone()),
+            (tr!("Both"), format!("{} \"{}\"", r.key, r.value)),
         ];
         for (label, text) in items {
             if ui.button(label).clicked() {
@@ -6313,7 +6430,7 @@ fn rule_context_menu(
             }
         }
         ui.separator();
-        if ui.button("All Rules").clicked() {
+        if ui.button(tr!("All Rules")).clicked() {
             let text: String = all
                 .iter()
                 .map(|r| format!("{} \"{}\"\n", r.key, r.value))
@@ -6321,7 +6438,7 @@ fn rule_context_menu(
             actions.push(Action::CopyText(text));
             ui.close();
         }
-        if ui.button("All Keys").clicked() {
+        if ui.button(tr!("All Keys")).clicked() {
             let text: String = all.iter().map(|r| format!("{}\n", r.key)).collect();
             actions.push(Action::CopyText(text));
             ui.close();
@@ -6329,8 +6446,8 @@ fn rule_context_menu(
     });
     let rcon = server.filter(|(_, ok)| *ok);
     let r_btn = ui
-        .add_enabled(rcon.is_some(), Button::new("Change Value..."))
-        .on_disabled_hover_text("Needs RCON (Rcon Config → Test)");
+        .add_enabled(rcon.is_some(), Button::new(tr!("Change Value...")))
+        .on_disabled_hover_text(tr!("Needs RCON (Rcon Config → Test)"));
     if r_btn.clicked()
         && let Some((id, _)) = rcon
     {
@@ -6345,10 +6462,10 @@ fn rule_context_menu(
 
 fn rcon_status_text(status: &RconStatus, p: &Palette) -> RichText {
     match status {
-        RconStatus::Unknown => RichText::new("Unknown"),
-        RconStatus::Connecting => RichText::new("Connecting…"),
-        RconStatus::Ok => RichText::new("OK").color(p.green),
-        RconStatus::BadPassword => RichText::new("Bad password").color(p.red),
+        RconStatus::Unknown => RichText::new(tr!("Unknown")),
+        RconStatus::Connecting => RichText::new(tr!("Connecting…")),
+        RconStatus::Ok => RichText::new(tr!("OK")).color(p.green),
+        RconStatus::BadPassword => RichText::new(tr!("Bad password")).color(p.red),
         RconStatus::Error(e) => RichText::new(e).color(p.red),
     }
 }
@@ -6408,10 +6525,8 @@ fn interval_edit(ui: &mut Ui, value: &mut f32, max_queries_per_sec: f32) -> bool
     let min = min_interval(max_queries_per_sec);
     let r = ui
         .add(DragValue::new(value).range(min..=3600.0).speed(0.05).max_decimals(2).suffix(" s"))
-        .on_hover_text(format!(
-            "Refresh interval. srcds answers only sv_max_queries_sec queries per second per IP; \
-             with the query limit of {max_queries_per_sec:.1}/s (Settings → Misc) the minimum is {min:.2} s."
-        ));
+        .on_hover_text(tr!("Refresh interval. srcds answers only sv_max_queries_sec queries per second per IP; \
+             with the query limit of {max_queries_per_sec}/s (Settings → Misc) the minimum is {min} s.", max_queries_per_sec = format!("{:.1}", max_queries_per_sec), min = format!("{:.2}", min)));
     *value = sanitize_interval(*value, max_queries_per_sec);
     r.drag_stopped() || r.lost_focus()
 }
@@ -6599,17 +6714,17 @@ impl EditMenu for egui::Response {
         self.context_menu(|ui| {
             let ctx = ui.ctx().clone();
             let mut command = None;
-            if ui.button("Cut\tCtrl+X").clicked() {
+            if ui.button(tr!("Cut\tCtrl+X")).clicked() {
                 command = Some(egui::ViewportCommand::RequestCut);
             }
-            if ui.button("Copy\tCtrl+C").clicked() {
+            if ui.button(tr!("Copy\tCtrl+C")).clicked() {
                 command = Some(egui::ViewportCommand::RequestCopy);
             }
-            if ui.button("Paste\tCtrl+V").clicked() {
+            if ui.button(tr!("Paste\tCtrl+V")).clicked() {
                 command = Some(egui::ViewportCommand::RequestPaste);
             }
             ui.separator();
-            if ui.button("Select All\tCtrl+A").clicked() {
+            if ui.button(tr!("Select All\tCtrl+A")).clicked() {
                 if let Some(mut state) = egui::TextEdit::load_state(&ctx, field.id) {
                     let all = egui::text::CCursorRange::two(
                         egui::text::CCursor::new(0),

@@ -106,7 +106,7 @@ impl TraceRoute {
         }
         self.hops.clear();
         self.length = None;
-        self.status = format!("Tracing route to {host}…");
+        self.status = tr!("Tracing route to {host}…", host = host);
         let (tx, rx) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         self.rx = Some(rx);
@@ -213,10 +213,10 @@ impl Notify {
 fn run(host: &str, n: &Notify) -> Result<(), String> {
     let target = (host, 0)
         .to_socket_addrs()
-        .map_err(|e| format!("Cannot resolve {host}: {e}"))?
+        .map_err(|e| tr!("Cannot resolve {host}: {e}", host = host, e = e))?
         .map(|a| a.ip())
         .find(IpAddr::is_ipv4)
-        .ok_or_else(|| format!("Cannot resolve {host}"))?;
+        .ok_or_else(|| tr!("Cannot resolve {host}", host = host))?;
     #[cfg(windows)]
     if let IpAddr::V4(v4) = target
         && icmp::available()
@@ -310,7 +310,7 @@ fn run_commands(host: &str, target: IpAddr, n: &Notify) -> Result<(), String> {
                 }
             })?;
             if found == 0 {
-                return Err("Trace route found no hops".into());
+                return Err(tr!("Trace route found no hops").into());
             }
             let len = route
                 .lock()
@@ -399,9 +399,9 @@ fn stream_trace(
         return Ok(());
     }
     Err(if cfg!(windows) {
-        "tracert not found".into()
+        tr!("tracert not found").into()
     } else {
-        "No trace route program found (install traceroute or tracepath)".into()
+        tr!("No trace route program found (install traceroute or tracepath)").into()
     })
 }
 

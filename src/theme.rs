@@ -31,9 +31,9 @@ impl TextSize {
 
     pub fn label(self) -> &'static str {
         match self {
-            TextSize::Normal => "Normal (100 %)",
-            TextSize::Large => "Large (115 %)",
-            TextSize::ExtraLarge => "Extra large (130 %)",
+            TextSize::Normal => tr!("Normal (100 %)"),
+            TextSize::Large => tr!("Large (115 %)"),
+            TextSize::ExtraLarge => tr!("Extra large (130 %)"),
         }
     }
 
@@ -150,8 +150,8 @@ impl Theme {
 
     pub fn label(self) -> &'static str {
         match self {
-            Theme::Light => "White (HLSW classic)",
-            Theme::Dark => "Black",
+            Theme::Light => tr!("White (HLSW classic)"),
+            Theme::Dark => tr!("Black"),
         }
     }
 }

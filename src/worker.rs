@@ -347,15 +347,17 @@ impl RconWorker {
             return false;
         };
         if address.query_port.is_some() {
-            let msg = "RCON is not supported for GameSpy servers";
+            let msg = tr!("RCON is not supported for GameSpy servers");
             self.emit(RconEvent::Status(RconStatus::Error(msg.into())));
             self.emit(RconEvent::Error(msg.into()));
             return false;
         }
         if password.is_empty() {
-            self.emit(RconEvent::Status(RconStatus::Error("No password".into())));
+            self.emit(RconEvent::Status(RconStatus::Error(
+                tr!("No password").into(),
+            )));
             self.emit(RconEvent::Error(
-                "No RCON password set (see the Rcon Config tab)".into(),
+                tr!("No RCON password set (see the Rcon Config tab)").into(),
             ));
             return false;
         }
@@ -400,7 +402,7 @@ impl RconWorker {
             }
             Err(RconError::BadPassword) => {
                 self.emit(RconEvent::Status(RconStatus::BadPassword));
-                self.emit(RconEvent::Error("Bad RCON password".into()));
+                self.emit(RconEvent::Error(tr!("Bad RCON password").into()));
                 false
             }
             Err(e) => {
@@ -447,17 +449,16 @@ impl RconWorker {
         port: u16,
         public_ip: Option<IpAddr>,
     ) -> Result<SocketAddr, String> {
-        let (address, _) = self.target.clone().ok_or("No RCON password set")?;
+        let (address, _) = self.target.clone().ok_or(tr!("No RCON password set"))?;
         let server = address.resolve().map_err(|e| format!("DNS: {e}"))?;
         let ip = if internet {
             match public_ip {
                 Some(ip) => ip,
-                None => {
-                    public_ip_lookup().map_err(|e| format!("Could not determine public IP: {e}"))?
-                }
+                None => public_ip_lookup()
+                    .map_err(|e| tr!("Could not determine public IP: {e}", e = e))?,
             }
         } else {
-            local_ip_towards(server).map_err(|e| format!("Could not determine LAN IP: {e}"))?
+            local_ip_towards(server).map_err(|e| tr!("Could not determine LAN IP: {e}", e = e))?
         };
         let target = SocketAddr::new(ip, port);
         // HLDS wants "ip port", srcds "ip:port".
@@ -466,8 +467,8 @@ impl RconWorker {
         } else {
             format!("logaddress_add {target}")
         };
-        self.exec(&cmd).ok_or("RCON failed")?;
-        self.exec("log on").ok_or("RCON failed")?;
+        self.exec(&cmd).ok_or(tr!("RCON failed"))?;
+        self.exec("log on").ok_or(tr!("RCON failed"))?;
         Ok(target)
     }
 }

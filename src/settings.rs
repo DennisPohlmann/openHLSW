@@ -458,9 +458,9 @@ pub enum OnConnect {
 impl OnConnect {
     fn label(self) -> &'static str {
         match self {
-            OnConnect::Nothing => "Do nothing",
-            OnConnect::Minimize => "Minimize openHLSW",
-            OnConnect::MinimizeNoTraffic => "Minimize openHLSW (no traffic)",
+            OnConnect::Nothing => tr!("Do nothing"),
+            OnConnect::Minimize => tr!("Minimize openHLSW"),
+            OnConnect::MinimizeNoTraffic => tr!("Minimize openHLSW (no traffic)"),
         }
     }
 }
@@ -492,11 +492,11 @@ impl SoundEvent {
     ];
     fn label(self) -> &'static str {
         match self {
-            SoundEvent::StartUp => "StartUp",
-            SoundEvent::IncomingMessage => "Incoming Message",
-            SoundEvent::SendingMessage => "Sending Message",
-            SoundEvent::PlayerJoin => "Player Join",
-            SoundEvent::Notification => "Notification",
+            SoundEvent::StartUp => tr!("StartUp"),
+            SoundEvent::IncomingMessage => tr!("Incoming Message"),
+            SoundEvent::SendingMessage => tr!("Sending Message"),
+            SoundEvent::PlayerJoin => tr!("Player Join"),
+            SoundEvent::Notification => tr!("Notification"),
         }
     }
 }
@@ -544,6 +544,8 @@ pub struct Settings {
     pub geo_lookup: bool,
     pub theme: Theme,
     pub text_size: TextSize,
+    /// User interface language.
+    pub language: crate::i18n::Language,
     /// Bumped when a default changes, so old configs are migrated once (1 = refresh 1 s).
     /// Missing in old configs = 0 (not the `Default` value), so they get migrated.
     #[serde(default)]
@@ -672,6 +674,7 @@ impl Default for Settings {
             geo_lookup: true,
             theme: Theme::Light,
             text_size: TextSize::Normal,
+            language: crate::i18n::Language::System,
             defaults_revision: 1,
             connect_on_double_click: true,
             view: ViewOptions::default(),
@@ -752,7 +755,7 @@ impl SettingsDialog {
     ) -> DialogResult {
         let mut result = DialogResult::Open;
         let mut open = true;
-        egui::Window::new("Settings")
+        egui::Window::new(tr!("Settings"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -782,17 +785,23 @@ impl SettingsDialog {
                     if ui
                         .add_enabled(
                             changed,
-                            Button::new("Apply").min_size(egui::vec2(75.0, 22.0)),
+                            Button::new(tr!("Apply")).min_size(egui::vec2(75.0, 22.0)),
                         )
                         .clicked()
                     {
                         result = DialogResult::Apply(self.draft.clone());
                     }
-                    if ui.add_sized([75.0, 22.0], Button::new("Cancel")).clicked() {
+                    if ui
+                        .add(Button::new(tr!("Cancel")).min_size(egui::vec2(75.0, 22.0)))
+                        .clicked()
+                    {
                         result = DialogResult::Cancel;
                     }
                     if ui
-                        .add_sized([75.0, 22.0], Button::new(RichText::new("OK").strong()))
+                        .add(
+                            Button::new(RichText::new(tr!("OK")).strong())
+                                .min_size(egui::vec2(75.0, 22.0)),
+                        )
                         .clicked()
                     {
                         result = DialogResult::Ok(self.draft.clone());
@@ -817,13 +826,13 @@ impl SettingsDialog {
                     .column(Column::remainder().clip(true))
                     .header(18.0, |mut h| {
                         h.col(|ui| {
-                            plain_header(ui, p, "Game");
+                            plain_header(ui, p, tr!("Game"));
                         });
                         h.col(|ui| {
-                            plain_header(ui, p, "Server query");
+                            plain_header(ui, p, tr!("Server query"));
                         });
                         h.col(|ui| {
-                            plain_header(ui, p, "File");
+                            plain_header(ui, p, tr!("File"));
                         });
                     })
                     .body(|body| {
@@ -841,9 +850,9 @@ impl SettingsDialog {
                             });
                             row.col(|ui| {
                                 let t = if game.supported() {
-                                    RichText::new("Yes").color(p.green)
+                                    RichText::new(tr!("Yes")).color(p.green)
                                 } else {
-                                    RichText::new("not yet").color(p.weak_text)
+                                    RichText::new(tr!("not yet")).color(p.weak_text)
                                 };
                                 ui.add(Label::new(t).selectable(false));
                             });
@@ -853,7 +862,9 @@ impl SettingsDialog {
                                     let r = ui
                                         .add(
                                             TextEdit::singleline(path)
-                                                .hint_text("path to the game .exe, empty = Steam")
+                                                .hint_text(tr!(
+                                                    "path to the game .exe, empty = Steam"
+                                                ))
                                                 .desired_width(f32::INFINITY),
                                         )
                                         .with_edit_menu();
@@ -875,7 +886,9 @@ impl SettingsDialog {
         });
         paths.retain(|_, v| !v.trim().is_empty());
         ui.vertical_centered(|ui| {
-            ui.label("(Double click to set the game executable. Empty = connect via Steam.)");
+            ui.label(tr!(
+                "(Double click to set the game executable. Empty = connect via Steam.)"
+            ));
         });
     }
 
@@ -884,34 +897,34 @@ impl SettingsDialog {
         group_box(
             ui,
             p,
-            "Selected server/server list on startup",
+            tr!("Selected server/server list on startup"),
             ui.available_width() - 20.0,
             |ui| {
-                ui.radio_value(&mut d.startup, StartupSelection::None, "None");
+                ui.radio_value(&mut d.startup, StartupSelection::None, tr!("None"));
                 ui.radio_value(
                     &mut d.startup,
                     StartupSelection::LastUsed,
-                    "Last used server/server list",
+                    tr!("Last used server/server list"),
                 );
                 ui.radio_value(
                     &mut d.startup,
                     StartupSelection::This,
-                    "This server/server list:",
+                    tr!("This server/server list:"),
                 );
                 ui.add_enabled_ui(d.startup == StartupSelection::This, |ui| {
                     egui::Grid::new("startup_grid")
                         .num_columns(2)
                         .spacing([8.0, 6.0])
                         .show(ui, |ui| {
-                            ui.label("Server list:");
+                            ui.label(tr!("Server list:"));
                             egui::ComboBox::from_id_salt("startup_list")
-                                .selected_text("Custom server list")
+                                .selected_text(tr!("Custom server list"))
                                 .width(260.0)
                                 .show_ui(ui, |ui| {
-                                    let _ = ui.selectable_label(true, "Custom server list");
+                                    let _ = ui.selectable_label(true, tr!("Custom server list"));
                                 });
                             ui.end_row();
-                            ui.label("IP/Port:");
+                            ui.label(tr!("IP/Port:"));
                             egui::ComboBox::from_id_salt("startup_addr")
                                 .selected_text(if d.startup_address.is_empty() {
                                     "-"
@@ -938,7 +951,7 @@ impl SettingsDialog {
     fn connecting(&mut self, ui: &mut Ui, p: &Palette) {
         let d = &mut self.draft;
         ui.horizontal(|ui| {
-            ui.label("On Connection:");
+            ui.label(tr!("On Connection:"));
             egui::ComboBox::from_id_salt("on_connect")
                 .selected_text(d.on_connect.label())
                 .width(250.0)
@@ -957,7 +970,7 @@ impl SettingsDialog {
         group_box(
             ui,
             p,
-            "Execute applications",
+            tr!("Execute applications"),
             ui.available_width() - 20.0,
             |ui| {
                 ui.allocate_ui(egui::vec2(ui.available_width(), 180.0), |ui| {
@@ -968,10 +981,10 @@ impl SettingsDialog {
                             .column(Column::remainder().clip(true))
                             .header(18.0, |mut h| {
                                 h.col(|ui| {
-                                    plain_header(ui, p, "Flags");
+                                    plain_header(ui, p, tr!("Flags"));
                                 });
                                 h.col(|ui| {
-                                    plain_header(ui, p, "File + Parameter");
+                                    plain_header(ui, p, tr!("File + Parameter"));
                                 });
                             })
                             .body(|body| {
@@ -1001,7 +1014,10 @@ impl SettingsDialog {
                     });
                 });
                 ui.horizontal(|ui| {
-                    if ui.add_sized([75.0, 20.0], Button::new("Add...")).clicked() {
+                    if ui
+                        .add(Button::new(tr!("Add...")).min_size(egui::vec2(75.0, 20.0)))
+                        .clicked()
+                    {
                         d.connect_apps.push(ExecApp {
                             enabled: true,
                             command: String::new(),
@@ -1011,7 +1027,7 @@ impl SettingsDialog {
                     if ui
                         .add_enabled(
                             selected.is_some(),
-                            Button::new("Delete").min_size(egui::vec2(75.0, 20.0)),
+                            Button::new(tr!("Delete")).min_size(egui::vec2(75.0, 20.0)),
                         )
                         .clicked()
                         && let Some(i) = selected.take()
@@ -1020,19 +1036,19 @@ impl SettingsDialog {
                         d.connect_apps.remove(i);
                     }
                 });
-                ui.label(RichText::new("Started when you connect to a server. %addr%, %ip% and %port% are replaced.").small());
+                ui.label(RichText::new(tr!("Started when you connect to a server. %addr%, %ip% and %port% are replaced.")).small());
             },
         );
     }
 
     fn rcon(&mut self, ui: &mut Ui, p: &Palette) {
         let d = &mut self.draft;
-        group_box(ui, p, "Rcon", ui.available_width() - 20.0, |ui| {
+        group_box(ui, p, tr!("Rcon"), ui.available_width() - 20.0, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(180.0);
-                ui.label("Cache size:");
+                ui.label(tr!("Cache size:"));
                 ui.add(DragValue::new(&mut d.console_cache).range(100..=100_000));
-                ui.label("entries.");
+                ui.label(tr!("entries."));
             });
             ui.add_space(6.0);
             let logs = crate::config::path()
@@ -1040,15 +1056,21 @@ impl SettingsDialog {
                 .unwrap_or_else(|| "logs".into());
             ui.checkbox(
                 &mut d.save_server_log,
-                format!(
-                    "Save Server Log ({logs}{}<SERVERADDR>{}*.log)",
-                    std::path::MAIN_SEPARATOR,
-                    std::path::MAIN_SEPARATOR
+                tr!(
+                    "Save Server Log ({path})",
+                    path = format!(
+                        "{logs}{}<SERVERADDR>{}*.log",
+                        std::path::MAIN_SEPARATOR,
+                        std::path::MAIN_SEPARATOR
+                    )
                 ),
             );
-            ui.checkbox(&mut d.save_chat_log, "Save Server Chat (*.chat.log)");
-            ui.checkbox(&mut d.autocomplete, "Autocomplete at rcon console (Tab)");
-            ui.checkbox(&mut d.log_on_map_change, "Retrieve log on map change");
+            ui.checkbox(&mut d.save_chat_log, tr!("Save Server Chat (*.chat.log)"));
+            ui.checkbox(
+                &mut d.autocomplete,
+                tr!("Autocomplete at rcon console (Tab)"),
+            );
+            ui.checkbox(&mut d.log_on_map_change, tr!("Retrieve log on map change"));
         });
     }
 
@@ -1058,46 +1080,48 @@ impl SettingsDialog {
         group_box(
             ui,
             p,
-            "Connection Settings",
+            tr!("Connection Settings"),
             ui.available_width() - 20.0,
             |ui| {
                 ui.horizontal(|ui| {
-                ui.label("UDP Port:");
+                ui.label(tr!("UDP Port:"));
                 ui.add(DragValue::new(&mut d.log_port).range(1024..=65535));
-                if ui.add_sized([110.0, 20.0], Button::new("Port test")).clicked() {
+                if ui.add(Button::new(tr!("Port test")).min_size(egui::vec2(110.0, 20.0))).clicked() {
                     *port_test = Some(match std::net::UdpSocket::bind(("0.0.0.0", d.log_port)) {
-                        Ok(_) => format!("UDP port {} is free on this computer.", d.log_port),
+                        Ok(_) => tr!("UDP port {log_port} is free on this computer.", log_port = d.log_port),
                         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                            format!("UDP port {} is in use (openHLSW may already be listening on it).", d.log_port)
+                            tr!("UDP port {log_port} is in use (openHLSW may already be listening on it).", log_port = d.log_port)
                         }
-                        Err(e) => format!("UDP port {}: {e}", d.log_port),
+                        Err(e) => tr!("UDP port {log_port}: {e}", log_port = d.log_port, e = e),
                     });
                 }
             });
-                ui.label("Port the server log is received on (Get Log). Must be forwarded for Get Log (Internet).");
+                ui.label(tr!("Port the server log is received on (Get Log). Must be forwarded for Get Log (Internet)."));
                 if let Some(msg) = port_test.as_ref() {
                     ui.label(RichText::new(msg).color(p.link));
                 }
             },
         );
-        group_box(ui, p, "Public IP", ui.available_width() - 20.0, |ui| {
+        group_box(ui, p, tr!("Public IP"), ui.available_width() - 20.0, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Public IP:");
+                ui.label(tr!("Public IP:"));
                 ui.add(
                     TextEdit::singleline(&mut d.public_ip)
-                        .hint_text("auto-detect")
+                        .hint_text(tr!("auto-detect"))
                         .desired_width(160.0),
                 )
                 .with_edit_menu();
             });
-            ui.label("Used by Get Log (Internet). Empty = ask api.ipify.org.");
+            ui.label(tr!(
+                "Used by Get Log (Internet). Empty = ask api.ipify.org."
+            ));
         });
     }
 
     fn sounds(&mut self, ui: &mut Ui, p: &Palette) {
         let d = &mut self.draft;
-        group_box(ui, p, "Sounds", ui.available_width() - 20.0, |ui| {
-            ui.checkbox(&mut d.sounds_disabled, "Disable sounds");
+        group_box(ui, p, tr!("Sounds"), ui.available_width() - 20.0, |ui| {
+            ui.checkbox(&mut d.sounds_disabled, tr!("Disable sounds"));
             ui.add_space(4.0);
             ui.add_enabled_ui(!d.sounds_disabled, |ui| {
                 ui.allocate_ui(egui::vec2(ui.available_width(), 220.0), |ui| {
@@ -1107,10 +1131,10 @@ impl SettingsDialog {
                             .column(Column::remainder().clip(true))
                             .header(18.0, |mut h| {
                                 h.col(|ui| {
-                                    plain_header(ui, p, "Event");
+                                    plain_header(ui, p, tr!("Event"));
                                 });
                                 h.col(|ui| {
-                                    plain_header(ui, p, "Sound Filename (.wav)");
+                                    plain_header(ui, p, tr!("Sound Filename (.wav)"));
                                 });
                             })
                             .body(|body| {
@@ -1122,7 +1146,7 @@ impl SettingsDialog {
                                     row.col(|ui| {
                                         ui.add(
                                             TextEdit::singleline(&mut s.file)
-                                                .hint_text("path to a .wav file")
+                                                .hint_text(tr!("path to a .wav file"))
                                                 .desired_width(f32::INFINITY),
                                         )
                                         .with_edit_menu();
@@ -1137,50 +1161,56 @@ impl SettingsDialog {
 
     fn misc(&mut self, ui: &mut Ui, p: &Palette) {
         let d = &mut self.draft;
-        group_box(ui, p, "Server list", ui.available_width() - 20.0, |ui| {
-            ui.checkbox(
-                &mut d.auto_refresh,
-                "Auto update all servers in server list",
-            );
-            ui.horizontal(|ui| {
-                ui.add_space(20.0);
-                ui.label("Update interval");
-                ui.add(
-                    DragValue::new(&mut d.refresh_interval)
-                        .range((1.0 / d.max_queries_per_sec.max(0.1)).clamp(0.1, 10.0)..=3600.0)
-                        .speed(0.05)
-                        .max_decimals(2),
+        group_box(
+            ui,
+            p,
+            tr!("Server list"),
+            ui.available_width() - 20.0,
+            |ui| {
+                ui.checkbox(
+                    &mut d.auto_refresh,
+                    tr!("Auto update all servers in server list"),
                 );
-                ui.label("seconds.");
-            });
-            ui.horizontal(|ui| {
-                ui.add_space(20.0);
-                ui.label("Query limit");
-                ui.add(
-                    DragValue::new(&mut d.max_queries_per_sec)
-                        .range(0.5..=50.0)
-                        .speed(0.05)
-                        .max_decimals(1),
-                );
-                ui.label("queries per second and server.");
-            });
-            ui.horizontal(|ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(tr!("Update interval"));
+                    ui.add(
+                        DragValue::new(&mut d.refresh_interval)
+                            .range((1.0 / d.max_queries_per_sec.max(0.1)).clamp(0.1, 10.0)..=3600.0)
+                            .speed(0.05)
+                            .max_decimals(2),
+                    );
+                    ui.label(tr!("seconds."));
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    ui.label(tr!("Query limit"));
+                    ui.add(
+                        DragValue::new(&mut d.max_queries_per_sec)
+                            .range(0.5..=50.0)
+                            .speed(0.05)
+                            .max_decimals(1),
+                    );
+                    ui.label(tr!("queries per second and server."));
+                });
+                ui.horizontal(|ui| {
                 ui.add_space(20.0);
                 ui.label(
-                    RichText::new("srcds answers only sv_max_queries_sec (default 3) queries per second from one IP.")
+                    RichText::new(tr!("srcds answers only sv_max_queries_sec (default 3) queries per second from one IP."))
                         .color(p.weak_text),
                 );
             });
-            ui.checkbox(
-                &mut d.keep_order_on_hover,
-                "Only change server list order if mouse cursor is out of server list",
-            );
-            ui.checkbox(
-                &mut d.geo_lookup,
-                "Show server location and provider (looks up server IPs at ip-api.com)",
-            );
-        });
-        group_box(ui, p, "Skin", ui.available_width() - 20.0, |ui| {
+                ui.checkbox(
+                    &mut d.keep_order_on_hover,
+                    tr!("Only change server list order if mouse cursor is out of server list"),
+                );
+                ui.checkbox(
+                    &mut d.geo_lookup,
+                    tr!("Show server location and provider (looks up server IPs at ip-api.com)"),
+                );
+            },
+        );
+        group_box(ui, p, tr!("Skin"), ui.available_width() - 20.0, |ui| {
             egui::ComboBox::from_id_salt("skin")
                 .selected_text(d.theme.label())
                 .width(180.0)
@@ -1190,7 +1220,29 @@ impl SettingsDialog {
                     }
                 });
         });
-        group_box(ui, p, "Text size", ui.available_width() - 20.0, |ui| {
+        group_box(ui, p, tr!("Language"), ui.available_width() - 20.0, |ui| {
+            let label = |l: crate::i18n::Language| {
+                if l == crate::i18n::Language::System {
+                    format!(
+                        "{} ({})",
+                        tr!("Same as the system"),
+                        l.resolve().native_name()
+                    )
+                } else {
+                    l.native_name().to_string()
+                }
+            };
+            egui::ComboBox::from_id_salt("language")
+                .selected_text(label(d.language))
+                .width(240.0)
+                .height(420.0)
+                .show_ui(ui, |ui| {
+                    for l in crate::i18n::Language::ALL {
+                        ui.selectable_value(&mut d.language, l, label(l));
+                    }
+                });
+        });
+        group_box(ui, p, tr!("Text size"), ui.available_width() - 20.0, |ui| {
             ui.horizontal(|ui| {
                 for t in TextSize::ALL {
                     ui.radio_value(&mut d.text_size, t, t.label());
@@ -1200,7 +1252,10 @@ impl SettingsDialog {
         Frame::new()
             .inner_margin(Margin::symmetric(6, 4))
             .show(ui, |ui| {
-                ui.checkbox(&mut d.connect_on_double_click, "Connect on double click");
+                ui.checkbox(
+                    &mut d.connect_on_double_click,
+                    tr!("Connect on double click"),
+                );
             });
     }
 }
@@ -1209,7 +1264,7 @@ fn plugins(ui: &mut Ui, p: &Palette) {
     group_box(
         ui,
         p,
-        "Available Plugins",
+        tr!("Available Plugins"),
         ui.available_width() - 20.0,
         |ui| {
             ui.allocate_ui(egui::vec2(ui.available_width(), 150.0), |ui| {
@@ -1221,7 +1276,13 @@ fn plugins(ui: &mut Ui, p: &Palette) {
                         .column(Column::initial(55.0))
                         .column(Column::remainder())
                         .header(18.0, |mut h| {
-                            for t in ["Title", "Version", "Author", "Priority", "Type"] {
+                            for t in [
+                                tr!("Title"),
+                                tr!("Version"),
+                                tr!("Author"),
+                                tr!("Priority"),
+                                tr!("Type"),
+                            ] {
                                 h.col(|ui| {
                                     plain_header(ui, p, t);
                                 });
@@ -1232,22 +1293,28 @@ fn plugins(ui: &mut Ui, p: &Palette) {
             });
         },
     );
-    group_box(ui, p, "Description", ui.available_width() - 20.0, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Website:");
-            ui.add_space(60.0);
-            ui.label(RichText::new("None").color(p.link));
-        });
-        ui.allocate_ui(egui::vec2(ui.available_width(), 80.0), |ui| {
-            list_frame(ui, p, |ui| {
-                ui.label(RichText::new("No plugins installed.").color(p.weak_text));
+    group_box(
+        ui,
+        p,
+        tr!("Description"),
+        ui.available_width() - 20.0,
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label(tr!("Website:"));
+                ui.add_space(60.0);
+                ui.label(RichText::new(tr!("None")).color(p.link));
             });
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            ui.add_enabled(
-                false,
-                Button::new("Settings").min_size(egui::vec2(75.0, 20.0)),
-            );
-        });
-    });
+            ui.allocate_ui(egui::vec2(ui.available_width(), 80.0), |ui| {
+                list_frame(ui, p, |ui| {
+                    ui.label(RichText::new(tr!("No plugins installed.")).color(p.weak_text));
+                });
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                ui.add_enabled(
+                    false,
+                    Button::new(tr!("Settings")).min_size(egui::vec2(75.0, 20.0)),
+                );
+            });
+        },
+    );
 }

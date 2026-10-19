@@ -215,6 +215,7 @@ src/
   config.rs            JSON settings
   settings.rs          settings + settings dialog
   theme.rs             skins (White/Black), text size, fonts (Tahoma)
+  i18n.rs              user interface languages (tr! / t(), assets/lang/*.json)
   app.rs               GUI (egui/eframe) in the HLSW layout
   main.rs              program start
   bin/openhlsw-cli.rs  CLI
@@ -222,6 +223,19 @@ build.rs               icon atlas, window icon, .exe icon (Windows)
 assets/                flags, game icons, program icon (openhlsw.ico + SVG sources)
 tools/fake_srcds.py    test server
 ```
+
+### Translations
+
+The user interface is available in English, German, French, Spanish (Argentina),
+Portuguese (Portugal), Dutch, Danish, Swedish, Norwegian, Finnish, Polish, Czech, Slovak,
+Hungarian, Turkish, Russian and Chinese (Simplified and Traditional), chosen under
+Settings → Misc → Language ("Same as the system" by default).
+
+The English text in the code is the key: `tr!("Refresh")`, or with values
+`tr!("Added {count} servers", count = n)`. Each language is a JSON file in `assets/lang/`
+that maps the English text to the translation (`{"Refresh": "Aktualisieren", …}`);
+missing entries fall back to English. Keep the `{placeholders}` and the `\t` shortcuts
+(`"Refresh\tF5"`) in the translation – `cargo test` checks the placeholders.
 
 Protocols: [Server queries](https://developer.valvesoftware.com/wiki/Server_queries),
 [Source RCON Protocol](https://developer.valvesoftware.com/wiki/Source_RCON_Protocol).
