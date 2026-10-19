@@ -9,6 +9,8 @@ mod geo;
 mod settings;
 mod theme;
 mod trace;
+#[cfg(windows)]
+mod win_icon;
 mod worker;
 
 use eframe::egui;
@@ -34,6 +36,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "openHLSW",
         options,
-        Box::new(|cc| Ok(Box::new(app::OpenHlswApp::new(cc)))),
+        Box::new(|cc| {
+            // Taskbar / Alt+Tab icon from the icon embedded in the .exe.
+            #[cfg(windows)]
+            win_icon::apply(cc);
+            Ok(Box::new(app::OpenHlswApp::new(cc)))
+        }),
     )
 }

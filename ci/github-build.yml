@@ -1,0 +1,237 @@
+# Builds and packages openHLSW when a version tag "v*" is pushed
+# (git tag v0.1.0 && git push --tags) and publishes a GitHub release with all packages:
+#   Linux   (x86, x86_64, arm64): .tar.gz, .deb, .rpm
+#   Windows (x86, x86_64, arm64): .zip, .msi
+#   macOS   (Apple silicon):      .dmg, .tar.gz
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: clippy + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  linux:
+    name: linux ${{ matrix.arch }}
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - arch: x86
+            target: i686-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross,cargo-deb,cargo-generate-rpm
+
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      # cross builds in containers with an old glibc, so the binaries run on older distros too.
+      - name: Build
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package .tar.gz
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="openhlsw-v${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          cp target/${{ matrix.target }}/release/openhlsw \
+             target/${{ matrix.target }}/release/openhlsw-cli \
+             README.md CHANGELOG.md LICENSE \
+             packaging/linux/openhlsw.desktop packaging/linux/openhlsw.png \
+             "dist/$name/"
+          cp assets/games/NOTICE.txt "dist/$name/GAME-ICONS-NOTICE.txt"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -rf "dist/$name"
+
+      - name: Package .deb
+        run: cargo deb --no-build --no-strip --target ${{ matrix.target }} --output dist/
+
+      - name: Package .rpm
+        run: cargo generate-rpm --target ${{ matrix.target }} --output dist/
+
+      - run: ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openhlsw-linux-${{ matrix.arch }}
+          path: dist/*
+
+  windows:
+    name: windows ${{ matrix.arch }}
+    needs: check
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-pc-windows-msvc
+            wix_arch: x64
+          - arch: x86
+            target: i686-pc-windows-msvc
+            wix_arch: x86
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            wix_arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package .zip
+        shell: pwsh
+        run: |
+          $name = "openhlsw-v${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
+          $dir = "dist\$name"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item target\${{ matrix.target }}\release\openhlsw.exe, target\${{ matrix.target }}\release\openhlsw-cli.exe, README.md, CHANGELOG.md, LICENSE -Destination $dir
+          Copy-Item assets\games\NOTICE.txt "$dir\GAME-ICONS-NOTICE.txt"
+          Compress-Archive -Path "$dir\*" -DestinationPath "dist\$name.zip"
+          Remove-Item -Recurse -Force $dir
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Package .msi
+        shell: pwsh
+        run: |
+          $name = "openhlsw-v${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
+          wix build -arch ${{ matrix.wix_arch }} `
+            -d Version=${{ steps.version.outputs.version }} `
+            -d RepoDir="$PWD" `
+            -d BinDir="$PWD\target\${{ matrix.target }}\release" `
+            packaging\windows\openhlsw.wxs -o "dist\$name.msi"
+          Remove-Item -Force -ErrorAction SilentlyContinue "dist\$name.wixpdb"
+
+      - run: Get-ChildItem dist
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openhlsw-windows-${{ matrix.arch }}
+          path: dist/*
+
+  macos:
+    name: macos arm64
+    needs: check
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-apple-darwin
+
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: App bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          bin=target/aarch64-apple-darwin/release
+          app=build/openHLSW.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "$bin/openhlsw" "$bin/openhlsw-cli" "$app/Contents/MacOS/"
+          sed "s/@VERSION@/$version/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # Icon: .icns from the 256 px PNG.
+          mkdir -p build/openhlsw.iconset
+          for s in 16 32 64 128 256; do
+            sips -z $s $s packaging/linux/openhlsw.png --out "build/openhlsw.iconset/icon_${s}x${s}.png" >/dev/null
+          done
+          for s in 16 32 64 128; do
+            cp "build/openhlsw.iconset/icon_$((s * 2))x$((s * 2)).png" "build/openhlsw.iconset/icon_${s}x${s}@2x.png"
+          done
+          rm build/openhlsw.iconset/icon_64x64.png build/openhlsw.iconset/icon_64x64@2x.png
+          iconutil -c icns build/openhlsw.iconset -o "$app/Contents/Resources/openhlsw.icns"
+          # Ad-hoc signature (Apple silicon only runs signed code; not notarized).
+          codesign --force --deep --sign - "$app"
+
+      - name: Package .tar.gz and .dmg
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="openhlsw-v${{ steps.version.outputs.version }}-macos-arm64"
+          mkdir -p dist "build/$name"
+          cp -R build/openHLSW.app README.md CHANGELOG.md LICENSE "build/$name/"
+          cp assets/games/NOTICE.txt "build/$name/GAME-ICONS-NOTICE.txt"
+          tar -C build -czf "dist/$name.tar.gz" "$name"
+          # Disk image with the app and a link to /Applications for drag & drop install.
+          ln -s /Applications "build/$name/Applications"
+          hdiutil create -volname "openHLSW" -srcfolder "build/$name" -ov -format UDZO "dist/$name.dmg"
+
+      - run: ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openhlsw-macos-arm64
+          path: dist/*
+
+  release:
+    name: GitHub release
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: CHANGELOG.md
+          generate_release_notes: false
