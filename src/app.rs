@@ -27,6 +27,7 @@ use egui_extras::{Column, TableBuilder, TableRow};
 
 use openhlsw::a2s::{Player, QueryMeta, Rule, ServerInfo};
 use openhlsw::address::ServerAddress;
+use openhlsw::steamid::SteamId;
 
 use crate::config::{self, Config, SavedList, SavedServer};
 use crate::flags::Flags;
@@ -637,6 +638,8 @@ enum Action {
     Remove(ServerId),
     Connect(ServerId),
     CopyText(String),
+    /// Opens a web page in the default browser.
+    OpenUrl(String),
     EditComment(ServerId),
     NewList(String),
     OpenList(String),
@@ -1750,6 +1753,12 @@ impl OpenHlswApp {
             Action::CopyText(text) => {
                 self.status_message = format!("Copied {text}");
                 ctx.copy_text(text);
+            }
+            Action::OpenUrl(url) => {
+                self.status_message = match open_url(&url) {
+                    Ok(()) => format!("Opened {url}"),
+                    Err(e) => format!("Could not open {url}: {e}"),
+                };
             }
             Action::NewList(name) => {
                 let name = name.trim().to_string();
@@ -5943,13 +5952,35 @@ fn player_context_menu(
             ui.close();
         }
     };
+    let sid = SteamId::parse(&steam_id);
     ui.menu_button("Copy", |ui| {
         copy(ui, "Name", Some(r.player.name.clone()));
-        copy(ui, "Steam ID", Some(steam_id.clone()));
+        // Bots and LAN players have no real Steam ID: copy what the server reported.
+        copy(
+            ui,
+            "Steam ID",
+            Some(sid.map(|s| s.steam2()).unwrap_or_else(|| steam_id.clone())),
+        );
+        copy(ui, "Steam ID3", sid.map(|s| s.steam3()));
+        copy(ui, "Steam ID64", sid.map(|s| s.steam64().to_string()));
+        copy(ui, "Steam Profile URL", sid.map(|s| s.profile_url()));
         copy(ui, "Addr", addr.clone());
         ui.separator();
         copy(ui, "Whole Table", Some(players_as_text(list)));
     });
+    let profile = ui
+        .add_enabled(sid.is_some(), Button::new("Open Steam Profile"))
+        .on_disabled_hover_text(if st.is_none() {
+            "Needs the Steam ID from RCON status (Rcon Config → Test)"
+        } else {
+            "No Steam account (bot or LAN player)"
+        });
+    if profile.clicked()
+        && let Some(sid) = sid
+    {
+        actions.push(Action::OpenUrl(sid.profile_url()));
+        ui.close();
+    }
     ui.separator();
     if ui
         .add_enabled(data.rcon_ok, Button::new("Rcon Status Command"))

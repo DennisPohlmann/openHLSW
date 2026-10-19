@@ -7,3 +7,4 @@ pub mod address;
 pub mod gamespy2;
 pub mod rcon;
 pub mod stats;
+pub mod steamid;
