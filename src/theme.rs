@@ -272,14 +272,18 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
 
 /// Uses Tahoma (HLSW's font) if the system has it, otherwise a close substitute.
 /// The bundled egui fonts stay as fallbacks for missing glyphs.
-/// Full hinting with horizontal grid fitting: sharp stems at the small UI font sizes,
-/// like Windows' own text rendering.
+/// Light hinting (like FreeType's "slight" and ClearType's vertical-only grid fitting):
+/// horizontal strokes and the baseline snap to whole pixels, so small UI text is sharp,
+/// while glyph widths stay as designed. Full hinting also squeezes glyphs horizontally,
+/// which no longer matches their advance widths and leaves uneven gaps ("Rem ove").
+/// No sub-pixel binning: every glyph starts on a whole pixel instead of being blurred
+/// across two.
 fn crisp(mut data: FontData) -> FontData {
     use egui::epaint::text::{HintingTarget, SmoothHinting};
     data.tweak.hinting = Some(true);
     data.tweak.subpixel_binning = Some(false);
     data.tweak.hinting_target = HintingTarget::Smooth(SmoothHinting {
-        light: false,
+        light: true,
         symmetric_rendering: false,
         preserve_linear_metrics: false,
     });
