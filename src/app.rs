@@ -248,6 +248,11 @@ impl Server {
         }
     }
 
+    /// Source and Half-Life 1 servers have RCON; GameSpy servers (ip:port:queryport) not.
+    fn supports_rcon(&self) -> bool {
+        self.address.query_port.is_none() && !self.info.as_ref().is_some_and(|i| i.gamespy)
+    }
+
     fn is_offline(&self) -> bool {
         matches!(self.state, QueryState::Offline(_))
     }
@@ -3869,6 +3874,34 @@ impl OpenHlswApp {
                     });
                     return;
                 };
+                // GameSpy games (Battlefield 2, Deer Hunter 2005, …) have no RCON that
+                // openHLSW speaks: say so instead of asking for a password.
+                let s = &self.servers[idx];
+                if !s.supports_rcon() {
+                    let game = s
+                        .info
+                        .as_ref()
+                        .map(|i| i.game.clone())
+                        .filter(|g| !g.is_empty())
+                        .unwrap_or_else(|| tr!("this game").into());
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(
+                            RichText::new(tr!(
+                                "RCON is not supported for {game} servers.",
+                                game = game
+                            ))
+                            .strong(),
+                        );
+                        ui.label(
+                            RichText::new(tr!(
+                                "Server info, players and rules are queried without a password."
+                            ))
+                            .color(p.weak_text),
+                        );
+                    });
+                    return;
+                }
                 match self.tab {
                     Tab::RconConfig => self.rcon_config_tab(ui, p, idx, actions),
                     Tab::Console => self.console_tab(ui, p, idx, actions),
@@ -4604,17 +4637,29 @@ impl OpenHlswApp {
                                 )
                                 .with_edit_menu();
                                 ui.end_row();
+                                let rcon = ServerAddress::parse(&draft.address)
+                                    .is_none_or(|a| a.query_port.is_none());
+                                let no_rcon = tr!("RCON is not supported for this game");
                                 ui.label(tr!("Rcon password:"));
-                                ui.add(
+                                ui.add_enabled(
+                                    rcon,
                                     TextEdit::singleline(&mut draft.rcon_password)
                                         .align(egui::Align2::LEFT_CENTER)
                                         .password(true)
                                         .desired_width(260.0),
                                 )
+                                .on_disabled_hover_text(no_rcon)
                                 .with_edit_menu();
                                 ui.end_row();
                                 ui.label("");
-                                ui.checkbox(&mut draft.save_password, tr!("Save Rcon password"));
+                                ui.add_enabled(
+                                    rcon,
+                                    egui::Checkbox::new(
+                                        &mut draft.save_password,
+                                        tr!("Save Rcon password"),
+                                    ),
+                                )
+                                .on_disabled_hover_text(no_rcon);
                                 ui.end_row();
                             });
                         let valid = ServerAddress::parse(&draft.address).is_some();
@@ -6417,7 +6462,11 @@ fn server_context_menu(ui: &mut Ui, s: &Server, other_lists: &[String], actions:
         ui.close();
     }
     ui.separator();
-    if ui.button(tr!("Rcon Status Command")).clicked() {
+    if ui
+        .add_enabled(s.supports_rcon(), Button::new(tr!("Rcon Status Command")))
+        .on_disabled_hover_text(tr!("RCON is not supported for this game"))
+        .clicked()
+    {
         actions.push(Action::RconStatus(id));
         ui.close();
     }
@@ -6511,7 +6560,11 @@ fn server_menu_items(ui: &mut Ui, s: &Server, other_lists: &[String], actions: &
         ui.close();
     }
     ui.separator();
-    if ui.button(tr!("Rcon Status Command")).clicked() {
+    if ui
+        .add_enabled(s.supports_rcon(), Button::new(tr!("Rcon Status Command")))
+        .on_disabled_hover_text(tr!("RCON is not supported for this game"))
+        .clicked()
+    {
         actions.push(Action::RconStatus(id));
         ui.close();
     }
