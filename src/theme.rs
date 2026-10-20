@@ -20,9 +20,9 @@ pub enum Theme {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextSize {
-    Normal,
-    /// Default: 115 % reads closer to HLSW's 8 pt Tahoma on today's displays.
+    /// Default: HLSW's size (8 pt Tahoma), the sharpest.
     #[default]
+    Normal,
     Large,
     ExtraLarge,
 }
@@ -175,7 +175,7 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     // Fuller, darker strokes for dark text on light ground (thin grey text looks blurry).
     if theme == Theme::Light {
         v.text_options.color_transfer_function =
-            egui::epaint::FontColorTransferFunction::Gamma(0.65);
+            egui::epaint::FontColorTransferFunction::Gamma(0.55);
     }
     v.panel_fill = p.window;
     v.window_fill = p.window;
@@ -334,11 +334,12 @@ pub enum UiFont {
     /// The system's user interface font: Segoe UI on Windows, San Francisco / Helvetica on
     /// macOS, the desktop's sans-serif font on Linux (fontconfig). Its hinting is made for
     /// small sizes on screen, so it is the sharpest choice.
-    #[default]
     System,
     /// Arial: the system's, otherwise the bundled Liberation Sans (same letter widths).
     Arial,
-    /// Tahoma, HLSW's font: the system's, otherwise the bundled Wine Tahoma.
+    /// Tahoma, HLSW's font: the system's, otherwise the bundled Wine Tahoma. Default: at
+    /// 8 pt (100 %) it looks like HLSW and is drawn with the font's own screen hinting.
+    #[default]
     Tahoma,
     /// Inconsolata (bundled).
     Inconsolata,

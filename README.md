@@ -128,10 +128,10 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   Ping Graph, Skin). Keyboard shortcuts like HLSW (F3, F5, F6, Ctrl+G/D/F/P/T/I/O/R/L/U/M/W).
 - **Settings**: My Games (all HLSW games with icons, own game executable and start
   parameters), Startup, Connecting (incl. Quit openHLSW), Rcon, Connections, Plugins (empty),
-  Sounds, Misc (skin, **language**, **font** – the system font (default: Segoe UI on
-  Windows, the desktop font on Linux, San Francisco on macOS), Arial, Tahoma like HLSW,
-  Liberation Sans or Inconsolata; font sizes are snapped to whole screen pixels so text stays
-  sharp at every text size – and **text size**: Normal / Large (115 %, default) / Extra large).
+  Sounds, Misc (skin, **language**, **font** – Tahoma like HLSW (default), the system font (Segoe UI on
+  Windows, the desktop font on Linux, San Francisco on macOS), Arial, Liberation Sans or
+  Inconsolata – and **text size**: Normal (100 %, default, HLSW's size) / Large (115 %) /
+  Extra large (130 %); font sizes are snapped to whole screen pixels so text stays sharp).
 - **File → Advanced**: clear the location / provider cache, reset all ping graphs.
 - **Unicode**: names in every script (fallback fonts for symbols, CJK, Cyrillic …).
 - Servers: all Source games, **Counter-Strike 2** and all **Half-Life 1 games** (GoldSrc,

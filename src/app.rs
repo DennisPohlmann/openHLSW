@@ -1381,8 +1381,14 @@ impl Find {
 impl OpenHlswApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
-        let config = config::load();
+        let mut config = config::load();
         crate::i18n::set_language(config.settings.language);
+        // Old configs: switch once to HLSW's look (Tahoma, 100 %), the sharpest text.
+        if config.settings.appearance < crate::settings::APPEARANCE {
+            config.settings.font = crate::theme::UiFont::Tahoma;
+            config.settings.text_size = crate::theme::TextSize::Normal;
+            config.settings.appearance = crate::settings::APPEARANCE;
+        }
         theme::install_fonts(&cc.egui_ctx, config.settings.font);
         theme::apply(&cc.egui_ctx, config.settings.theme);
         cc.egui_ctx
@@ -6222,7 +6228,11 @@ pub(crate) fn styled_table<'a>(ui: &'a mut Ui, id: &str) -> TableBuilder<'a> {
 
 /// Header cell; returns the response of the whole cell (click = sort, double click = auto-size).
 pub(crate) fn header_cell(ui: &mut Ui, p: &Palette, add: impl FnOnce(&mut Ui)) -> egui::Response {
-    let rect = ui.max_rect().expand2(egui::vec2(3.0, 0.0));
+    // Cover the gaps between the cells, but never the list frame (first / last column).
+    let rect = ui
+        .max_rect()
+        .expand2(egui::vec2(3.0, 0.0))
+        .intersect(ui.clip_rect());
     let response = ui.interact(
         ui.max_rect(),
         ui.scope_id().with("header_cell"),
@@ -7005,7 +7015,7 @@ fn info_panel(
                 .show(ui, |ui| {
                     let row = |ui: &mut Ui, key: &str, value: RichText| {
                         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                            ui.label(RichText::new(key).color(p.weak_text));
+                            ui.label(RichText::new(key).color(p.text));
                         });
                         ui.add(Label::new(value).wrap());
                         ui.end_row();
@@ -7026,7 +7036,7 @@ fn info_panel(
                     match &location {
                         Some(Some(g)) if !g.country.is_empty() => {
                             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                                ui.label(RichText::new(tr!("Location")).color(p.weak_text));
+                                ui.label(RichText::new(tr!("Location")).color(p.text));
                             });
                             ui.horizontal(|ui| {
                                 if let Some(f) = flags.filter(|f| f.has(&g.country_code)) {
@@ -7139,7 +7149,7 @@ fn info_panel(
                         egui::vec2(80.0, 18.0),
                         Layout::right_to_left(Align::Center),
                         |ui| {
-                            ui.label(RichText::new(tr!("Comment")).color(p.weak_text));
+                            ui.label(RichText::new(tr!("Comment")).color(p.text));
                         },
                     );
                     let r = ui

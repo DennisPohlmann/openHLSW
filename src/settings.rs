@@ -562,6 +562,10 @@ pub struct Settings {
     pub font: UiFont,
     /// User interface language.
     pub language: crate::i18n::Language,
+    /// Look settings already updated to the current defaults (missing in old configs = 0:
+    /// they get Tahoma at 100 % once, like HLSW).
+    #[serde(default)]
+    pub appearance: u32,
     /// Bumped when a default changes, so old configs are migrated once (1 = refresh 1 s).
     /// Missing in old configs = 0 (not the `Default` value), so they get migrated.
     #[serde(default)]
@@ -697,9 +701,10 @@ impl Default for Settings {
             keep_order_on_hover: false,
             geo_lookup: true,
             theme: Theme::Light,
-            text_size: TextSize::Large,
-            font: UiFont::System,
+            text_size: TextSize::Normal,
+            font: UiFont::Tahoma,
             language: crate::i18n::Language::System,
+            appearance: APPEARANCE,
             defaults_revision: 1,
             connect_on_double_click: true,
             view: ViewOptions::default(),
@@ -786,6 +791,9 @@ const GOLDSRC_PRESETS: &[(&str, &str, &str)] = &[
     ("-noipx", "-noipx", "Deactivates IPX protocol"),
     ("-freq 100", "-freq 100", ""),
 ];
+
+/// Current revision of the look defaults, see [`Settings::appearance`].
+pub const APPEARANCE: u32 = 1;
 
 /// State of an open settings dialog: a draft that is applied on OK / Apply.
 pub struct SettingsDialog {
