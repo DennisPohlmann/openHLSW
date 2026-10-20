@@ -4,6 +4,57 @@ All notable changes to openHLSW are listed here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## [v0.1.4] - 2026-10-20
+
+### Added
+- **Game list like HLSW** next to "IP/Port": **Auto detect** (Source, Half-Life 1 and CS2
+  are recognised by themselves), the **not detectable games** (Armed Assault, Crysis,
+  GRAW 2, Sniper Elite, …) and **all games** of HLSW with their icons. Games whose query
+  protocol openHLSW does not speak yet are greyed out; for GameSpy 2 games with a known
+  query port (e.g. ArmA: 2303) `IP:port` is enough.
+- **Battlefield 2 / 2142** (GameSpy 3 queries with split answers and challenge):
+  - mods are told apart like in HLSW, e.g. "BF2 - Special Forces Expansion (gpm_coop)",
+    with the green "2" for Special Forces and a brown one for Battlefield 2;
+  - players with score, deaths, skill, ping, team name and bot flag; bots are counted in
+    brackets ("0 (4) / 32");
+  - operating system, dedicated, PunkBuster, VOIP and friendly fire from the `bf2_*` rules;
+  - Connect joins the server directly (`+modPath mods/<mod> +joinServer <ip> +port <port>`,
+    password and `+playerName`).
+  - Battlefield 2142, Vietnam, ArmA, ARMA 2, Crysis and Crysis Wars get their own icons
+    and names.
+- **Marking rows** in the players and rules lists: click, Ctrl+click, Shift+click, Ctrl+A,
+  Ctrl+C. The right-click menu acts on all marked rows (copy one line per row, kick, ban,
+  open Steam profiles, Global ID Database type, "Marked Rows" copy).
+- **Arrow keys** move through the server list, the players and the rules (with Shift the
+  marking grows in the players and rules lists).
+- **Every RCON command** a button sends (`listid`, `listip`, `maps *`, `listmaps`, kick,
+  ban, `say`, `logaddress_add`, `log on`, …) is shown in the console together with the
+  server's answer.
+
+### Changed
+- **Ping graph**: fixed scale – 10 ms stays near the bottom, 100 ms reaches the middle,
+  200 ms the top (only servers that are slow all the time widen it). Every bar runs from
+  green at the foot through yellow (100 ms) to red (200 ms).
+- **Offline servers** always go to the end of the server list (sorted among themselves the
+  same way) and move back up as soon as they answer again.
+- Games without RCON (GameSpy) show the Rcon section greyed out instead of asking for a
+  password; the RCON password in Server Properties and "Rcon Status Command" are greyed out
+  as well.
+- Server list filter: "Hide servers that do not answer" is now off by default.
+
+### Fixed
+- Windows: the Start menu and the taskbar showed a blank white icon. The installer's icon
+  now has the `.ico` name Windows needs for Start menu shortcuts, and the .exe embeds the
+  small icon sizes as bitmaps instead of PNG.
+- Ban list: IPs of Half-Life 1 servers (`193. 24.211.152`) were cut off; Unban now removes
+  the right IP.
+- Battlefield 2 servers (`ip:port:queryport`) did not answer the old GameSpy 2 request.
+- Servers disappeared from the list once they were offline while the filter was on.
+- The current and the average ping in the ping graph were drawn on top of each other.
+- Chat: your own messages ("Message to all players") did not show up in the chat window
+  when the server log did not reach openHLSW; Half-Life 1's `Server say "…"` log lines are
+  recognised.
+
 ## [v0.1.3] - 2026-10-20
 
 ### Added

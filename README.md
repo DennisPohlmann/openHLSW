@@ -10,7 +10,8 @@ Linux, macOS and FreeBSD, written in Rust. One native binary, no runtime needed.
 Supported servers: **Source Dedicated Server (SRCDS)** – CS:S, CS:GO, CS2, TF2, HL2:DM,
 GMod, L4D and other Source games – and **Half-Life 1 / GoldSrc (HLDS)**: CS 1.6,
 Condition Zero, DoD, TFC, NS, TS and other HL1 mods (queries, UDP RCON, server log) – and
-**GameSpy 2** servers such as **Deer Hunter 2005** (queries only).
+**GameSpy 2 / 3** servers such as **Battlefield 2** (incl. Special Forces and other mods),
+Battlefield 2142, ArmA, Crysis and **Deer Hunter 2005** (queries only).
 
 See [CHANGELOG.md](CHANGELOG.md) for what changed between versions.
 
@@ -59,7 +60,10 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   AddOns are detected from the rules (Source: MM:S, SMod, …; Half-Life 1: AMXX, ATAC, PTB,
   MM, …), Anti Cheat Tool shows VAC plus HLGuard / sXe / SMAC.
   Yellow star = RCON password stored. A server that has not answered for 10 s is offline:
-  the whole line turns red; its last known name, map and infos are kept (also after a restart).
+  the whole line turns red and moves to the end of the list (whatever column is sorted);
+  its last known name, map and infos are kept (also after a restart). When it answers
+  again, it moves back up into the sorted online servers.
+  Arrow up / down select the previous / next server.
 - **Column width**: double-click a column header or the column separator to fit the column
   to its longest value – of all rows, also those scrolled out of view (server list, players,
   rules). A single click on a header sorts.
@@ -72,15 +76,23 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   Status Command, Kick, Kick & Connect, Ban ID, Ban ID Kick, Ban IP, Ban IP Kick with a
   duration), rules (Copy Key/Value/Both/All Rules/All Keys, Change Value…).
 - **Copy / paste / cut** in every text field (Ctrl+C/V/X/A and right-click menu).
-- **Server info** (bottom left) with an HLSW style ping graph that grows with the panel
-  drawn in 3D (green bars for normal, orange for raised, red for high ping, timeouts as full
-  red bars; scale, average, peak values and the value under the mouse are shown):
+- **Marking rows** in the players and rules lists like in Windows lists: click, Ctrl+click,
+  Shift+click, Ctrl+A, arrow keys (with Shift); Ctrl+C copies the marked rows. The
+  right-click menu acts on all marked rows (copy, kick, ban, open Steam profiles, …).
+- **Server info** (bottom left) with an HLSW style ping graph that grows with the panel,
+  drawn in 3D on a fixed scale (100 ms in the middle, 200 ms at the top): every bar runs from
+  green at the foot through yellow to red, timeouts are full red bars; scale, average, peak
+  values, the current ping and the value under the mouse are shown without overlapping:
   address,
   location + provider, game, players, map, limits, friendly fire, server type, version,
   add-ons, anti-cheat, password, tags, Steam ID, SourceTV, last seen, last connected, comment.
 - **Players** (right) with filter: country flag, #, name, frags, time and – via RCON
-  `status` – ping, loss, Steam ID, IP.
+  `status` – ping, loss, Steam ID, IP; for Battlefield 2 score, deaths, skill, ping, team
+  and bot straight from the server query.
 - **Rules / cvars** (bottom right) with filter.
+- **Every RCON command** a button sends (ban list, maps, kick, say, Get Log, …) is shown in
+  the console with the server's answer. For games without RCON (GameSpy) the Rcon section
+  is shown greyed out.
 - **Rcon Config**: password per server, Test, status, Hide/Save, Receive Server Log
   (Get Log Internet/LAN, Retrieve log on map change), **Auto Update Status**
   (periodic `status` + automatic `logaddress_add`).
@@ -152,12 +164,19 @@ UDP RCON (`challenge rcon` + `rcon <challenge> "<password>" <command>`), `kick #
 and `logaddress_add <ip> <port>`. If the server info is not known yet and the TCP RCON port
 is closed, RCON falls back to UDP automatically.
 
-### GameSpy 2 (Deer Hunter 2005 …)
+### GameSpy 2 / 3 (Battlefield 2, Deer Hunter 2005 …)
 
-GameSpy 2 servers answer queries on a separate port, so they are entered as
-`IP:gameport:queryport`. openHLSW queries server info, players and rules from the query
-port. RCON is not available for them; Connect starts the game set in Settings → My Games
-(join the server from the game's own server browser).
+GameSpy servers answer queries on a separate port, so they are entered as
+`IP:gameport:queryport` (for games with a known query port, e.g. ArmA, `IP:port` is enough
+when the game is chosen in the IP/Port list). openHLSW finds out by itself whether a server
+speaks GameSpy 2 or the GameSpy 3 form (answers split over several packets, optionally with
+a challenge, e.g. Battlefield 2 / 2142) and remembers it. It queries server info, players
+and rules from the query port; Battlefield 2 mods (Special Forces = `xpack`, Project
+Reality, …) are shown like in HLSW ("BF2 - Special Forces Expansion (gpm_coop)") with their
+own icon, plus the operating system (`bf2_os`), PunkBuster and VOIP.
+RCON is not available for them. Connect starts the game set in Settings → My Games;
+Battlefield 2 / 2142 join the server directly (`+modPath mods/<mod> +joinServer <ip> +port
+<port>`), other games are joined from their own server browser.
 
 ### Location
 
@@ -262,7 +281,7 @@ Saved server logs are in `logs\<server>\` next to config.json.
 src/
   lib.rs, address.rs   address parsing (host:port, [IPv6]:port, steam://connect/)
   a2s.rs               A2S_INFO / A2S_PLAYER / A2S_RULES (challenge, Source + GoldSrc split packets)
-  gamespy2.rs          GameSpy 2 queries (Deer Hunter 2005 …)
+  gamespy2.rs          GameSpy 2 / 3 queries (Battlefield 2, Deer Hunter 2005 …)
   rcon.rs              RCON clients: Source (TCP, multi-packet answers) and GoldSrc (UDP)
   worker.rs            background threads: queries + one RCON thread per server, log listener
   trace.rs             Trace Route window (tracert/traceroute + ping per hop)
