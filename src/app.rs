@@ -6946,14 +6946,20 @@ fn trace_view(
 /// Bar color like HLSW: green for normal ping, orange for a raised one, red for a high one.
 /// A ping counts as raised/high when it is high in absolute terms (≥ 100 / 200 ms) or
 /// compared to the average of the graph (spikes).
-fn ping_color(ping: u32, avg: f32) -> Color32 {
-    let ping = ping as f32;
-    if ping >= 200.0 || ping > avg * 4.0 + 40.0 {
-        Color32::from_rgb(235, 30, 30)
-    } else if ping >= 100.0 || ping > avg * 2.0 + 15.0 {
-        Color32::from_rgb(255, 150, 0)
+/// Ping that is drawn in the middle of the graph and turns the bars yellow; twice this is
+/// red and the top of the default scale.
+const PING_HIGH: f32 = 100.0;
+
+/// Colour of the ping graph at a ping: green at 0 ms, yellow at 100 ms, red from 200 ms.
+fn ping_color(ms: f32) -> Color32 {
+    let green = Color32::from_rgb(30, 200, 40);
+    let yellow = Color32::from_rgb(245, 215, 0);
+    let red = Color32::from_rgb(230, 30, 25);
+    let t = (ms / PING_HIGH).clamp(0.0, 2.0);
+    if t <= 1.0 {
+        green.lerp_to_gamma(yellow, t)
     } else {
-        Color32::from_rgb(40, 210, 40)
+        yellow.lerp_to_gamma(red, t - 1.0)
     }
 }
 
@@ -7015,9 +7021,10 @@ fn ping_graph(
         }
     }
 
-    // Scale from the 90th percentile, not the maximum: a single huge ping (an answer that
-    // arrived just before the timeout) would otherwise squash all other bars. Bars above the
-    // scale are clipped at the top; their peak label shows the real value.
+    // Fixed scale like a traffic light: 10 ms stays near the bottom, 100 ms reaches the
+    // middle, 200 ms the top. Only servers that are slow all the time (90th percentile above
+    // 200 ms) widen it, so their bars are not all cut off. Bars above the scale are clipped
+    // at the top; their peak label shows the real value.
     let max = {
         let mut sorted: Vec<u32> = history.iter().flatten().copied().collect();
         sorted.sort_unstable();
@@ -7025,7 +7032,7 @@ fn ping_graph(
             .get((sorted.len() * 9 / 10).min(sorted.len().saturating_sub(1)))
             .copied()
             .unwrap_or(0);
-        (p90 as f32 * 1.6).max(80.0)
+        (p90 as f32 * 1.25).max(PING_HIGH * 2.0)
     };
     let (sum, count) = history
         .iter()
@@ -7052,17 +7059,13 @@ fn ping_graph(
             v.color = bottom;
         }
     };
+    let y_of = |ms: f32| rect.bottom() - 1.0 - (ms / max).min(1.0) * (rect.height() - 2.0);
     for (i, sample) in history.iter().enumerate() {
         let x = rect.left() + step * i as f32;
-        let (top, color) = match sample {
-            Some(ping) => (
-                // at least 2 px, so a 0 ms answer is still visible
-                rect.bottom()
-                    - 1.0
-                    - ((*ping as f32 / max).min(1.0) * (rect.height() - 2.0)).max(2.0),
-                ping_color(*ping, avg),
-            ),
-            None => (rect.top(), Color32::from_rgb(255, 0, 0)),
+        let (top, ms) = match sample {
+            // at least 2 px, so a 0 ms answer is still visible
+            Some(ping) => (y_of(*ping as f32).min(rect.bottom() - 3.0), *ping as f32),
+            None => (rect.top(), f32::INFINITY),
         };
         // Timeouts are wider so a single one is visible, like in HLSW.
         let w = if sample.is_none() {
@@ -7075,12 +7078,41 @@ fn ping_graph(
             bar.translate(egui::vec2(depth, -depth)).intersect(rect),
             Color32::from_black_alpha(45),
         );
-        gradient(&mut bars, bar, light(color, 0.35), shade(color, 0.35));
+        if sample.is_none() {
+            let red = Color32::from_rgb(230, 30, 25);
+            gradient(&mut bars, bar, light(red, 0.3), shade(red, 0.3));
+        } else {
+            // Colour by height: green at the foot, yellow at 100 ms, red towards 200 ms, so
+            // every bar shows on its own how far up it reaches.
+            let top_ms = ms.min(max);
+            let mut stops = vec![0.0];
+            for s in [PING_HIGH, PING_HIGH * 2.0] {
+                if s < top_ms {
+                    stops.push(s);
+                }
+            }
+            stops.push(top_ms);
+            for pair in stops.windows(2) {
+                let (lo, hi) = (pair[0], pair[1]);
+                let r = egui::Rect::from_min_max(
+                    egui::pos2(x, y_of(hi).max(top)),
+                    egui::pos2(x + w, if lo == 0.0 { rect.bottom() } else { y_of(lo) }),
+                );
+                // A slightly darker foot gives the bars depth.
+                let foot = if lo == 0.0 {
+                    shade(ping_color(lo), 0.25)
+                } else {
+                    ping_color(lo)
+                };
+                gradient(&mut bars, r, ping_color(hi), foot);
+            }
+        }
+        let color = ping_color(ms.min(max));
         if bar.height() >= 3.0 {
             // bright cap on top
             bars.add_colored_rect(
                 egui::Rect::from_min_size(bar.min, egui::vec2(w, 1.0)),
-                light(color, 0.7),
+                light(color, 0.6),
             );
         }
         if w >= 3.0 {
