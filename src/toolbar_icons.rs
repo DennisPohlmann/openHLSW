@@ -61,7 +61,7 @@ impl ToolbarIcons {
         })
     }
 
-    /// Flat 22×22 button: a frame under the mouse, a pressed frame for toggles that are on
+    /// Flat 22×22 px button: a frame under the mouse, a pressed frame for toggles that are on
     /// (`checked`), a greyed-out icon when disabled.
     pub fn button(
         &self,
@@ -71,7 +71,10 @@ impl ToolbarIcons {
         checked: bool,
         tooltip: &str,
     ) -> Response {
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+        // 22×22 screen pixels like HLSW (44 on high-DPI screens), at every text size.
+        let ppp = ui.pixels_per_point();
+        let px = if ppp >= 1.5 && self.large.is_some() { 44.0 } else { 22.0 };
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(px, px) / ppp, Sense::click());
         let response = if enabled {
             response
         } else {
@@ -79,7 +82,6 @@ impl ToolbarIcons {
             ui.interact(rect, response.id.with("disabled"), Sense::hover())
         };
         if ui.is_rect_visible(rect) {
-            let ppp = ui.pixels_per_point();
             let dark = ui.visuals().dark_mode;
             let hovered = enabled && response.hovered();
             let pressed = enabled && response.is_pointer_button_down_on();
@@ -112,16 +114,18 @@ impl ToolbarIcons {
                     StrokeKind::Inside,
                 );
             }
-            // 16 points on whole pixels; the 32 px icons from 1.5× scaling up.
+            // Always 1:1 on whole screen pixels (16 px, 32 px from 1.5× scaling), so the icons
+            // stay sharp at every text size instead of being scaled by a fraction.
             let strip = match &self.large {
                 Some(large) if ppp >= 1.5 => large,
                 _ => &self.small,
             };
-            let mut min = (rect.center() - egui::vec2(8.0, 8.0)).round_to_pixels(ppp);
+            let side = strip.size as f32 / ppp;
+            let mut min = (rect.center() - egui::vec2(side, side) / 2.0).round_to_pixels(ppp);
             if pressed {
                 min += egui::vec2(1.0, 1.0) / ppp;
             }
-            let target = Rect::from_min_size(min, egui::vec2(16.0, 16.0));
+            let target = Rect::from_min_size(min, egui::vec2(side, side));
             let (col, row) = (icon as usize, usize::from(!enabled));
             let (w, h) = ((strip.size * COUNT) as f32, (strip.size * 2) as f32);
             let s = strip.size as f32;

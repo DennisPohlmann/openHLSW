@@ -1390,10 +1390,10 @@ impl OpenHlswApp {
         let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
         let mut config = config::load();
         crate::i18n::set_language(config.settings.language);
-        // Old configs: switch once to HLSW's look (Tahoma, 100 %), the sharpest text.
+        // Old configs: switch once to HLSW's look (Tahoma, 12 px), the sharpest text.
         if config.settings.appearance < crate::settings::APPEARANCE {
             config.settings.font = crate::theme::UiFont::Tahoma;
-            config.settings.text_size = crate::theme::TextSize::Normal;
+            config.settings.text_size = crate::theme::TextSize::Px12;
             config.settings.appearance = crate::settings::APPEARANCE;
         }
         theme::install_fonts(&cc.egui_ctx, config.settings.font);

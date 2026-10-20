@@ -16,34 +16,41 @@ pub enum Theme {
     Dark,
 }
 
-/// Text size (Settings → Misc). Scales the whole UI so lists and columns stay aligned.
+/// Text size (Settings → Misc): the size of the normal text in pixels (at 100 % display
+/// scaling). Scales the whole UI so lists and columns stay aligned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum TextSize {
-    /// Default: HLSW's size (8 pt Tahoma), the sharpest.
     #[default]
-    Normal,
-    Large,
-    ExtraLarge,
+    #[serde(rename = "px12", alias = "normal")]
+    Px12,
+    #[serde(rename = "px14", alias = "large")]
+    Px14,
+    #[serde(rename = "px16", alias = "extralarge")]
+    Px16,
 }
 
 impl TextSize {
-    pub const ALL: [TextSize; 3] = [TextSize::Normal, TextSize::Large, TextSize::ExtraLarge];
+    pub const ALL: [TextSize; 3] = [TextSize::Px12, TextSize::Px14, TextSize::Px16];
 
     pub fn label(self) -> &'static str {
         match self {
-            TextSize::Normal => tr!("Normal (100 %)"),
-            TextSize::Large => tr!("Large (115 %)"),
-            TextSize::ExtraLarge => tr!("Extra large (130 %)"),
+            TextSize::Px12 => "12 px",
+            TextSize::Px14 => "14 px",
+            TextSize::Px16 => "16 px",
         }
     }
 
-    pub fn zoom(self) -> f32 {
+    fn pixels(self) -> f32 {
         match self {
-            TextSize::Normal => 1.0,
-            TextSize::Large => 1.15,
-            TextSize::ExtraLarge => 1.3,
+            TextSize::Px12 => 12.0,
+            TextSize::Px14 => 14.0,
+            TextSize::Px16 => 16.0,
         }
+    }
+
+    /// UI zoom that makes the body text (11 pt) exactly this many pixels tall.
+    pub fn zoom(self) -> f32 {
+        self.pixels() / BODY_SIZE
     }
 }
 
@@ -273,16 +280,19 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
 }
 
 /// Font sizes of the interface (points before scaling).
+/// Size of the normal text before the zoom of [`TextSize`].
+const BODY_SIZE: f32 = 11.0;
+
 const TEXT_SIZES: [(TextStyle, f32); 5] = [
     (TextStyle::Small, 10.0),
-    (TextStyle::Body, 11.0),
-    (TextStyle::Button, 11.0),
+    (TextStyle::Body, BODY_SIZE),
+    (TextStyle::Button, BODY_SIZE),
     (TextStyle::Heading, 13.0),
     (TextStyle::Monospace, 11.0),
 ];
 
 /// Snaps the font sizes to whole screen pixels for the current scale (text size × display
-/// scaling). A 11 pt font at 115 % would otherwise be 12.65 px tall: every glyph is then
+/// scaling). A 10 pt font at 14 px would otherwise be 12.7 px tall: every glyph is then
 /// rendered between two pixel rows and looks blurry. Cheap; called every frame.
 pub fn snap_text_sizes(ctx: &egui::Context) {
     let ppp = ctx.pixels_per_point();
@@ -338,7 +348,7 @@ pub enum UiFont {
     /// Arial: the system's, otherwise the bundled Liberation Sans (same letter widths).
     Arial,
     /// Tahoma, HLSW's font: the system's, otherwise the bundled Wine Tahoma. Default: at
-    /// 8 pt (100 %) it looks like HLSW and is drawn with the font's own screen hinting.
+    /// small sizes it looks like HLSW and is drawn with the font's own screen hinting.
     #[default]
     Tahoma,
     /// Inconsolata (bundled).

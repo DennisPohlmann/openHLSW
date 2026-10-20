@@ -563,7 +563,7 @@ pub struct Settings {
     /// User interface language.
     pub language: crate::i18n::Language,
     /// Look settings already updated to the current defaults (missing in old configs = 0:
-    /// they get Tahoma at 100 % once, like HLSW).
+    /// they get Tahoma at 12 px once, like HLSW).
     #[serde(default)]
     pub appearance: u32,
     /// Bumped when a default changes, so old configs are migrated once (1 = refresh 1 s).
@@ -701,7 +701,7 @@ impl Default for Settings {
             keep_order_on_hover: false,
             geo_lookup: true,
             theme: Theme::Light,
-            text_size: TextSize::Normal,
+            text_size: TextSize::Px12,
             font: UiFont::Tahoma,
             language: crate::i18n::Language::System,
             appearance: APPEARANCE,
