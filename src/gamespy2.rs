@@ -347,6 +347,7 @@ pub fn info_from_rules(rules: &[Rule]) -> ServerInfo {
     };
     let num = |k: &str| get(k).trim().parse::<u32>().unwrap_or(0).min(255) as u8;
     let gamename = get("gamename");
+    let variant = get("gamevariant");
     let game = match gamename.to_ascii_lowercase().as_str() {
         "dh2005" | "deerhunter2005" | "deerhunt2005" => "Deer Hunter 2005".to_string(),
         "battlefield2" => "Battlefield 2".to_string(),
@@ -358,14 +359,29 @@ pub fn info_from_rules(rules: &[Rule]) -> ServerInfo {
         "crysiswars" => "Crysis Wars".to_string(),
         "" => "GameSpy 2".to_string(),
         _ => {
-            let v = get("gamevariant");
-            if v.is_empty() { gamename.clone() } else { v }
+            if variant.is_empty() {
+                gamename.clone()
+            } else {
+                variant.clone()
+            }
         }
+    };
+    // Battlefield 2 / 2142 run mods (Special Forces = "xpack"): keep the mod in the folder,
+    // like HLSW's "mods/<GAMEDIR>".
+    let folder = match gamename.to_ascii_lowercase().as_str() {
+        "battlefield2" | "stella"
+            if !variant.is_empty()
+                && !variant.eq_ignore_ascii_case("bf2")
+                && !variant.eq_ignore_ascii_case("bf2142") =>
+        {
+            format!("{gamename}/{variant}")
+        }
+        _ => gamename.clone(),
     };
     ServerInfo {
         name: get("hostname"),
         map: get("mapname"),
-        folder: gamename,
+        folder,
         game,
         players: num("numplayers"),
         max_players: num("maxplayers"),
@@ -453,6 +469,26 @@ pub fn query_rules(
     Ok((reply.rules, meta))
 }
 
+/// Name of a Battlefield 2 / 2142 mod (`gamevariant`), as HLSW shows it.
+pub fn bf_mod_name(dir: &str) -> String {
+    match dir.to_ascii_lowercase().as_str() {
+        "" | "bf2" | "bf2142" => String::new(),
+        "xpack" => "Special Forces Expansion".into(),
+        "airmaps" => "Airmaps".into(),
+        "aix2" => "Allied Intent Extended".into(),
+        "battleracer2" => "Battleracer 2".into(),
+        "bf2pro" => "Pro-Mod".into(),
+        "fh2" => "Forgotten Hope 2".into(),
+        "hardjustice" => "Hard Justice".into(),
+        "opk2" => "Operation Peacekeeper".into(),
+        "poe2" => "Point of Existence 2".into(),
+        "pr" => "Project Reality".into(),
+        "sandbox" => "Sandbox".into(),
+        "northernstrike" => "Northern Strike".into(),
+        _ => dir.to_string(),
+    }
+}
+
 pub fn query_players(
     addr: SocketAddr,
     timeout: Duration,
@@ -493,6 +529,14 @@ mod tests {
         let i = info_from_rules(&r.rules);
         assert_eq!(i.name, "Lost Soldiers");
         assert_eq!(i.game, "Battlefield 2");
+        assert_eq!(i.folder, "battlefield2");
+        let mut sf = r.rules.clone();
+        sf.push(Rule {
+            key: "gamevariant".into(),
+            value: "xpack".into(),
+        });
+        assert_eq!(info_from_rules(&sf).folder, "battlefield2/xpack");
+        assert_eq!(bf_mod_name("xpack"), "Special Forces Expansion");
         assert_eq!((i.players, i.max_players), (2, 64));
         assert_eq!(r.players.len(), 2);
         assert_eq!((r.players[1].name.as_str(), r.players[1].score), ("Ann", 5));

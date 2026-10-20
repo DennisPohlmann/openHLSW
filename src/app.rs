@@ -295,7 +295,29 @@ impl Server {
             return String::new();
         };
         if i.gamespy {
-            return i.game.clone();
+            // Like HLSW: "BF2 - Special Forces Expansion (gpm_coop)", "BF2 (gpm_cq)".
+            let folder = i.folder.to_ascii_lowercase();
+            let (gamename, mod_dir) = folder.split_once('/').unwrap_or((folder.as_str(), ""));
+            let short = match gamename {
+                "battlefield2" => Some("BF2"),
+                "stella" => Some("BF2142"),
+                _ => None,
+            };
+            let mut text = match short {
+                Some(short) => {
+                    let m = openhlsw::gamespy2::bf_mod_name(mod_dir);
+                    if m.is_empty() {
+                        short.to_string()
+                    } else {
+                        format!("{short} - {m}")
+                    }
+                }
+                None => i.game.clone(),
+            };
+            if let Some(t) = self.rule("gametype").filter(|t| !t.is_empty()) {
+                text.push_str(&format!(" ({t})"));
+            }
+            return text;
         }
         if i.goldsrc {
             let short = match i.folder.to_ascii_lowercase().as_str() {
@@ -1540,6 +1562,7 @@ impl OpenHlswApp {
                 Some(exe) => {
                     let mut cmd = std::process::Command::new(&exe);
                     cmd.args(self.start_params(&game, s));
+                    cmd.args(self.battlefield_join_args(s));
                     if let Some(dir) = std::path::Path::new(&exe).parent() {
                         cmd.current_dir(dir);
                     }
@@ -1646,6 +1669,46 @@ impl OpenHlswApp {
     /// Start parameters for Connect: the game's (My Games), the player name, the server's.
     /// HLSW placeholders are replaced: `<SERVERIP>`, `<SERVERPORT>`, `<SERVERADDR>`,
     /// `<CONNECTADDRPORT>`, `<PASSWORD>`, `<RCONPASSWORD>`, `<PLAYERNAME>`, `<RULE(cvar)>`.
+    /// Battlefield 2 / 2142 join the server directly (HLSW's "BF" connect type):
+    /// `+modPath mods/<mod> +restart 1 +joinServer <ip> +port <port> [+password …]`.
+    fn battlefield_join_args(&self, s: &Server) -> Vec<String> {
+        let Some(i) = &s.info else { return Vec::new() };
+        let folder = i.folder.to_ascii_lowercase();
+        let (gamename, mod_dir) = folder.split_once('/').unwrap_or((folder.as_str(), ""));
+        let default_mod = match gamename {
+            "battlefield2" => "bf2",
+            "stella" => "bf2142",
+            _ => return Vec::new(),
+        };
+        let ip = s
+            .resolved
+            .map(|a| a.ip().to_string())
+            .unwrap_or_else(|| s.address.host.clone());
+        let port = i.game_port.unwrap_or(s.address.port).to_string();
+        let mut args = vec![
+            "+modPath".to_string(),
+            format!(
+                "mods/{}",
+                if mod_dir.is_empty() {
+                    default_mod
+                } else {
+                    mod_dir
+                }
+            ),
+            "+restart".into(),
+            "1".into(),
+            "+joinServer".into(),
+            ip,
+            "+port".into(),
+            port,
+        ];
+        let password = self.join_password.trim();
+        if !password.is_empty() {
+            args.extend(["+password".to_string(), password.to_string()]);
+        }
+        args
+    }
+
     fn start_params(&self, game: &str, s: &Server) -> Vec<String> {
         let mut out = split_args(
             self.settings
@@ -1655,7 +1718,13 @@ impl OpenHlswApp {
         );
         let name = self.settings.player_name.trim();
         if !name.is_empty() {
-            out.extend(["+name".to_string(), name.to_string()]);
+            // Battlefield 2 / 2142 take +playerName, the Source and HL1 games +name.
+            let bf = s.info.as_ref().is_some_and(|i| {
+                let f = i.folder.to_ascii_lowercase();
+                f.starts_with("battlefield2") || f.starts_with("stella")
+            });
+            let flag = if bf { "+playerName" } else { "+name" };
+            out.extend([flag.to_string(), name.to_string()]);
         }
         out.extend(split_args(&s.params));
         let addr = s.address.to_string();

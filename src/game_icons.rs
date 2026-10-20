@@ -103,9 +103,20 @@ pub fn icon_for_server(app_id: u32, folder: &str) -> &'static str {
 }
 
 /// Icon for a GameSpy 2 server by its `gamename`.
-pub fn icon_for_gamespy(gamename: &str) -> &'static str {
-    match gamename.to_ascii_lowercase().as_str() {
+/// `folder` is the gamename, for Battlefield 2 / 2142 mods "gamename/mod".
+pub fn icon_for_gamespy(folder: &str) -> &'static str {
+    let folder = folder.to_ascii_lowercase();
+    let (gamename, mod_dir) = folder.split_once('/').unwrap_or((folder.as_str(), ""));
+    match gamename {
         "dh2005" | "deerhunter2005" | "deerhunt2005" => "DH2005",
+        "battlefield2" if mod_dir == "xpack" => "BF2_XPACK",
+        "battlefield2" => "BF2",
+        "stella" => "BF2142",
+        "bfvietnam" => "BFV",
+        "armedass" => "ARMA",
+        "arma2" | "arma2pc" => "ARMA2",
+        "crysis" => "Crysis",
+        "crysiswars" => "CrysisWars",
         _ => "GS2", // generic GameSpy 2 icon
     }
 }

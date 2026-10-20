@@ -94,7 +94,7 @@ pub const GAMES: &[Game] = &[
     Game {
         key: "BF2",
         name: "Battlefield 2",
-        icon: "BF2_XPACK",
+        icon: "BF2",
         hlsw_protocol: "GS2",
         protocol: Protocol::GameSpy2,
         not_detectable: false,
