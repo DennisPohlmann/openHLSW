@@ -818,6 +818,140 @@ enum Action {
     Quit,
 }
 
+fn ui_modifiers(resp: &egui::Response) -> egui::Modifiers {
+    resp.ctx.input(|i| i.modifiers)
+}
+
+/// The list the arrow keys move in: the one clicked last ("servers", "players", "rules").
+fn active_list(ctx: &egui::Context) -> &'static str {
+    ctx.data(|d| d.get_temp(egui::Id::unique("active_list")))
+        .unwrap_or("servers")
+}
+
+fn set_active_list(ctx: &egui::Context, list: &'static str) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("active_list"), list));
+}
+
+/// Arrow up / down (with Shift) for the list `name`, when no text field has the focus.
+fn arrow_keys(ctx: &egui::Context, name: &str) -> Option<(bool, bool)> {
+    // A clicked row also takes the focus; only a text field should keep the keys.
+    if active_list(ctx) != name || ctx.text_edit_focused() {
+        return None;
+    }
+    ctx.input(|i| {
+        let shift = i.modifiers.shift;
+        if i.modifiers.command || i.modifiers.alt {
+            None
+        } else if i.key_pressed(Key::ArrowDown) {
+            Some((true, shift))
+        } else if i.key_pressed(Key::ArrowUp) {
+            Some((false, shift))
+        } else {
+            None
+        }
+    })
+}
+
+/// Marked rows of a list: a click marks one row, Ctrl+click adds / removes a row,
+/// Shift+click marks the range from the last clicked row (like in HLSW / Windows lists).
+#[derive(Default)]
+struct Selection {
+    keys: HashSet<String>,
+    anchor: Option<String>,
+    /// Row moved with the arrow keys.
+    cursor: Option<String>,
+}
+
+impl Selection {
+    fn contains(&self, key: &str) -> bool {
+        self.keys.contains(key)
+    }
+
+    /// Left click on `key`; `order` are the keys as shown.
+    fn click(&mut self, key: &str, order: &[&str], mods: egui::Modifiers) {
+        let range = mods
+            .shift
+            .then(|| {
+                let a = order
+                    .iter()
+                    .position(|k| Some(*k) == self.anchor.as_deref())?;
+                let b = order.iter().position(|k| *k == key)?;
+                Some(order[a.min(b)..=a.max(b)].iter().map(|k| k.to_string()))
+            })
+            .flatten();
+        if let Some(range) = range {
+            if !mods.command {
+                self.keys.clear();
+            }
+            self.keys.extend(range);
+            return;
+        }
+        if mods.command {
+            if !self.keys.remove(key) {
+                self.keys.insert(key.to_string());
+            }
+        } else {
+            self.keys.clear();
+            self.keys.insert(key.to_string());
+        }
+        self.anchor = Some(key.to_string());
+        self.cursor = Some(key.to_string());
+    }
+
+    /// Arrow key: moves the mark one row up / down (with Shift the marked range grows).
+    /// Returns the new row index.
+    fn step(&mut self, order: &[&str], down: bool, shift: bool) -> Option<usize> {
+        if order.is_empty() {
+            return None;
+        }
+        let current = self
+            .cursor
+            .as_deref()
+            .and_then(|c| order.iter().position(|k| *k == c));
+        let new = match current {
+            Some(i) if down => (i + 1).min(order.len() - 1),
+            Some(i) => i.saturating_sub(1),
+            None if down => 0,
+            None => order.len() - 1,
+        };
+        let key = order[new].to_string();
+        let anchor = self
+            .anchor
+            .as_deref()
+            .and_then(|a| order.iter().position(|k| *k == a));
+        match (shift, anchor) {
+            (true, Some(a)) => {
+                self.keys = order[a.min(new)..=a.max(new)]
+                    .iter()
+                    .map(|k| k.to_string())
+                    .collect();
+            }
+            _ => {
+                self.keys.clear();
+                self.keys.insert(key.clone());
+                self.anchor = Some(key.clone());
+            }
+        }
+        self.cursor = Some(key);
+        Some(new)
+    }
+
+    /// Right click: keeps a marked group, otherwise marks just this row.
+    fn right_click(&mut self, key: &str) {
+        if !self.keys.contains(key) {
+            self.keys.clear();
+            self.keys.insert(key.to_string());
+            self.anchor = Some(key.to_string());
+            self.cursor = Some(key.to_string());
+        }
+    }
+
+    /// Drops marks of rows that are gone.
+    fn retain(&mut self, order: &[&str]) {
+        self.keys.retain(|k| order.contains(&k.as_str()));
+    }
+}
+
 /// Game chosen in the "IP/Port" box (HLSW's game list); `None` = detect automatically.
 type AddGame = Option<&'static games::Game>;
 
@@ -1003,6 +1137,9 @@ pub struct OpenHlswApp {
     sort: (Col, bool),
     player_sort: (PlayerCol, bool),
     player_filter: String,
+    /// Marked players (by name) and rules (by key): click, Ctrl+click, Shift+click.
+    player_sel: Selection,
+    rule_sel: Selection,
     rules_filter: String,
     tab: Tab,
     console_input: String,
@@ -1176,6 +1313,8 @@ impl OpenHlswApp {
             sort: (Col::Index, true),
             player_sort: ("#", true),
             player_filter: String::new(),
+            player_sel: Selection::default(),
+            rule_sel: Selection::default(),
             rules_filter: String::new(),
             tab: Tab::RconConfig,
             console_input: String::new(),
@@ -3765,7 +3904,15 @@ impl OpenHlswApp {
                     rules.len(),
                 );
                 list_frame(ui, p, |ui| {
-                    rules_table(ui, p, rules, &needle, rule_server, actions)
+                    rules_table(
+                        ui,
+                        p,
+                        rules,
+                        &needle,
+                        rule_server,
+                        &mut self.rule_sel,
+                        actions,
+                    )
                 });
             });
         } else {
@@ -3798,6 +3945,7 @@ impl OpenHlswApp {
                     &PlayerTableData::default(),
                     &needle,
                     &mut self.player_sort,
+                    &mut self.player_sel,
                     actions,
                 )
             });
@@ -3846,7 +3994,15 @@ impl OpenHlswApp {
             total,
         );
         list_frame(ui, p, |ui| {
-            players_table(ui, p, &data, &needle, &mut self.player_sort, actions)
+            players_table(
+                ui,
+                p,
+                &data,
+                &needle,
+                &mut self.player_sort,
+                &mut self.player_sel,
+                actions,
+            )
         });
     }
 
@@ -6233,7 +6389,21 @@ fn server_table(
             )
         });
     let table_id = format!("servers{}", opts.generation);
+    let arrows = arrow_keys(ui.ctx(), "servers");
     let mut table = styled_table(ui, &table_id).sense(Sense::click());
+    // Arrow up / down select the previous / next server.
+    if let Some((down, _)) = arrows
+        && !order.is_empty()
+    {
+        let current = order.iter().position(|&i| Some(servers[i].id) == selected);
+        let new = match current {
+            Some(i) if down => (i + 1).min(order.len() - 1),
+            Some(i) => i.saturating_sub(1),
+            None => 0,
+        };
+        actions.push(Action::Select(servers[order[new]].id));
+        table = table.scroll_to_row(new, None);
+    }
     for (i, (_, _, width)) in columns.iter().enumerate() {
         let column = if i + 1 == columns.len() {
             Column::remainder().at_least(60.0)
@@ -6390,6 +6560,7 @@ fn server_table(
                     .is_some_and(|pos| comment_rect.contains(pos));
                 if response.clicked() || response.secondary_clicked() {
                     actions.push(Action::Select(s.id));
+                    set_active_list(&response.ctx, "servers");
                 }
                 if response.double_clicked() {
                     if on_comment {
@@ -7659,6 +7830,7 @@ fn players_table(
     data: &PlayerTableData<'_>,
     needle: &str,
     sort: &mut (PlayerCol, bool),
+    sel: &mut Selection,
     actions: &mut Vec<Action>,
 ) {
     let mut list: Vec<&PlayerRow> = data
@@ -7680,6 +7852,31 @@ fn players_table(
             .unwrap_or(Ordering::Equal);
         if sort.1 { ord } else { ord.reverse() }
     });
+    let order: Vec<&str> = list.iter().map(|r| r.player.name.as_str()).collect();
+    sel.retain(&order);
+    let marked: Vec<&PlayerRow> = list
+        .iter()
+        .copied()
+        .filter(|r| sel.contains(&r.player.name))
+        .collect();
+    // Ctrl+C / Ctrl+A while the mouse is over the list.
+    if ui.rect_contains_pointer(ui.max_rect()) && !ui.ctx().text_edit_focused() {
+        let (copy, all) = ui.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::COMMAND, Key::C),
+                i.consume_key(egui::Modifiers::COMMAND, Key::A),
+            )
+        });
+        if copy && !marked.is_empty() {
+            actions.push(Action::CopyText(players_as_text(&marked)));
+        }
+        if all {
+            sel.keys = order.iter().map(|k| k.to_string()).collect();
+        }
+    }
+    let mut clicked: Option<(String, egui::Modifiers)> = None;
+    let scroll_to =
+        arrow_keys(ui.ctx(), "players").and_then(|(down, shift)| sel.step(&order, down, shift));
 
     let autosize = take_autosize(ui, "players");
     let mut autosize_request = None;
@@ -7706,6 +7903,9 @@ fn players_table(
     });
     let table_id = format!("players{}", data.generation);
     let mut table = styled_table(ui, &table_id).sense(Sense::click());
+    if let Some(i) = scroll_to {
+        table = table.scroll_to_row(i, None);
+    }
     for (i, &&(title, _, w, min)) in columns.iter().enumerate() {
         table = table.column(if title == "Country" {
             Column::exact(w)
@@ -7749,6 +7949,7 @@ fn players_table(
             body.rows(ROW_HEIGHT, list.len(), |mut row| {
                 let r = list[row.index()];
                 let n = row.index() + 1;
+                row.set_selected(sel.contains(&r.player.name));
                 for &&(title, ..) in &columns {
                     row.col(|ui| match title {
                         "Country" => {
@@ -7786,11 +7987,30 @@ fn players_table(
                 }
                 row.col(|_| {});
 
+                let resp = row.response();
+                if resp.clicked() {
+                    clicked = Some((r.player.name.clone(), ui_modifiers(&resp)));
+                }
+                if resp.secondary_clicked() {
+                    sel.right_click(&r.player.name);
+                    set_active_list(&resp.ctx, "players");
+                }
                 let Some(server) = data.server else { return };
-                row.response()
-                    .context_menu(|ui| player_context_menu(ui, data, server, r, &list, actions));
+                // The menu acts on all marked players (or the one under the mouse).
+                let targets: Vec<&PlayerRow> = if sel.contains(&r.player.name) && marked.len() > 1 {
+                    marked.clone()
+                } else {
+                    vec![r]
+                };
+                resp.context_menu(|ui| {
+                    player_context_menu(ui, data, server, &targets, &list, actions)
+                });
             });
         });
+    if let Some((key, mods)) = clicked {
+        sel.click(&key, &order, mods);
+        set_active_list(ui.ctx(), "players");
+    }
     if let Some(i) = autosize_request {
         request_autosize(ui, "players", i);
     }
@@ -7826,23 +8046,41 @@ const BAN_DURATIONS: [(&str, u32); 6] = [
     ("1 week", 10080),
 ];
 
-/// Right-click menu of the player list, laid out like HLSW's.
+/// Right-click menu of the player list, laid out like HLSW's. Acts on all marked players
+/// (`targets`); copies put one line per player.
 fn player_context_menu(
     ui: &mut Ui,
     data: &PlayerTableData<'_>,
     server: ServerId,
-    r: &PlayerRow,
+    targets: &[&PlayerRow],
     list: &[&PlayerRow],
     actions: &mut Vec<Action>,
 ) {
-    let st = r.status.as_ref();
-    let steam_id = st.map(|s| s.steam_id.clone()).unwrap_or_default();
-    let addr = st
-        .and_then(|s| s.ip)
-        .map(|ip| match st.and_then(|s| s.port) {
-            Some(port) => SocketAddr::new(ip, port).to_string(),
-            None => ip.to_string(),
-        });
+    let Some(&r) = targets.first() else { return };
+    let single = targets.len() == 1;
+    let steam_of = |r: &PlayerRow| {
+        r.status
+            .as_ref()
+            .map(|s| s.steam_id.clone())
+            .unwrap_or_default()
+    };
+    let addr_of = |r: &PlayerRow| {
+        let st = r.status.as_ref();
+        st.and_then(|s| s.ip)
+            .map(|ip| match st.and_then(|s| s.port) {
+                Some(port) => SocketAddr::new(ip, port).to_string(),
+                None => ip.to_string(),
+            })
+    };
+    // One line per marked player; players without that value are skipped.
+    let lines = |f: &dyn Fn(&PlayerRow) -> Option<String>| {
+        let v: Vec<String> = targets
+            .iter()
+            .filter_map(|r| f(r))
+            .filter(|t| !t.is_empty())
+            .collect();
+        (!v.is_empty()).then(|| v.join("\n"))
+    };
     let mut copy = |ui: &mut Ui, label: &str, text: Option<String>| {
         if ui
             .add_enabled(
@@ -7855,64 +8093,90 @@ fn player_context_menu(
             ui.close();
         }
     };
-    let sid = SteamId::parse(&steam_id);
+    let sid_of = |r: &PlayerRow| SteamId::parse(&steam_of(r));
     ui.menu_button(tr!("Copy"), |ui| {
-        copy(ui, tr!("Name"), Some(r.player.name.clone()));
+        copy(ui, tr!("Name"), lines(&|r| Some(r.player.name.clone())));
         // Bots and LAN players have no real Steam ID: copy what the server reported.
         copy(
             ui,
             tr!("Steam ID"),
-            Some(sid.map(|s| s.steam2()).unwrap_or_else(|| steam_id.clone())),
+            lines(&|r| Some(sid_of(r).map(|s| s.steam2()).unwrap_or_else(|| steam_of(r)))),
         );
-        copy(ui, tr!("Steam ID3"), sid.map(|s| s.steam3()));
-        copy(ui, tr!("Steam ID64"), sid.map(|s| s.steam64().to_string()));
-        copy(ui, tr!("Steam Profile URL"), sid.map(|s| s.profile_url()));
-        copy(ui, tr!("Addr"), addr.clone());
+        copy(
+            ui,
+            tr!("Steam ID3"),
+            lines(&|r| sid_of(r).map(|s| s.steam3())),
+        );
+        copy(
+            ui,
+            tr!("Steam ID64"),
+            lines(&|r| sid_of(r).map(|s| s.steam64().to_string())),
+        );
+        copy(
+            ui,
+            tr!("Steam Profile URL"),
+            lines(&|r| sid_of(r).map(|s| s.profile_url())),
+        );
+        copy(ui, tr!("Addr"), lines(&addr_of));
         ui.separator();
+        if !single {
+            copy(ui, tr!("Marked Rows"), Some(players_as_text(targets)));
+        }
         copy(ui, tr!("Whole Table"), Some(players_as_text(list)));
     });
+    let profiles: Vec<String> = targets
+        .iter()
+        .filter_map(|r| sid_of(r).map(|s| s.profile_url()))
+        .collect();
     let profile = ui
-        .add_enabled(sid.is_some(), Button::new(tr!("Open Steam Profile")))
-        .on_disabled_hover_text(if st.is_none() {
+        .add_enabled(!profiles.is_empty(), Button::new(tr!("Open Steam Profile")))
+        .on_disabled_hover_text(if r.status.is_none() {
             tr!("Needs the Steam ID from RCON status (Rcon Config → Test)")
         } else {
             tr!("No Steam account (bot or LAN player)")
         });
-    if profile.clicked()
-        && let Some(sid) = sid
-    {
-        actions.push(Action::OpenUrl(sid.profile_url()));
+    if profile.clicked() {
+        actions.extend(profiles.into_iter().map(Action::OpenUrl));
         ui.close();
     }
-    let in_db = r.db.is_some();
-    ui.add_enabled_ui(sid.is_some(), |ui| {
+    let with_id: Vec<(String, String)> = targets
+        .iter()
+        .filter(|r| sid_of(r).is_some())
+        .map(|r| (steam_of(r), r.player.name.clone()))
+        .collect();
+    ui.add_enabled_ui(!with_id.is_empty(), |ui| {
         ui.menu_button(tr!("Global ID Database"), |ui| {
             if ui
-                .button(tr!("Open in Global ID Database Editor..."))
+                .add_enabled(
+                    with_id.len() == 1,
+                    Button::new(tr!("Open in Global ID Database Editor...")),
+                )
                 .clicked()
             {
                 actions.push(Action::IdDbSetKind {
-                    id: steam_id.clone(),
-                    name: r.player.name.clone(),
+                    id: with_id[0].0.clone(),
+                    name: with_id[0].1.clone(),
                     kind: None,
                 });
                 ui.close();
             }
             ui.separator();
             for k in IdKind::ALL {
-                let current = r.db.as_ref().is_some_and(|e| e.kind == k);
+                let current = single && r.db.as_ref().is_some_and(|e| e.kind == k);
                 if ui
                     .radio(
-                        current && in_db,
+                        current,
                         tr!("Set to {type}", type = crate::i18n::t(k.name())),
                     )
                     .clicked()
                 {
-                    actions.push(Action::IdDbSetKind {
-                        id: steam_id.clone(),
-                        name: r.player.name.clone(),
-                        kind: Some(k),
-                    });
+                    for (id, name) in &with_id {
+                        actions.push(Action::IdDbSetKind {
+                            id: id.clone(),
+                            name: name.clone(),
+                            kind: Some(k),
+                        });
+                    }
                     ui.close();
                 }
             }
@@ -7928,7 +8192,9 @@ fn player_context_menu(
     }
     ui.separator();
     // Everything below needs the userid from RCON `status`.
-    let Some(st) = st else {
+    let with_status: Vec<&StatusPlayer> =
+        targets.iter().filter_map(|r| r.status.as_ref()).collect();
+    if with_status.is_empty() {
         for label in [
             tr!("Kick"),
             tr!("Kick & Connect"),
@@ -7941,43 +8207,56 @@ fn player_context_menu(
                 .on_disabled_hover_text(tr!("Needs RCON (Rcon Config → Test)"));
         }
         return;
-    };
+    }
     if ui.button(tr!("Kick")).clicked() {
-        actions.push(Action::KickPlayer(server, st.userid));
+        for st in &with_status {
+            actions.push(Action::KickPlayer(server, st.userid));
+        }
         ui.close();
     }
-    if ui.button(tr!("Kick & Connect")).clicked() {
-        actions.push(Action::KickAndConnect(server, st.userid));
+    // Takes over one slot: only for a single player.
+    if ui
+        .add_enabled(with_status.len() == 1, Button::new(tr!("Kick & Connect")))
+        .clicked()
+    {
+        actions.push(Action::KickAndConnect(server, with_status[0].userid));
         ui.close();
     }
     ui.separator();
-    let ip = st.ip.map(|ip| ip.to_string());
     for (label, by_ip, kick) in [
         (tr!("Ban ID"), false, false),
         (tr!("Ban ID Kick"), false, true),
         (tr!("Ban IP"), true, false),
         (tr!("Ban IP Kick"), true, true),
     ] {
-        let target = if by_ip {
-            ip.clone()
-        } else {
-            Some(st.steam_id.clone())
-        };
-        let Some(target) = target else {
+        let bans: Vec<(u32, String)> = with_status
+            .iter()
+            .filter_map(|st| {
+                let target = if by_ip {
+                    st.ip.map(|ip| ip.to_string())
+                } else {
+                    Some(st.steam_id.clone())
+                };
+                target.map(|t| (st.userid, t))
+            })
+            .collect();
+        if bans.is_empty() {
             ui.add_enabled(false, Button::new(label));
             continue;
-        };
+        }
         ui.menu_button(label, |ui| {
             for (dur, minutes) in BAN_DURATIONS {
                 if ui.button(crate::i18n::t(dur)).clicked() {
-                    actions.push(Action::BanPlayer {
-                        id: server,
-                        userid: st.userid,
-                        target: target.clone(),
-                        ip: by_ip,
-                        kick,
-                        minutes,
-                    });
+                    for (userid, target) in &bans {
+                        actions.push(Action::BanPlayer {
+                            id: server,
+                            userid: *userid,
+                            target: target.clone(),
+                            ip: by_ip,
+                            kick,
+                            minutes,
+                        });
+                    }
                     ui.close();
                 }
             }
@@ -8106,6 +8385,7 @@ fn rules_table(
     rules: &[Rule],
     needle: &str,
     server: Option<(ServerId, bool)>,
+    sel: &mut Selection,
     actions: &mut Vec<Action>,
 ) {
     let all = rules;
@@ -8135,7 +8415,36 @@ fn rules_table(
         })
     };
     let (fit0, fit1, fit2) = (fit_width(0), fit_width(1), fit_width(2));
-    styled_table(ui, "rules")
+    let order: Vec<&str> = rules.iter().map(|r| r.key.as_str()).collect();
+    sel.retain(&order);
+    let marked: Vec<&Rule> = rules
+        .iter()
+        .copied()
+        .filter(|r| sel.contains(&r.key))
+        .collect();
+    // Ctrl+C / Ctrl+A while the mouse is over the list.
+    if ui.rect_contains_pointer(ui.max_rect()) && !ui.ctx().text_edit_focused() {
+        let (copy, all_keys) = ui.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::COMMAND, Key::C),
+                i.consume_key(egui::Modifiers::COMMAND, Key::A),
+            )
+        });
+        if copy && !marked.is_empty() {
+            actions.push(Action::CopyText(rules_as_text(&marked)));
+        }
+        if all_keys {
+            sel.keys = order.iter().map(|k| k.to_string()).collect();
+        }
+    }
+    let scroll_to =
+        arrow_keys(ui.ctx(), "rules").and_then(|(down, shift)| sel.step(&order, down, shift));
+    let mut clicked: Option<(String, egui::Modifiers)> = None;
+    let mut table = styled_table(ui, "rules");
+    if let Some(i) = scroll_to {
+        table = table.scroll_to_row(i, None);
+    }
+    table
         .sense(Sense::click())
         .column(sized(Column::initial(20.0).at_least(14.0), fit0))
         .column(sized(
@@ -8163,20 +8472,37 @@ fn rules_table(
             body.rows(ROW_HEIGHT, rules.len(), |mut row| {
                 let r = rules[row.index()];
                 let n = row.index() + 1;
+                row.set_selected(sel.contains(&r.key));
                 row.col(|ui| {
                     ui.label(format!("{n:02}"));
                 });
                 row.col(|ui| {
-                    ui.add(Label::new(&r.key).wrap_mode(fit(ui)));
+                    ui.add(Label::new(&r.key).wrap_mode(fit(ui)).selectable(false));
                 });
                 row.col(|ui| {
-                    ui.add(Label::new(&r.value).wrap_mode(fit(ui)));
+                    ui.add(Label::new(&r.value).wrap_mode(fit(ui)).selectable(false));
                 });
                 row.col(|_| {});
-                row.response()
-                    .context_menu(|ui| rule_context_menu(ui, r, all, server, actions));
+                let resp = row.response();
+                if resp.clicked() {
+                    clicked = Some((r.key.clone(), ui_modifiers(&resp)));
+                }
+                if resp.secondary_clicked() {
+                    sel.right_click(&r.key);
+                    set_active_list(&resp.ctx, "rules");
+                }
+                let targets: Vec<&Rule> = if sel.contains(&r.key) && marked.len() > 1 {
+                    marked.clone()
+                } else {
+                    vec![r]
+                };
+                resp.context_menu(|ui| rule_context_menu(ui, &targets, all, server, actions));
             });
         });
+    if let Some((key, mods)) = clicked {
+        sel.click(&key, &order, mods);
+        set_active_list(ui.ctx(), "rules");
+    }
     if let Some(i) = autosize_request {
         request_autosize(ui, "rules", i);
     }
@@ -8185,16 +8511,19 @@ fn rules_table(
 /// Right-click menu of the server rules (cvars), laid out like HLSW's.
 fn rule_context_menu(
     ui: &mut Ui,
-    r: &Rule,
+    targets: &[&Rule],
     all: &[Rule],
     server: Option<(ServerId, bool)>,
     actions: &mut Vec<Action>,
 ) {
+    let Some(&r) = targets.first() else { return };
+    let join =
+        |f: &dyn Fn(&Rule) -> String| targets.iter().map(|r| f(r)).collect::<Vec<_>>().join("\n");
     ui.menu_button(tr!("Copy"), |ui| {
         let items = [
-            (tr!("Key"), r.key.clone()),
-            (tr!("Value"), r.value.clone()),
-            (tr!("Both"), format!("{} \"{}\"", r.key, r.value)),
+            (tr!("Key"), join(&|r| r.key.clone())),
+            (tr!("Value"), join(&|r| r.value.clone())),
+            (tr!("Both"), join(&|r| format!("{} \"{}\"", r.key, r.value))),
         ];
         for (label, text) in items {
             if ui.button(label).clicked() {
@@ -8219,7 +8548,10 @@ fn rule_context_menu(
     });
     let rcon = server.filter(|(_, ok)| *ok);
     let r_btn = ui
-        .add_enabled(rcon.is_some(), Button::new(tr!("Change Value...")))
+        .add_enabled(
+            rcon.is_some() && targets.len() == 1,
+            Button::new(tr!("Change Value...")),
+        )
         .on_disabled_hover_text(tr!("Needs RCON (Rcon Config → Test)"));
     if r_btn.clicked()
         && let Some((id, _)) = rcon
@@ -8231,6 +8563,14 @@ fn rule_context_menu(
         )));
         ui.close();
     }
+}
+
+/// `key "value"` per line, like HLSW's copy of rules.
+fn rules_as_text(rules: &[&Rule]) -> String {
+    rules
+        .iter()
+        .map(|r| format!("{} \"{}\"\n", r.key, r.value))
+        .collect()
 }
 
 fn rcon_status_text(status: &RconStatus, p: &Palette) -> RichText {
@@ -9044,6 +9384,27 @@ fn autocomplete(input: &str, history: &[String]) -> (Option<String>, Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_click_ctrl_shift_arrows() {
+        let order = ["a", "b", "c", "d"];
+        let mut sel = Selection::default();
+        let none = egui::Modifiers::NONE;
+        sel.click("b", &order, none);
+        sel.click("d", &order, egui::Modifiers::COMMAND);
+        assert!(sel.contains("b") && sel.contains("d") && !sel.contains("c"));
+        sel.click("a", &order, egui::Modifiers::SHIFT);
+        assert_eq!(sel.keys.len(), 4); // range d..a
+        sel.click("c", &order, none);
+        assert_eq!(sel.step(&order, true, false), Some(3));
+        assert!(sel.contains("d") && sel.keys.len() == 1);
+        assert_eq!(sel.step(&order, false, true), Some(2));
+        assert!(sel.contains("c") && sel.contains("d") && sel.keys.len() == 2);
+        sel.right_click("d");
+        assert_eq!(sel.keys.len(), 2); // keeps the marked group
+        sel.right_click("a");
+        assert!(sel.contains("a") && sel.keys.len() == 1);
+    }
 
     #[test]
     fn parses_chat() {
