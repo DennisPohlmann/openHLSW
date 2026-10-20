@@ -68,12 +68,35 @@ fn main() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && Path::new("assets/openhlsw.ico").exists()
     {
+        // The source icon stores every size as PNG. Explorer, the Start menu and the taskbar
+        // only read PNG reliably for 256 px, so the smaller sizes are embedded as classic
+        // bitmaps (otherwise Windows shows a blank white icon there).
+        let icon = bitmap_icon(Path::new("assets/openhlsw.ico"), &out.join("openhlsw.ico"))
+            .unwrap_or_else(|| PathBuf::from("assets/openhlsw.ico"));
+        println!("cargo:rerun-if-changed=assets/openhlsw.ico");
         let mut res = winresource::WindowsResource::new();
-        res.set_icon("assets/openhlsw.ico");
+        res.set_icon(&icon.to_string_lossy());
         if let Err(e) = res.compile() {
             println!("cargo:warning=could not embed the program icon: {e}");
         }
     }
+}
+
+/// Copies an .ico with all entries below 256 px stored as bitmaps (BMP) instead of PNG.
+fn bitmap_icon(src: &Path, dst: &Path) -> Option<PathBuf> {
+    let dir = ico::IconDir::read(File::open(src).ok()?).ok()?;
+    let mut out = ico::IconDir::new(ico::ResourceType::Icon);
+    for entry in dir.entries() {
+        let image = entry.decode().ok()?;
+        let encoded = if image.width() >= 256 {
+            ico::IconDirEntry::encode_as_png(&image)
+        } else {
+            ico::IconDirEntry::encode_as_bmp(&image)
+        };
+        out.add_entry(encoded.ok()?);
+    }
+    out.write(File::create(dst).ok()?).ok()?;
+    Some(dst.to_path_buf())
 }
 
 /// Game icon for the atlas. Uses the entry of the right size when its picture fills the

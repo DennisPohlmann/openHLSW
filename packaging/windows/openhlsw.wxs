@@ -8,6 +8,7 @@
     wix build -arch x64|x86|arm64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext
               -d Version=0.1.0 -d RepoDir=<repository> -d BinDir=<dir with the .exe files>
               -d LicenseRtf=<LICENSE converted to .rtf>
+              -d IconFile=<openhlsw.ico written by build.rs to OUT_DIR>
               packaging/windows/openhlsw.wxs -o openhlsw.msi
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -20,8 +21,11 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Icon Id="AppIcon" SourceFile="$(var.RepoDir)\assets\openhlsw.ico" />
-    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <!-- The Id must end in .ico: Windows Installer stores advertised shortcut icons under
+         this name, and without the extension the Start menu and taskbar show a blank icon.
+         IconFile is the icon build.rs embeds in the .exe (small sizes as bitmaps). -->
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/DennisPohlmann/openHLSW" />
     <Property Id="ARPHELPLINK" Value="https://github.com/DennisPohlmann/openHLSW/issues" />
 
@@ -46,7 +50,8 @@
                     Description="Game server browser and RCON admin tool"
                     Directory="ProgramMenuFolder"
                     WorkingDirectory="INSTALLFOLDER"
-                    Icon="AppIcon"
+                    Icon="AppIcon.ico"
+                    IconIndex="0"
                     Advertise="yes" />
         </File>
       </Component>

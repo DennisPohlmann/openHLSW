@@ -214,12 +214,17 @@ jobs:
         shell: pwsh
         run: |
           $name = "openhlsw-v${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}"
+          # Icon with bitmap entries, written by build.rs (the one embedded in the .exe).
+          $icon = Get-ChildItem "target\${{ matrix.target }}\release\build\openhlsw-*\out\openhlsw.ico" |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $icon) { $icon = Get-Item assets\openhlsw.ico }
           wix build -arch ${{ matrix.wix_arch }} `
             -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext `
             -d Version=${{ steps.version.outputs.version }} `
             -d RepoDir="$PWD" `
             -d BinDir="$PWD\target\${{ matrix.target }}\release" `
             -d LicenseRtf="$PWD\build\License.rtf" `
+            -d IconFile="$($icon.FullName)" `
             packaging\windows\openhlsw.wxs -o "dist\$name.msi"
           Remove-Item -Force -ErrorAction SilentlyContinue "dist\$name.wixpdb"
 
