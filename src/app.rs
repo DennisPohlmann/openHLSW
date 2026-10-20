@@ -717,6 +717,8 @@ enum Action {
     ToggleView(crate::toolbar_icons::ToolIcon),
     /// Toolbar: About openHLSW.
     ShowAbout,
+    /// Toolbar: switch "Auto refresh every" on / off.
+    ToggleAutoRefresh,
     CopyText(String),
     /// Opens a web page in the default browser.
     OpenUrl(String),
@@ -3294,6 +3296,10 @@ impl OpenHlswApp {
                 self.save_config();
             }
             Action::ShowAbout => self.show_about = true,
+            Action::ToggleAutoRefresh => {
+                self.settings.auto_refresh = !self.settings.auto_refresh;
+                self.save_config();
+            }
             Action::SaveConfig => self.save_config(),
             Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
@@ -3807,14 +3813,21 @@ impl OpenHlswApp {
             actions.push(Action::Remove(id));
         }
         toolbar_separator(ui, p);
+        // Like HLSW: "Refresh" switches the automatic refresh on and off (the "Auto refresh
+        // every" checkbox); "Update" refreshes all servers once while it is off.
+        let auto = self.settings.auto_refresh;
         if icons
-            .button(ui, ToolIcon::Refresh, true, false, tr!("Refresh server list"))
+            .button(ui, ToolIcon::Refresh, true, auto, tr!("Refresh server list"))
+            .clicked()
+        {
+            actions.push(Action::ToggleAutoRefresh);
+        }
+        if icons
+            .button(ui, ToolIcon::Update, !auto, false, tr!("Update server list"))
             .clicked()
         {
             actions.push(Action::RefreshAll);
         }
-        // HLSW downloads LAN / web lists again here; a custom list has nothing to update.
-        icons.button(ui, ToolIcon::Update, false, false, tr!("Update server list"));
         toolbar_separator(ui, p);
         if icons
             .button(ui, ToolIcon::ListProperties, true, false, tr!("Server List Properties"))
