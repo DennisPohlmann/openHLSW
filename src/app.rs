@@ -516,6 +516,15 @@ impl Server {
     }
 
     /// One entry per line; `automatic` = caused by Auto Update Status (hidden with "A").
+    /// Sends an RCON command and shows it in the console; the server's answer is shown there
+    /// too, so every command a button triggers can be followed. Periodic `status` counts as
+    /// automatic (console switch "A" hides it).
+    fn rcon_send(&mut self, command: impl Into<String>, tag: RconTag) {
+        let command = command.into();
+        self.console_add(LineKind::Command, &command, tag == RconTag::PlayerStatus);
+        self.rcon.exec(command, tag);
+    }
+
     fn console_add(&mut self, kind: LineKind, text: &str, automatic: bool) {
         let time = chrono::Local::now();
         for line in text.trim_end_matches(['\n', '\r']).split('\n') {
@@ -1345,8 +1354,7 @@ impl OpenHlswApp {
         }
         s.last_status = Some(Instant::now());
         s.configure_rcon();
-        s.console_add(LineKind::Command, "status", true);
-        s.rcon.exec("status", RconTag::PlayerStatus);
+        s.rcon_send("status", RconTag::PlayerStatus);
 
         let wants_log = s.rcon_status == RconStatus::Ok
             && s.log_target.is_none()
@@ -1779,7 +1787,11 @@ impl OpenHlswApp {
                                     s.console_add(LineKind::Response, &text, false);
                                 }
                             }
-                            RconTag::Silent => {}
+                            RconTag::Silent => {
+                                if !text.trim().is_empty() {
+                                    s.console_add(LineKind::Response, &text, false);
+                                }
+                            }
                             RconTag::BanIds | RconTag::BanIps => {
                                 if !text.trim().is_empty() {
                                     s.console_add(LineKind::Response, &text, false);
@@ -1790,8 +1802,12 @@ impl OpenHlswApp {
                                 s.ban_selected = None;
                             }
                             RconTag::Maps => {
+                                if !text.trim().is_empty() {
+                                    s.console_add(LineKind::Response, &text, false);
+                                }
                                 let found = parse_map_list(&text);
-                                if found.is_empty() {
+                                // The answer is in the console already; only an empty one needs a note.
+                                if found.is_empty() && text.trim().is_empty() {
                                     s.append_console(&tr!("*** maps * returned no map names. Server answer:\n{answer}", answer = if text.trim().is_empty() {
                                             tr!("(empty)")
                                         } else {
@@ -1810,6 +1826,9 @@ impl OpenHlswApp {
                                 }
                             }
                             RconTag::MapCycle => {
+                                if !text.trim().is_empty() {
+                                    s.console_add(LineKind::Response, &text, false);
+                                }
                                 merge_maps(&mut s.maps, parse_map_cycle(&text));
                                 s.maps_loading = false;
                                 s.maps_status = if s.maps.is_empty() {
@@ -1831,10 +1850,13 @@ impl OpenHlswApp {
                                 }
                             }
                             RconTag::KickAllStatus => {
+                                if !text.trim().is_empty() {
+                                    s.console_add(LineKind::Response, &text, false);
+                                }
                                 let ids = parse_status_userids(&text);
                                 for uid in &ids {
-                                    s.rcon
-                                        .exec(s.kick_cmd(*uid, tr!("Map change")), RconTag::Silent);
+                                    let cmd = s.kick_cmd(*uid, tr!("Map change"));
+                                    s.rcon_send(cmd, RconTag::Silent);
                                 }
                                 if let Some(map) = s.pending_change.take() {
                                     s.append_console(&tr!(
@@ -1842,7 +1864,7 @@ impl OpenHlswApp {
                                         count = ids.len(),
                                         map = map
                                     ));
-                                    s.rcon.exec(format!("changelevel {map}"), RconTag::Console);
+                                    s.rcon_send(format!("changelevel {map}"), RconTag::Console);
                                 }
                             }
                         },
@@ -1853,6 +1875,12 @@ impl OpenHlswApp {
                             }
                             s.pending_change = None;
                             s.append_console(&format!("*** {msg}"));
+                        }
+                        RconEvent::Sent { command, answer } => {
+                            s.console_add(LineKind::Command, &command, false);
+                            if !answer.trim().is_empty() {
+                                s.console_add(LineKind::Response, &answer, false);
+                            }
                         }
                         RconEvent::LogStarted(Ok(target)) => {
                             let internet = s.log_target.map(|(_, i)| i).unwrap_or(false);
@@ -2375,9 +2403,8 @@ impl OpenHlswApp {
             }
             Action::RconStatus(id) => {
                 if let Some(s) = self.server_mut(id) {
-                    s.append_console("] status");
                     s.configure_rcon();
-                    s.rcon.exec("status", RconTag::Console);
+                    s.rcon_send("status", RconTag::Console);
                 }
                 self.tab = Tab::Console;
                 self.settings.view.rcon_section = true;
@@ -2440,9 +2467,8 @@ impl OpenHlswApp {
                 self.history_pos = None;
                 self.console_input.clear();
                 if let Some(s) = self.server_mut(id) {
-                    s.append_console(&format!("] {command}"));
                     s.configure_rcon();
-                    s.rcon.exec(command, RconTag::Console);
+                    s.rcon_send(command, RconTag::Console);
                 }
             }
             Action::ClearConsole(id) => {
@@ -2471,8 +2497,7 @@ impl OpenHlswApp {
                 if let Some(s) = self.server_mut(id) {
                     s.configure_rcon();
                     for c in cmd.split(';') {
-                        s.console_add(LineKind::Command, c, false);
-                        s.rcon.exec(c, RconTag::Console);
+                        s.rcon_send(c, RconTag::Console);
                     }
                 }
                 self.apply(Action::FetchBans(id), ctx);
@@ -2481,10 +2506,8 @@ impl OpenHlswApp {
                 // Shown in the console like in HLSW, so the raw server answer can be checked.
                 if let Some(s) = self.server_mut(id) {
                     s.configure_rcon();
-                    s.console_add(LineKind::Command, "listid", false);
-                    s.rcon.exec("listid", RconTag::BanIds);
-                    s.console_add(LineKind::Command, "listip", false);
-                    s.rcon.exec("listip", RconTag::BanIps);
+                    s.rcon_send("listid", RconTag::BanIds);
+                    s.rcon_send("listip", RconTag::BanIps);
                 }
             }
             Action::FetchMaps(id) => {
@@ -2497,13 +2520,13 @@ impl OpenHlswApp {
                     s.maps_loading = true;
                     s.maps_status = tr!("Loading maps…").into();
                     s.configure_rcon();
-                    s.rcon.exec("maps *", RconTag::Maps);
-                    s.rcon.exec("listmaps", RconTag::MapCycle);
+                    s.rcon_send("maps *", RconTag::Maps);
+                    s.rcon_send("listmaps", RconTag::MapCycle);
                 }
             }
             Action::Unban(id) => {
-                if let Some(s) = self.server(id)
-                    && let Some(ban) = s.ban_selected.and_then(|i| s.bans.get(i))
+                if let Some(s) = self.server_mut(id)
+                    && let Some(ban) = s.ban_selected.and_then(|i| s.bans.get(i)).cloned()
                 {
                     let (remove, write) = if ban.is_ip {
                         ("removeip", "writeip")
@@ -2511,9 +2534,8 @@ impl OpenHlswApp {
                         ("removeid", "writeid")
                     };
                     s.configure_rcon();
-                    s.rcon
-                        .exec(format!("{remove} {}", ban.ident), RconTag::Console);
-                    s.rcon.exec(write, RconTag::Silent);
+                    s.rcon_send(format!("{remove} {}", ban.ident), RconTag::Console);
+                    s.rcon_send(write, RconTag::Silent);
                     self.apply(Action::FetchBans(id), ctx);
                 }
             }
@@ -2604,12 +2626,12 @@ impl OpenHlswApp {
             }
             Action::BansFromIdDb(id) => {
                 let ids: Vec<String> = self.iddb.banned().map(str::to_string).collect();
-                if let Some(s) = self.server(id) {
+                if let Some(s) = self.server_mut(id) {
                     s.configure_rcon();
                     for i in &ids {
-                        s.rcon.exec(format!("banid 0 {i}"), RconTag::Silent);
+                        s.rcon_send(format!("banid 0 {i}"), RconTag::Silent);
                     }
-                    s.rcon.exec("writeid", RconTag::Silent);
+                    s.rcon_send("writeid", RconTag::Silent);
                     self.status_message = tr!(
                         "Banned {count} IDs from the Global ID Database",
                         count = ids.len()
@@ -2622,17 +2644,16 @@ impl OpenHlswApp {
                 if ident.is_empty() {
                     return;
                 }
-                if let Some(s) = self.server(id) {
-                    let minutes = self.ban_minutes;
+                let minutes = self.ban_minutes;
+                if let Some(s) = self.server_mut(id) {
                     let (add, write) = if ip {
                         ("addip", "writeip")
                     } else {
                         ("banid", "writeid")
                     };
                     s.configure_rcon();
-                    s.rcon
-                        .exec(format!("{add} {minutes} {ident}"), RconTag::Console);
-                    s.rcon.exec(write, RconTag::Silent);
+                    s.rcon_send(format!("{add} {minutes} {ident}"), RconTag::Console);
+                    s.rcon_send(write, RconTag::Silent);
                     self.ban_input.clear();
                     self.apply(Action::FetchBans(id), ctx);
                 }
@@ -2651,10 +2672,9 @@ impl OpenHlswApp {
                     if kick_all {
                         // Kick everybody (userids from `status`), then change the level.
                         s.pending_change = Some(map.clone());
-                        s.rcon.exec("status", RconTag::KickAllStatus);
+                        s.rcon_send("status", RconTag::KickAllStatus);
                     } else {
-                        s.append_console(&format!("] changelevel {map}"));
-                        s.rcon.exec(format!("changelevel {map}"), RconTag::Console);
+                        s.rcon_send(format!("changelevel {map}"), RconTag::Console);
                     }
                     s.maps_status = tr!("Changing level to {map}…", map = map);
                     self.status_message = tr!("Changing level to {map}", map = map);
@@ -2678,7 +2698,7 @@ impl OpenHlswApp {
                         });
                     }
                     s.configure_rcon();
-                    s.rcon.exec(format!("say {text}"), RconTag::Silent);
+                    s.rcon_send(format!("say {text}"), RconTag::Silent);
                 }
                 self.play(SoundEvent::SendingMessage);
             }
@@ -2703,9 +2723,8 @@ impl OpenHlswApp {
             Action::KickPlayer(id, userid) => {
                 if let Some(s) = self.server_mut(id) {
                     let cmd = s.kick_cmd(userid, tr!("Kicked by admin"));
-                    s.append_console(&format!("] {cmd}"));
                     s.configure_rcon();
-                    s.rcon.exec(cmd, RconTag::Console);
+                    s.rcon_send(cmd, RconTag::Console);
                     s.last_status = None;
                 }
             }
@@ -2743,11 +2762,9 @@ impl OpenHlswApp {
                         });
                     }
                     for cmd in cmds {
-                        s.append_console(&format!("] {cmd}"));
-                        s.rcon.exec(cmd, RconTag::Console);
+                        s.rcon_send(cmd, RconTag::Console);
                     }
-                    s.rcon
-                        .exec(if ip { "writeip" } else { "writeid" }, RconTag::Silent);
+                    s.rcon_send(if ip { "writeip" } else { "writeid" }, RconTag::Silent);
                     s.last_status = None;
                     s.bans.clear(); // reload the ban list next time
                 }
@@ -2813,9 +2830,8 @@ impl OpenHlswApp {
             Action::SetCvar(id, key, value) => {
                 if let Some(s) = self.server_mut(id) {
                     let cmd = format!("{key} \"{}\"", value.replace('"', "'"));
-                    s.append_console(&format!("] {cmd}"));
                     s.configure_rcon();
-                    s.rcon.exec(cmd, RconTag::Console);
+                    s.rcon_send(cmd, RconTag::Console);
                     s.last_rules = None; // show the new value soon
                 }
             }

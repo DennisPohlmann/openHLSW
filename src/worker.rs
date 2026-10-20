@@ -51,7 +51,7 @@ pub enum Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RconTag {
     Console,
-    /// Output is dropped (say, banid, writeid, ...).
+    /// No own handling: the answer is only shown in the console (say, banid, writeid, ...).
     Silent,
     BanIds,
     BanIps,
@@ -73,6 +73,11 @@ pub enum RconEvent {
     Error(String),
     /// Result of a Get Log request: the address the server now logs to.
     LogStarted(Result<SocketAddr, String>),
+    /// A command the worker sent on its own (Get Log) and the server's answer, for the console.
+    Sent {
+        command: String,
+        answer: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -467,8 +472,13 @@ impl RconWorker {
         } else {
             format!("logaddress_add {target}")
         };
-        self.exec(&cmd).ok_or(tr!("RCON failed"))?;
-        self.exec("log on").ok_or(tr!("RCON failed"))?;
+        for command in [cmd.as_str(), "log on"] {
+            let answer = self.exec(command).ok_or(tr!("RCON failed"))?;
+            self.emit(RconEvent::Sent {
+                command: command.to_string(),
+                answer,
+            });
+        }
         Ok(target)
     }
 }
