@@ -1,7 +1,7 @@
 # openHLSW
 
-A free remake of **HLSW** for Windows, Linux and macOS (Apple silicon), written in Rust.
-One native binary, no runtime needed.
+A free remake of **HLSW** – the game server browser and RCON admin tool – for Windows,
+Linux, macOS and FreeBSD, written in Rust. One native binary, no runtime needed.
 
 ![openHLSW](docs/screenshot.png)
 
@@ -14,15 +14,46 @@ Condition Zero, DoD, TFC, NS, TS and other HL1 mods (queries, UDP RCON, server l
 
 See [CHANGELOG.md](CHANGELOG.md) for what changed between versions.
 
+## Download
+
+Ready-made packages are on the [releases page](https://github.com/DennisPohlmann/openHLSW/releases/latest):
+
+| System | Architectures | Packages |
+|---|---|---|
+| Windows 10 / 11 | x64, x86, ARM64 | `.msi` (setup wizard), `-portable.zip` |
+| Linux | x86_64, aarch64 | `.deb`, `.rpm`, `.flatpak`, `.tar.gz` |
+| Linux | riscv64 | `.deb`, `.rpm`, `.tar.gz` |
+| macOS 11+ | universal (Apple silicon + Intel) | `.dmg`, `.zip` |
+| FreeBSD | x86_64 | `.tar.gz` |
+
+- **Windows**: the `.msi` lets you choose the installation folder and adds a Start menu
+  entry; updates install over the previous version and keep your settings. The portable
+  `.zip` runs from any folder.
+- **Linux**: the `.deb` / `.rpm` install a desktop entry and icon. The binaries are built
+  with an old glibc and run on older distributions too. Flatpak:
+  `flatpak install --user openhlsw-…flatpak`.
+- **macOS**: drag openHLSW to Applications. The app is only ad-hoc signed: on the first
+  start, right-click → Open (or `xattr -dr com.apple.quarantine /Applications/openHLSW.app`).
+- **FreeBSD**: unpack the `.tar.gz` and start `openhlsw` (X11 or Wayland).
+
+**Languages**: English, German, French, Spanish (Argentina), Portuguese (Portugal), Dutch,
+Danish, Swedish, Norwegian, Finnish, Polish, Czech, Slovak, Hungarian, Turkish, Russian and
+Chinese (Simplified and Traditional) – Settings → Misc → Language, by default the system
+language.
+
 ## Features
 
 Layout and menus like HLSW 1.4, skin White (default) or Black.
 
 - **Server lists**: several lists (Server list → New/Open/Delete/Import/Export/Properties,
   Multi Server Insert, Change ID to reorder); add servers as `IP:port`, host name or `steam://connect/…`;
-  GameSpy 2 servers as `IP:gameport:queryport` (e.g. `116.203.178.232:23459:34567`).
-  The game box next to "IP/Port" (Half-Life 2, Counter-Strike 2, Half-Life, GameSpy 2) picks
-  the type for new servers and shows the selected server's type.
+  GameSpy 2 servers as `IP:gameport:queryport` (e.g. `116.203.178.232:23459:34567`);
+  Import Steam Favorites and Search LAN in the Server list menu.
+  The game list next to "IP/Port" works like HLSW's: **Auto detect** (Source, Half-Life 1
+  and CS2 are recognised by themselves), then the **not detectable games** (Armed Assault,
+  Crysis, GRAW 2, Sniper Elite, …) and **all games** of HLSW with their icons. Games whose
+  query protocol openHLSW does not speak yet are greyed out. For GameSpy 2 games with a
+  known query port (e.g. ArmA: 2303) `IP:port` is enough.
   Columns: flag + #, Addr, Name (with game icon), Game, Map, Players, Ping (current + average),
   Version, Location (provider), AddOn, Anti Cheat Tool, Ranking, Limits, Comment.
   AddOns are detected from the rules (Source: MM:S, SMod, …; Half-Life 1: AMXX, ATAC, PTB,
@@ -37,8 +68,9 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
 - **Refresh** every **1 s** by default (can be lowered to 0.4 s, see below).
 - **Right-click menus** like HLSW: servers (Connect, Copy, Delete, Move/Copy, Reset Average
   Ping, Properties, Trace Route, Rcon Status Command), players (Copy Name/Steam ID/Addr/Whole
-  Table, Rcon Status Command, Kick, Kick & Connect, Ban ID, Ban ID Kick, Ban IP, Ban IP Kick
-  with a duration), rules (Copy Key/Value/Both/All Rules/All Keys, Change Value…).
+  Table, Steam ID / ID3 / ID64 / profile URL, Open Steam Profile, Global ID Database, Rcon
+  Status Command, Kick, Kick & Connect, Ban ID, Ban ID Kick, Ban IP, Ban IP Kick with a
+  duration), rules (Copy Key/Value/Both/All Rules/All Keys, Change Value…).
 - **Copy / paste / cut** in every text field (Ctrl+C/V/X/A and right-click menu).
 - **Server info** (bottom left) with an HLSW style ping graph that grows with the panel
   drawn in 3D (green bars for normal, orange for raised, red for high ping, timeouts as full
@@ -77,19 +109,22 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   Friend, Lamer, Blue, Brown – colours the player name), comment and banned flag; names are
   added automatically from `status`; import / export `banned.cfg`; columns "Global ID
   Database Names / Comment" in the players list. Stored in `iddb.json` next to config.json.
-- **Import Steam Favorites** and **Search LAN** (Server list menu).
 - **Menus**: File (Global Player ID Database Editor, Connect Log, AppData folder, Advanced,
   Minimize), Server list, Server (Connect, Copy, Delete, Move/Copy to server list, Find,
   Properties, Trace Route), Settings (Sort Server List),
   View (Rcon Section, Server List, Rules, Password, Filter, Comment, Toolbar, Status Bar,
   Ping Graph, Skin). Keyboard shortcuts like HLSW (F3, F5, F6, Ctrl+G/D/F/P/T/I/O/R/L/U/M/W).
-- **Settings**: My Games (all HLSW games with icons, own game executable), Startup,
-  Connecting, Rcon, Connections, Plugins (empty), Sounds, Misc (skin and **text size**:
-  Normal / Large (default) / Extra large, among others).
+- **Settings**: My Games (all HLSW games with icons, own game executable and start
+  parameters), Startup, Connecting (incl. Quit openHLSW), Rcon, Connections, Plugins (empty),
+  Sounds, Misc (skin, **language**, **font** – Arial (default), Tahoma like HLSW or
+  Inconsolata – and **text size**: Normal / Large (115 %, default) / Extra large).
+- **File → Advanced**: clear the location / provider cache, reset all ping graphs.
 - **Unicode**: names in every script (fallback fonts for symbols, CJK, Cyrillic …).
 - Servers: all Source games, **Counter-Strike 2** and all **Half-Life 1 games** (GoldSrc,
   with their own icons, e.g. CS 1.6 and Condition Zero), plus GameSpy 2 games
-  (Deer Hunter 2005).
+  (Armed Assault, ARMA 2, Battlefield 2 / 2142, Crysis, F.E.A.R., Deer Hunter 2005, …).
+- **Not included** on purpose: HLSW login, buddy list and HLSW's web / global server lists
+  (those services are gone), Metamod plugin management.
 
 ### Fast refresh and the srcds limit
 
@@ -157,6 +192,9 @@ e.g. on Debian/Ubuntu: `sudo apt install libxkbcommon-dev libgl1-mesa-dev libway
 
 **Windows**: `cargo build --release` in a normal command prompt is enough
 (MSVC toolchain from rustup). The release binary does not open a console window.
+
+**macOS** and **FreeBSD**: `cargo build --release` (FreeBSD: Rust from rustup or
+`pkg install rust`, plus `pkg install pkgconf libX11 libxkbcommon`).
 
 ### Packages (GitHub Actions)
 
@@ -232,6 +270,7 @@ src/
   geo.rs               server / player location (ip-api.com, cache)
   filter.rs            server list filter
   iddb.rs              Global Player ID Database (iddb.json, banned.cfg)
+  games.rs             HLSW's game list (IP/Port box): names, icons, protocols, query ports
   discover.rs          Steam favorites (serverbrowser_hist.vdf) and LAN search
   flags.rs             country flags (assets/flags.png)
   game_icons.rs        game icons (assets/games/*.ico, atlas built by build.rs)
@@ -265,7 +304,9 @@ Protocols: [Server queries](https://developer.valvesoftware.com/wiki/Server_quer
 
 ## Not in yet (ideas for later)
 
-- More games/protocols (Quake 3, GameSpy 1/3, Unreal, Battlefield, TeamSpeak …)
+- More query protocols for the greyed-out games of the list (Quake 3 / Call of Duty,
+  GameSpy 1, Unreal, Doom 3, All Seeing Eye, Battlefield: Bad Company 2 / BF3, TeamSpeak …)
+- System tray, View Manager
 - Change Settings Password, Select All (multi selection)
 
 ## License
