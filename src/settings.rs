@@ -825,7 +825,7 @@ impl SettingsDialog {
     ) -> DialogResult {
         let mut result = DialogResult::Open;
         let mut open = true;
-        egui::Window::new(tr!("Settings"))
+        crate::native_window::NativeWindow::new("settings", tr!("Settings"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)

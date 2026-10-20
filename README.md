@@ -289,6 +289,7 @@ src/
   geo.rs               server / player location (ip-api.com, cache)
   filter.rs            server list filter
   iddb.rs              Global Player ID Database (iddb.json, banned.cfg)
+  native_window.rs     dialogs as real windows of the system (native title bar, like HLSW)
   games.rs             HLSW's game list (IP/Port box): names, icons, protocols, query ports
   discover.rs          Steam favorites (serverbrowser_hist.vdf) and LAN search
   flags.rs             country flags (assets/flags.png)

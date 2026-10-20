@@ -36,6 +36,7 @@ use crate::game_icons::{self, GameIcons};
 use crate::games;
 use crate::geo::{self, GeoInfo};
 use crate::iddb::{self, IdDb, IdEntry, IdKind};
+use crate::native_window::NativeWindow;
 use crate::settings::{
     DialogResult, OnConnect, Settings, SettingsDialog, SettingsTab, SoundEvent, StartupSelection,
 };
@@ -4833,7 +4834,7 @@ impl OpenHlswApp {
         };
         let list_name = self.list_name.clone();
         let connect_log = &self.connect_log;
-        egui::Window::new(title)
+        NativeWindow::new(("menu_dialog", title), title)
             .open(&mut open)
             .collapsible(false)
             .resizable(matches!(
@@ -5474,7 +5475,7 @@ impl OpenHlswApp {
         let db = &mut self.iddb;
         let mut open = true;
         let mut changed = false;
-        egui::Window::new(tr!("Global Player ID Database Editor"))
+        NativeWindow::new("iddb", tr!("Global Player ID Database Editor"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -5703,7 +5704,7 @@ impl OpenHlswApp {
             FindKind::Player => tr!("Find player"),
             FindKind::Rule => tr!("Find rule"),
         };
-        egui::Window::new(title)
+        NativeWindow::new("find", title)
             .open(&mut open)
             .collapsible(false)
             .default_width(380.0)
@@ -5763,7 +5764,7 @@ impl OpenHlswApp {
         let mut open = true;
         let mut close = false;
         let f = &mut self.settings.filter;
-        egui::Window::new(tr!("Server List Filter Properties"))
+        NativeWindow::new("filter", tr!("Server List Filter Properties"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -5895,7 +5896,7 @@ impl OpenHlswApp {
         let ping = s.ping.map(|p| format!("{p} ms")).unwrap_or_default();
         let waited = since.elapsed().as_secs();
         let mut open = true;
-        egui::Window::new(tr!("Connecting..."))
+        NativeWindow::new("connecting", tr!("Connecting..."))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -5992,12 +5993,12 @@ impl OpenHlswApp {
         let icon = self.about_icon.clone();
         let mut close = false;
         let mut open_license = false;
-        egui::Window::new(tr!("About openHLSW"))
+        NativeWindow::new("about", tr!("About openHLSW"))
             .open(&mut show_about)
             .collapsible(false)
             .resizable(false)
             .default_width(400.0)
-            .frame(Frame::window(&ctx.global_style()).inner_margin(Margin::ZERO))
+            .margin(0)
             .show(ctx, |ui| {
                 about_view(ui, icon.as_ref(), &mut close, &mut open_license, actions);
             });
@@ -6010,7 +6011,7 @@ impl OpenHlswApp {
         self.show_about = show_about;
 
         let mut show_license = self.show_license;
-        egui::Window::new(tr!("License"))
+        NativeWindow::new("license", tr!("License"))
             .open(&mut show_license)
             .collapsible(false)
             .resizable(true)
@@ -6022,7 +6023,7 @@ impl OpenHlswApp {
         if let Some((id, text)) = &mut self.editing_comment {
             let id = *id;
             let mut open = true;
-            egui::Window::new(tr!("Comment"))
+            NativeWindow::new("comment", tr!("Comment"))
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
@@ -6100,8 +6101,8 @@ pub(crate) fn group_box(
         .inner_margin(Margin {
             left: 8,
             right: 8,
-            top: 12,
-            bottom: 8,
+            top: 10,
+            bottom: 6,
         })
         .outer_margin(Margin {
             top: 6,
@@ -6109,6 +6110,8 @@ pub(crate) fn group_box(
         })
         .show(ui, |ui| {
             ui.set_width(width);
+            // Rows as close together as in HLSW's dialogs.
+            ui.spacing_mut().item_spacing.y = 3.0;
             ui.vertical(|ui| add(ui));
         })
         .response;

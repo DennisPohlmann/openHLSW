@@ -25,6 +25,7 @@ mod games;
 mod geo;
 mod i18n;
 mod iddb;
+mod native_window;
 mod settings;
 mod theme;
 mod trace;
@@ -34,6 +35,15 @@ mod worker;
 
 use eframe::egui;
 
+/// The program icon (title bars of the main window and the dialogs).
+pub fn app_icon() -> std::sync::Arc<egui::IconData> {
+    std::sync::Arc::new(egui::IconData {
+        rgba: game_icons::APP_ICON_RGBA.to_vec(),
+        width: 64,
+        height: 64,
+    })
+}
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -42,11 +52,7 @@ fn main() -> eframe::Result {
             .with_inner_size([1400.0, 900.0])
             .with_min_inner_size([800.0, 500.0])
             .with_maximized(true)
-            .with_icon(egui::IconData {
-                rgba: game_icons::APP_ICON_RGBA.to_vec(),
-                width: 64,
-                height: 64,
-            }),
+            .with_icon(app_icon()),
         // Remember size, position and maximized state of the window (the first start is
         // maximized); panel sizes and column widths are stored with the egui memory.
         persist_window: true,
