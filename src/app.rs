@@ -982,6 +982,7 @@ fn add_game_of(info: &ServerInfo) -> AddGame {
 }
 
 const COPYRIGHT_HOLDER: &str = "the openHLSW contributors";
+const HOMEPAGE: &str = "https://github.com/DennisPohlmann/openHLSW";
 const LICENSE_TEXT: &str = include_str!("../LICENSE");
 const GAME_ICONS_NOTICE: &str = include_str!("../assets/games/NOTICE.txt");
 const FLAGS_NOTICE: &str = include_str!("../assets/FLAGS-LICENSE.txt");
@@ -1000,6 +1001,141 @@ fn unwrap_paragraphs(text: &str) -> String {
 
 /// "? → License": the program's license, the notice for the game icons and the other
 /// third-party parts.
+/// "About openHLSW", laid out like HLSW's About window: a banner, the program details in a
+/// white box, the homepage link and Close.
+fn about_view(
+    ui: &mut Ui,
+    icon: Option<&egui::TextureHandle>,
+    close: &mut bool,
+    open_license: &mut bool,
+    actions: &mut Vec<Action>,
+) {
+    let width = 400.0;
+    // Banner: dark red to orange with soft light curves, the icon and the name.
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 120.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let mut mesh = egui::Mesh::default();
+    mesh.add_colored_rect(rect, Color32::WHITE);
+    let corners = [
+        Color32::from_rgb(140, 24, 14),  // top left
+        Color32::from_rgb(232, 96, 40),  // top right
+        Color32::from_rgb(245, 150, 70), // bottom right
+        Color32::from_rgb(178, 40, 22),  // bottom left
+    ];
+    for (v, c) in mesh.vertices.iter_mut().zip(corners) {
+        v.color = c;
+    }
+    painter.add(mesh);
+    for i in 0..9 {
+        let t = i as f32 / 8.0;
+        let points: Vec<egui::Pos2> = (0..=24)
+            .map(|k| {
+                let x = rect.left() + rect.width() * k as f32 / 24.0;
+                let phase = k as f32 / 24.0 * std::f32::consts::PI;
+                let y = rect.bottom() - 10.0 - t * 70.0 - phase.sin() * (18.0 + t * 22.0);
+                egui::pos2(x, y)
+            })
+            .collect();
+        painter.add(egui::Shape::line(
+            points,
+            Stroke::new(1.0, Color32::from_white_alpha(28 + (t * 40.0) as u8)),
+        ));
+    }
+    let mut x = rect.left() + 20.0;
+    if let Some(icon) = icon {
+        let r = egui::Rect::from_min_size(
+            egui::pos2(x, rect.center().y - 32.0),
+            egui::vec2(64.0, 64.0),
+        );
+        painter.image(
+            icon.id(),
+            r,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        x = r.right() + 14.0;
+    }
+    let shadow = Color32::from_black_alpha(90);
+    for (text, size, dy) in [("openHLSW", 30.0, -26.0), ("Gameserver Tool", 15.0, 10.0)] {
+        let font = egui::FontId::proportional(size);
+        let pos = egui::pos2(x, rect.center().y + dy);
+        painter.text(
+            pos + egui::vec2(1.0, 1.0),
+            egui::Align2::LEFT_TOP,
+            text,
+            font.clone(),
+            shadow,
+        );
+        painter.text(pos, egui::Align2::LEFT_TOP, text, font, Color32::WHITE);
+    }
+
+    // Details in a white box.
+    Frame::new()
+        .fill(ui.visuals().extreme_bg_color)
+        .stroke(Stroke::new(1.0, Color32::from_gray(170)))
+        .inner_margin(Margin::symmetric(10, 8))
+        .outer_margin(Margin::symmetric(8, 8))
+        .show(ui, |ui| {
+            ui.set_width(width - 36.0);
+            ScrollArea::vertical()
+                .min_scrolled_height(170.0)
+                .max_height(170.0)
+                .show(ui, |ui| {
+                egui::Grid::new("about_grid")
+                    .num_columns(2)
+                    .spacing([16.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label("openHLSW");
+                        ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
+                        ui.end_row();
+                        ui.label(tr!("Copyright"));
+                        ui.label(format!("(c) 2026 {COPYRIGHT_HOLDER}"));
+                        ui.end_row();
+                        ui.label(tr!("System"));
+                        ui.label(format!("{} {}", std::env::consts::OS, std::env::consts::ARCH));
+                        ui.end_row();
+                        ui.label(tr!("License"));
+                        if ui.link("GNU GPL v3.0 or later").clicked() {
+                            *open_license = true;
+                        }
+                        ui.end_row();
+                    });
+                ui.add_space(8.0);
+                ui.label(tr!("Free game server browser and RCON admin tool."));
+                ui.label(tr!(
+                    "A remake of HLSW. Not affiliated with the original HLSW authors."
+                ));
+                ui.add_space(6.0);
+                ui.label(tr!(
+                    "openHLSW only talks to the servers in your lists. Server and player locations are looked up at ip-api.com (can be switched off under Settings → Misc). No account, no master server, no tracking."
+                ));
+                if let Some(path) = config::path() {
+                    ui.add_space(6.0);
+                    ui.weak(tr!("Settings: {path}", path = path.display()));
+                }
+            });
+        });
+
+    // Homepage and Close.
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.label(tr!("Visit openHLSW homepage:"));
+        if ui.link("GitHub").clicked() {
+            actions.push(Action::OpenUrl(HOMEPAGE.into()));
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.add_space(10.0);
+            if ui
+                .add(Button::new(tr!("Close")).min_size(egui::vec2(75.0, 22.0)))
+                .clicked()
+            {
+                *close = true;
+            }
+        });
+    });
+    ui.add_space(8.0);
+}
+
 fn license_view(ui: &mut Ui) {
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.heading(tr!("openHLSW"));
@@ -1146,6 +1282,8 @@ pub struct OpenHlswApp {
     history: Vec<String>,
     history_pos: Option<usize>,
     show_about: bool,
+    /// Program icon for the About window (loaded when it is first opened).
+    about_icon: Option<egui::TextureHandle>,
     show_license: bool,
     editing_comment: Option<(ServerId, String)>,
     /// "Connecting..." window: server we wait on for a free slot, since when.
@@ -1321,6 +1459,7 @@ impl OpenHlswApp {
             history: Vec::new(),
             history_pos: None,
             show_about: false,
+            about_icon: None,
             show_license: false,
             editing_comment: None,
             waiting: None,
@@ -3571,14 +3710,30 @@ impl OpenHlswApp {
                     }
                 });
             });
+            // Like HLSW's "?" menu.
             ui.menu_button("?", |ui| {
+                if ui.button(tr!("About openHLSW...")).clicked() {
+                    self.show_about = true;
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button(tr!("ReadMe")).clicked() {
+                    actions.push(Action::OpenUrl(format!("{HOMEPAGE}#readme")));
+                    ui.close();
+                }
+                if ui.button(tr!("Changelog")).clicked() {
+                    actions.push(Action::OpenUrl(format!(
+                        "{HOMEPAGE}/blob/main/CHANGELOG.md"
+                    )));
+                    ui.close();
+                }
                 if ui.button(tr!("License...")).clicked() {
                     self.show_license = true;
                     ui.close();
                 }
                 ui.separator();
-                if ui.button(tr!("About openHLSW")).clicked() {
-                    self.show_about = true;
+                if ui.button(tr!("Visit openHLSW homepage")).clicked() {
+                    actions.push(Action::OpenUrl(HOMEPAGE.into()));
                     ui.close();
                 }
             });
@@ -5827,27 +5982,31 @@ impl OpenHlswApp {
         }
 
         let mut show_about = self.show_about;
+        if show_about && self.about_icon.is_none() {
+            self.about_icon = Some(ctx.load_texture(
+                "about_icon",
+                egui::ColorImage::from_rgba_unmultiplied([64, 64], game_icons::APP_ICON_RGBA),
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+        let icon = self.about_icon.clone();
+        let mut close = false;
+        let mut open_license = false;
         egui::Window::new(tr!("About openHLSW"))
             .open(&mut show_about)
             .collapsible(false)
             .resizable(false)
+            .default_width(400.0)
+            .frame(Frame::window(&ctx.global_style()).inner_margin(Margin::ZERO))
             .show(ctx, |ui| {
-                ui.heading(format!("openHLSW v{}", env!("CARGO_PKG_VERSION")));
-                ui.label(tr!("Free game server browser and RCON admin tool."));
-                ui.label(tr!(
-                    "A remake of HLSW. Not affiliated with the original HLSW authors."
-                ));
-                ui.add_space(6.0);
-                ui.label(format!("Copyright (C) 2026 {COPYRIGHT_HOLDER}"));
-                ui.label(tr!("License: GNU General Public License v3.0 or later"));
-                if ui.button(tr!("License...")).clicked() {
-                    self.show_license = true;
-                }
-                ui.add_space(6.0);
-                if let Some(path) = config::path() {
-                    ui.weak(tr!("Settings: {path}", path = path.display()));
-                }
+                about_view(ui, icon.as_ref(), &mut close, &mut open_license, actions);
             });
+        if close {
+            show_about = false;
+        }
+        if open_license {
+            self.show_license = true;
+        }
         self.show_about = show_about;
 
         let mut show_license = self.show_license;
