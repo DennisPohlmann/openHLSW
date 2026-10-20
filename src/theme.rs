@@ -172,9 +172,10 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     // light skin, slightly stronger anti-aliasing so dark text does not look washed out.
     v.text_options.subpixel_binning = false;
     v.text_options.font_hinting = true;
+    // Fuller, darker strokes for dark text on light ground (thin grey text looks blurry).
     if theme == Theme::Light {
         v.text_options.color_transfer_function =
-            egui::epaint::FontColorTransferFunction::Gamma(0.8);
+            egui::epaint::FontColorTransferFunction::Gamma(0.65);
     }
     v.panel_fill = p.window;
     v.window_fill = p.window;
@@ -271,6 +272,44 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     });
 }
 
+/// Font sizes of the interface (points before scaling).
+const TEXT_SIZES: [(TextStyle, f32); 5] = [
+    (TextStyle::Small, 10.0),
+    (TextStyle::Body, 11.0),
+    (TextStyle::Button, 11.0),
+    (TextStyle::Heading, 13.0),
+    (TextStyle::Monospace, 11.0),
+];
+
+/// Snaps the font sizes to whole screen pixels for the current scale (text size × display
+/// scaling). A 11 pt font at 115 % would otherwise be 12.65 px tall: every glyph is then
+/// rendered between two pixel rows and looks blurry. Cheap; called every frame.
+pub fn snap_text_sizes(ctx: &egui::Context) {
+    let ppp = ctx.pixels_per_point();
+    let snapped = |size: f32| (size * ppp).round().max(1.0) / ppp;
+    let current = ctx.global_style();
+    let needed = TEXT_SIZES.iter().any(|(style, size)| {
+        current
+            .text_styles
+            .get(style)
+            .is_none_or(|f| (f.size - snapped(*size)).abs() > 0.001)
+    });
+    if needed {
+        ctx.global_style_mut(|style| {
+            for (text_style, size) in &TEXT_SIZES {
+                let family = if *text_style == TextStyle::Monospace {
+                    FontFamily::Monospace
+                } else {
+                    FontFamily::Proportional
+                };
+                style
+                    .text_styles
+                    .insert(text_style.clone(), FontId::new(snapped(*size), family));
+            }
+        });
+    }
+}
+
 /// Light hinting (like FreeType's "slight" and ClearType's vertical-only grid fitting):
 /// horizontal strokes and the baseline snap to whole pixels, so small UI text is sharp,
 /// while glyph widths stay as designed. Full hinting also squeezes glyphs horizontally,
@@ -292,8 +331,12 @@ fn crisp(mut data: FontData) -> FontData {
 /// Font of the user interface (Settings → Misc → Font).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum UiFont {
-    /// Arial: the system's, otherwise the bundled Liberation Sans (same letter widths).
+    /// The system's user interface font: Segoe UI on Windows, San Francisco / Helvetica on
+    /// macOS, the desktop's sans-serif font on Linux (fontconfig). Its hinting is made for
+    /// small sizes on screen, so it is the sharpest choice.
     #[default]
+    System,
+    /// Arial: the system's, otherwise the bundled Liberation Sans (same letter widths).
     Arial,
     /// Tahoma, HLSW's font: the system's, otherwise the bundled Wine Tahoma.
     Tahoma,
@@ -304,7 +347,8 @@ pub enum UiFont {
 }
 
 impl UiFont {
-    pub const ALL: [UiFont; 4] = [
+    pub const ALL: [UiFont; 5] = [
+        UiFont::System,
         UiFont::Arial,
         UiFont::Tahoma,
         UiFont::LiberationSans,
@@ -313,6 +357,7 @@ impl UiFont {
 
     pub fn label(self) -> &'static str {
         match self {
+            UiFont::System => tr!("System font"),
             UiFont::Arial => "Arial",
             UiFont::Tahoma => "Tahoma",
             UiFont::Inconsolata => "Inconsolata",
@@ -323,6 +368,23 @@ impl UiFont {
     /// Installed font files, tried in this order.
     fn system_paths(self) -> &'static [&'static str] {
         match self {
+            UiFont::System if cfg!(windows) => &[
+                "C:\\Windows\\Fonts\\segoeui.ttf",
+                "C:\\Windows\\Fonts\\tahoma.ttf",
+            ],
+            UiFont::System if cfg!(target_os = "macos") => &[
+                "/System/Library/Fonts/SFNS.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/System/Library/Fonts/Supplemental/Arial.ttf",
+            ],
+            UiFont::System => &[
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+                "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+                "/usr/local/share/fonts/dejavu/DejaVuSans.ttf",
+            ],
             UiFont::Arial if cfg!(windows) => &["C:\\Windows\\Fonts\\arial.ttf"],
             UiFont::Arial if cfg!(target_os = "macos") => &[
                 "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -349,6 +411,13 @@ impl UiFont {
 
     /// The font file to use: an installed one, otherwise the bundled replacement.
     fn data(self) -> FontData {
+        // Linux / BSD: ask fontconfig for the desktop's sans-serif font first.
+        if self == UiFont::System
+            && cfg!(all(unix, not(target_os = "macos")))
+            && let Some(bytes) = fontconfig_sans()
+        {
+            return FontData::from_owned(bytes);
+        }
         if let Some(bytes) = self
             .system_paths()
             .iter()
@@ -357,12 +426,28 @@ impl UiFont {
             return FontData::from_owned(bytes);
         }
         FontData::from_static(match self {
+            UiFont::System => BUNDLED_ARIAL,
             UiFont::Arial => BUNDLED_ARIAL,
             UiFont::Tahoma => BUNDLED_TAHOMA,
             UiFont::Inconsolata => INCONSOLATA,
             UiFont::LiberationSans => LIBERATION_SANS,
         })
     }
+}
+
+/// The file of fontconfig's "sans-serif" (a .ttf / .otf, not a collection).
+fn fontconfig_sans() -> Option<Vec<u8>> {
+    let out = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", "sans-serif:style=Regular"])
+        .output()
+        .ok()?;
+    let path = String::from_utf8(out.stdout).ok()?;
+    let path = path.trim();
+    let lower = path.to_ascii_lowercase();
+    if !(lower.ends_with(".ttf") || lower.ends_with(".otf")) {
+        return None;
+    }
+    std::fs::read(path).ok()
 }
 
 /// Bundled fonts, see `assets/fonts/NOTICE.txt`: Inconsolata and Liberation Sans (SIL Open

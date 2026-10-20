@@ -128,8 +128,10 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   Ping Graph, Skin). Keyboard shortcuts like HLSW (F3, F5, F6, Ctrl+G/D/F/P/T/I/O/R/L/U/M/W).
 - **Settings**: My Games (all HLSW games with icons, own game executable and start
   parameters), Startup, Connecting (incl. Quit openHLSW), Rcon, Connections, Plugins (empty),
-  Sounds, Misc (skin, **language**, **font** – Arial (default), Tahoma like HLSW, Liberation
-  Sans or Inconsolata – and **text size**: Normal / Large (115 %, default) / Extra large).
+  Sounds, Misc (skin, **language**, **font** – the system font (default: Segoe UI on
+  Windows, the desktop font on Linux, San Francisco on macOS), Arial, Tahoma like HLSW,
+  Liberation Sans or Inconsolata; font sizes are snapped to whole screen pixels so text stays
+  sharp at every text size – and **text size**: Normal / Large (115 %, default) / Extra large).
 - **File → Advanced**: clear the location / provider cache, reset all ping graphs.
 - **Unicode**: names in every script (fallback fonts for symbols, CJK, Cyrillic …).
 - Servers: all Source games, **Counter-Strike 2** and all **Half-Life 1 games** (GoldSrc,
@@ -296,7 +298,7 @@ src/
   game_icons.rs        game icons (assets/games/*.ico, atlas built by build.rs)
   config.rs            JSON settings
   settings.rs          settings + settings dialog
-  theme.rs             skins (White/Black), text size, fonts (Arial / Tahoma / Liberation Sans / Inconsolata)
+  theme.rs             skins (White/Black), text size, fonts (system / Arial / Tahoma / Liberation Sans / Inconsolata)
   i18n.rs              user interface languages (tr! / t(), assets/lang/*.json)
   app.rs               GUI (egui/eframe) in the HLSW layout
   main.rs              program start

@@ -3284,6 +3284,7 @@ impl eframe::App for OpenHlswApp {
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        theme::snap_text_sizes(ui.ctx());
         self.process_events();
         self.tick(&ui.ctx().clone());
         // While minimized the window has (almost) no size: laying out the panels now would

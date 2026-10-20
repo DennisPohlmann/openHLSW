@@ -698,7 +698,7 @@ impl Default for Settings {
             geo_lookup: true,
             theme: Theme::Light,
             text_size: TextSize::Large,
-            font: UiFont::Arial,
+            font: UiFont::System,
             language: crate::i18n::Language::System,
             defaults_revision: 1,
             connect_on_double_click: true,
