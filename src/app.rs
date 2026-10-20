@@ -403,7 +403,15 @@ impl Server {
     }
 
     fn addons_short(&self) -> String {
-        if self.rules.is_empty() || self.is_gamespy() {
+        if self.is_gamespy() {
+            // Battlefield 2 / 2142: built-in voice chat, like HLSW shows it.
+            return match self.rule("bf2_voip").or(self.rule("bf2142_voip")) {
+                Some("1") => "VOIP".into(),
+                Some(_) => tr!("None").into(),
+                None => String::new(),
+            };
+        }
+        if self.rules.is_empty() {
             return String::new();
         }
         let list = self.addon_list();
@@ -418,6 +426,9 @@ impl Server {
 
     /// "MM:S 1.12.0, SM 1.13.0.7427, HLX:CE 1.7.0" for the info panel.
     fn addons_compact(&self) -> String {
+        if self.is_gamespy() {
+            return self.addons_short();
+        }
         if self.is_goldsrc() {
             return self
                 .addon_list()
@@ -458,7 +469,12 @@ impl Server {
             return String::new();
         };
         if i.gamespy {
-            return String::new();
+            // Battlefield 2 / 2142: PunkBuster.
+            return match self.rule("bf2_anticheat").or(self.rule("bf2142_anticheat")) {
+                Some("1") => "PunkBuster".into(),
+                Some(_) => tr!("None").into(),
+                None => String::new(),
+            };
         }
         const PLUGINS: [(&str, &str); 4] = [
             ("hlg_version", "HLGuard"),
@@ -6670,7 +6686,11 @@ fn info_panel(
                             .unwrap_or_default();
                         row(ui, tr!("Map"), text(format!("{}{next}", i.map)));
                         row(ui, tr!("Limits"), text(s.limits()));
-                        let ff = match s.rule("mp_friendlyfire") {
+                        let ff = match s
+                            .rule("mp_friendlyfire")
+                            .or(s.rule("bf2_friendlyfire"))
+                            .or(s.rule("bf2142_friendlyfire"))
+                        {
                             Some("0") => tr!("No"),
                             Some(_) => tr!("Yes"),
                             None => "",
@@ -7422,7 +7442,7 @@ const PLAYER_COLUMNS: [(&str, bool, f32, f32); 31] = [
     ("Frags", true, 40.0, 30.0),
     ("Kills", true, 36.0, 30.0),
     ("Deaths", true, 44.0, 30.0),
-    ("Skill", false, 40.0, 30.0),
+    ("Skill", true, 40.0, 30.0),
     ("Time", true, 62.0, 50.0),
     ("ID", true, 30.0, 20.0),
     ("Global ID", true, 150.0, 60.0),
@@ -7480,8 +7500,13 @@ fn player_cell(r: &PlayerRow, title: &str) -> (String, CellKey) {
             Some(l) => (l.kills.to_string(), CellKey::Num(l.kills as f64)),
             None => (String::new(), num(None)),
         },
-        "Deaths" => match log {
-            Some(l) => (l.deaths.to_string(), CellKey::Num(l.deaths as f64)),
+        "Deaths" => match (log, r.player.deaths) {
+            (Some(l), _) => (l.deaths.to_string(), CellKey::Num(l.deaths as f64)),
+            (None, Some(d)) => (d.to_string(), CellKey::Num(d as f64)),
+            (None, None) => (String::new(), num(None)),
+        },
+        "Skill" => match r.player.skill {
+            Some(v) => (v.to_string(), CellKey::Num(v as f64)),
             None => (String::new(), num(None)),
         },
         "Time" => (
@@ -7496,7 +7521,11 @@ fn player_cell(r: &PlayerRow, title: &str) -> (String, CellKey) {
         "Global ID Database Comment" => {
             text(r.db.as_ref().map(|e| e.comment.clone()).unwrap_or_default())
         }
-        "Ping" => parsed(st.map(|s| s.ping.clone()).unwrap_or_default()),
+        "Ping" => parsed(
+            st.map(|s| s.ping.clone())
+                .or_else(|| r.player.ping.map(|p| p.to_string()))
+                .unwrap_or_default(),
+        ),
         "Loss" => parsed(st.map(|s| s.loss.clone()).unwrap_or_default()),
         "Rate" => parsed(st.map(|s| s.rate.clone()).unwrap_or_default()),
         "Slot" => parsed(
@@ -7515,11 +7544,16 @@ fn player_cell(r: &PlayerRow, title: &str) -> (String, CellKey) {
         }
         "Country Name" => text(r.country_name.clone()),
         "Provider" => text(r.provider.clone()),
-        "Team" => text(log.map(|l| l.team.clone()).unwrap_or_default()),
+        "Team" => text(
+            log.map(|l| l.team.clone())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| r.player.team.clone()),
+        ),
         "Bot" => {
-            let bot = st.is_some_and(|s| {
-                s.steam_id.eq_ignore_ascii_case("BOT") || s.state.eq_ignore_ascii_case("BOT")
-            });
+            let bot = r.player.bot
+                || st.is_some_and(|s| {
+                    s.steam_id.eq_ignore_ascii_case("BOT") || s.state.eq_ignore_ascii_case("BOT")
+                });
             text(if bot { "BOT".into() } else { String::new() })
         }
         "Statistics (Frags,Death,Efficiency)" => match log {

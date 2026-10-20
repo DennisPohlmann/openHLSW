@@ -14,3 +14,6 @@ please open an issue and it will be removed.
 Exceptions: GameType_DH2005.ico (deer head) and GameType_GS2.ico (globe with a "2",
 used for GameSpy 2 servers) were drawn for openHLSW and are licensed like openHLSW
 itself.
+
+GameType_BF2_Classic.ico is GameType_BF2_XPACK.ico recoloured brown for Battlefield 2
+without the Special Forces expansion, like HLSW shows it.

@@ -124,6 +124,7 @@ struct Reply {
 fn parse_gs3(payloads: &[Vec<u8>]) -> Reply {
     let mut rules: Vec<Rule> = Vec::new();
     let mut fields: Vec<(String, Vec<String>)> = Vec::new();
+    let mut team_fields: Vec<(String, Vec<String>)> = Vec::new();
     for data in payloads {
         let mut pos = 0;
         while pos < data.len() {
@@ -159,16 +160,21 @@ fn parse_gs3(payloads: &[Vec<u8>]) -> Reply {
                     }
                     values.push(v);
                 }
-                if section == 1 {
+                if section == 1 || section == 2 {
+                    let table = if section == 1 {
+                        &mut fields
+                    } else {
+                        &mut team_fields
+                    };
                     let key = name.trim_end_matches('_').to_ascii_lowercase();
-                    let i = match fields.iter().position(|(k, _)| *k == key) {
+                    let i = match table.iter().position(|(k, _)| *k == key) {
                         Some(i) => i,
                         None => {
-                            fields.push((key, Vec::new()));
-                            fields.len() - 1
+                            table.push((key, Vec::new()));
+                            table.len() - 1
                         }
                     };
-                    let column = &mut fields[i].1;
+                    let column = &mut table[i].1;
                     let start = offset as usize;
                     if column.len() < start {
                         column.resize(start, String::new());
@@ -180,29 +186,56 @@ fn parse_gs3(payloads: &[Vec<u8>]) -> Reply {
             pos = s.pos;
         }
     }
+    // Team names (team_t: "MECSF", "US" …) for the team numbers of the players.
+    let team_names: Vec<String> = team_fields
+        .iter()
+        .find(|(k, _)| k == "team_t" || k == "team")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let players = players_from_columns(&fields, &team_names);
+    Reply { rules, players }
+}
+
+/// Players from GameSpy field columns (`player_`, `score_`, `deaths_`, `ping_`, `team_`,
+/// `skill_`, `AIBot_`, …). Team numbers are replaced by the team names when known.
+fn players_from_columns(fields: &[(String, Vec<String>)], team_names: &[String]) -> Vec<Player> {
     let count = fields
         .iter()
-        .find(|(k, _)| k == "player" || k == "name")
+        .find(|(k, _)| k == "player" || k == "name" || k == "playername")
         .map_or(0, |(_, v)| v.len());
-    let get = |key: &[&str], i: usize| {
+    let get = |keys: &[&str], i: usize| {
         fields
             .iter()
-            .find(|(k, _)| key.contains(&k.as_str()))
-            .and_then(|(_, v)| v.get(i).cloned())
-            .unwrap_or_default()
+            .find(|(k, _)| keys.contains(&k.as_str()))
+            .and_then(|(_, v)| v.get(i))
+            .map(|v| v.trim().to_string())
     };
-    let players = (0..count)
-        .map(|i| Player {
-            index: i as u8,
-            name: get(&["player", "name"], i),
-            score: get(&["score", "frags", "kills"], i)
-                .trim()
-                .parse()
-                .unwrap_or(0),
-            duration: get(&["time"], i).trim().parse().unwrap_or(0.0),
+    (0..count)
+        .map(|i| {
+            let team = get(&["team"], i).unwrap_or_default();
+            let team = team
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| team_names.get(n.checked_sub(1)?))
+                .cloned()
+                .unwrap_or(team);
+            Player {
+                index: i as u8,
+                name: get(&["player", "name", "playername"], i).unwrap_or_default(),
+                score: get(&["score", "frags", "kills"], i)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+                duration: get(&["time"], i)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.0),
+                deaths: get(&["deaths"], i).and_then(|v| v.parse().ok()),
+                ping: get(&["ping"], i).and_then(|v| v.parse().ok()),
+                skill: get(&["skill"], i).and_then(|v| v.parse().ok()),
+                team,
+                bot: get(&["aibot", "bot"], i).is_some_and(|v| v == "1"),
+            }
         })
-        .collect();
-    Reply { rules, players }
+        .collect()
 }
 
 /// Queries info / players with the variant the server understands.
@@ -385,8 +418,16 @@ pub fn info_from_rules(rules: &[Rule]) -> ServerInfo {
         game,
         players: num("numplayers"),
         max_players: num("maxplayers"),
-        server_type: if get("dedicated") == "0" { b'l' } else { b'd' },
-        environment: match get("os").to_ascii_lowercase().as_str() {
+        server_type: if get("dedicated") == "0" || get("bf2_dedicated") == "0" {
+            b'l'
+        } else {
+            b'd'
+        },
+        // Battlefield 2 reports the system as bf2_os ("linux-64", "win32").
+        environment: match format!("{}{}", get("os"), get("bf2_os"))
+            .to_ascii_lowercase()
+            .as_str()
+        {
             o if o.contains("win") => b'w',
             o if o.contains("linux") => b'l',
             _ => 0,
@@ -441,6 +482,11 @@ pub fn parse_players(data: &[u8]) -> Vec<Player> {
                 "player" | "name" | "playername" => p.name = v,
                 "score" | "frags" | "kills" => p.score = v.trim().parse().unwrap_or(0),
                 "time" => p.duration = v.trim().parse().unwrap_or(0.0),
+                "deaths" => p.deaths = v.trim().parse().ok(),
+                "ping" => p.ping = v.trim().parse().ok(),
+                "skill" => p.skill = v.trim().parse().ok(),
+                "team" => p.team = v.trim().to_string(),
+                "aibot" | "bot" => p.bot = v.trim() == "1",
                 _ => {}
             }
         }
@@ -455,7 +501,15 @@ pub fn query_info(
 ) -> Result<(ServerInfo, QueryMeta), QueryError> {
     let (reply, meta) = query(addr, timeout, false)?;
     let mut info = info_from_rules(&reply.rules);
-    if !reply.players.is_empty() && info.players == 0 {
+    // Battlefield 2 counts only humans in numplayers; bots are flagged per player.
+    let bots = reply.players.iter().filter(|p| p.bot).count();
+    if bots > 0 {
+        info.bots = bots.min(255) as u8;
+        info.players = info
+            .players
+            .saturating_add(info.bots)
+            .max(reply.players.len().min(255) as u8);
+    } else if !reply.players.is_empty() && info.players == 0 {
         info.players = reply.players.len().min(255) as u8;
     }
     Ok((info, meta))
@@ -537,6 +591,16 @@ mod tests {
         });
         assert_eq!(info_from_rules(&sf).folder, "battlefield2/xpack");
         assert_eq!(bf_mod_name("xpack"), "Special Forces Expansion");
+
+        // Team section and per-player extra columns.
+        let p0 = b"\x00hostname\0X\0bf2_os\0linux-64\0\0\x01player_\0\x00Bot1\0\0deaths_\0\x003\0\0ping_\0\x0045\0\0team_\0\x002\0\0skill_\0\x007\0\0AIBot_\0\x001\0\0\0\x02team_t\0\x00US\0MECSF\0\0\0".to_vec();
+        let r2 = parse_gs3(&[p0]);
+        let b = &r2.players[0];
+        assert_eq!(
+            (b.deaths, b.ping, b.skill, b.team.as_str(), b.bot),
+            (Some(3), Some(45), Some(7), "MECSF", true)
+        );
+        assert_eq!(info_from_rules(&r2.rules).environment, b'l');
         assert_eq!((i.players, i.max_players), (2, 64));
         assert_eq!(r.players.len(), 2);
         assert_eq!((r.players[1].name.as_str(), r.players[1].score), ("Ann", 5));

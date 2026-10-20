@@ -83,6 +83,12 @@ pub struct Player {
     pub score: i32,
     /// Seconds connected.
     pub duration: f32,
+    /// Extra columns some protocols report per player (GameSpy: Battlefield 2 …).
+    pub deaths: Option<i32>,
+    pub ping: Option<u32>,
+    pub skill: Option<i32>,
+    pub team: String,
+    pub bot: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -514,6 +520,7 @@ pub fn parse_players(payload: &[u8]) -> Vec<Player> {
                 name: r.string()?,
                 score: r.i32()?,
                 duration: r.f32()?,
+                ..Default::default()
             })
         })();
         match parsed {

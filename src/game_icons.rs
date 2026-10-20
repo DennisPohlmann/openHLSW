@@ -110,7 +110,8 @@ pub fn icon_for_gamespy(folder: &str) -> &'static str {
     match gamename {
         "dh2005" | "deerhunter2005" | "deerhunt2005" => "DH2005",
         "battlefield2" if mod_dir == "xpack" => "BF2_XPACK",
-        "battlefield2" => "BF2",
+        // Brown "2" like HLSW (the Special Forces "2" in brown).
+        "battlefield2" => "BF2_Classic",
         "stella" => "BF2142",
         "bfvietnam" => "BFV",
         "armedass" => "ARMA",
@@ -130,7 +131,7 @@ pub fn icon_for_game(name: &str) -> &'static str {
         "ARMA 2: Operation Arrowhead" => "ARMA2AO",
         "Armed Assault" => "ARMA",
         "Battlefield 1942" => "BF1942",
-        "Battlefield 2" => "BF2",
+        "Battlefield 2" => "BF2_Classic",
         "Battlefield 2142" => "BF2142",
         "Battlefield Vietnam" => "BFV",
         "Brink" => "Brink",
