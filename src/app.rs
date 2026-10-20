@@ -4031,39 +4031,18 @@ impl OpenHlswApp {
                     return;
                 };
                 // GameSpy games (Battlefield 2, Deer Hunter 2005, …) have no RCON that
-                // openHLSW speaks: say so instead of asking for a password.
-                let s = &self.servers[idx];
-                if !s.supports_rcon() {
-                    let game = s
-                        .info
-                        .as_ref()
-                        .map(|i| i.game.clone())
-                        .filter(|g| !g.is_empty())
-                        .unwrap_or_else(|| tr!("this game").into());
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(20.0);
-                        ui.label(
-                            RichText::new(tr!(
-                                "RCON is not supported for {game} servers.",
-                                game = game
-                            ))
-                            .strong(),
-                        );
-                        ui.label(
-                            RichText::new(tr!(
-                                "Server info, players and rules are queried without a password."
-                            ))
-                            .color(p.weak_text),
-                        );
-                    });
-                    return;
-                }
-                match self.tab {
+                // openHLSW speaks: the tabs stay visible but greyed out, nothing can be typed.
+                let rcon = self.servers[idx].supports_rcon();
+                let resp = ui.add_enabled_ui(rcon, |ui| match self.tab {
                     Tab::RconConfig => self.rcon_config_tab(ui, p, idx, actions),
                     Tab::Console => self.console_tab(ui, p, idx, actions),
                     Tab::Chat => self.chat_tab(ui, p, idx, actions),
                     Tab::BanList => self.ban_tab(ui, p, idx, actions),
                     Tab::ChangeLevel => self.change_level_tab(ui, p, idx, actions),
+                });
+                if !rcon {
+                    resp.response
+                        .on_disabled_hover_text(tr!("RCON is not supported for this game"));
                 }
             });
     }
