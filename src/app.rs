@@ -33,6 +33,7 @@ use crate::config::{self, Config, SavedList, SavedServer};
 use crate::discover;
 use crate::flags::Flags;
 use crate::game_icons::{self, GameIcons};
+use crate::games;
 use crate::geo::{self, GeoInfo};
 use crate::iddb::{self, IdDb, IdEntry, IdKind};
 use crate::settings::{
@@ -763,64 +764,32 @@ enum Action {
     Quit,
 }
 
-/// Game type of the "IP/Port" box: decides the protocol and default ports of new servers
-/// and shows the type of the selected server.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-enum AddGame {
-    #[default]
-    Source,
-    Cs2,
-    GoldSrc,
-    GameSpy2,
+/// Game chosen in the "IP/Port" box (HLSW's game list); `None` = detect automatically.
+type AddGame = Option<&'static games::Game>;
+
+/// Hint of the address field for the chosen game.
+fn add_game_hint(game: AddGame) -> String {
+    match game {
+        Some(g) if g.protocol == games::Protocol::GameSpy2 && g.default_query_port > 0 => tr!(
+            "ip:gameport (query port {port}) or ip:gameport:queryport, Enter to add",
+            port = g.default_query_port
+        ),
+        Some(g) if g.protocol == games::Protocol::GameSpy2 => {
+            tr!("ip:gameport:queryport, e.g. 1.2.3.4:23459:34567 (Deer Hunter 2005), Enter to add")
+                .into()
+        }
+        _ => tr!("host:port or steam://connect/… and press Enter to add").into(),
+    }
 }
 
-impl AddGame {
-    const ALL: [AddGame; 4] = [
-        AddGame::Source,
-        AddGame::Cs2,
-        AddGame::GoldSrc,
-        AddGame::GameSpy2,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            AddGame::Source => tr!("Half-Life 2"),
-            AddGame::Cs2 => tr!("Counter-Strike 2"),
-            AddGame::GoldSrc => tr!("Half-Life"),
-            AddGame::GameSpy2 => tr!("GameSpy 2"),
-        }
-    }
-
-    fn icon(self) -> &'static str {
-        match self {
-            AddGame::Source => "HL2",
-            AddGame::Cs2 => "HL2_CS2",
-            AddGame::GoldSrc => "HL",
-            AddGame::GameSpy2 => "GS2",
-        }
-    }
-
-    fn hint(self) -> &'static str {
-        match self {
-            AddGame::GameSpy2 => {
-                tr!(
-                    "ip:gameport:queryport, e.g. 1.2.3.4:23459:34567 (Deer Hunter 2005), Enter to add"
-                )
-            }
-            _ => tr!("host:port or steam://connect/… and press Enter to add"),
-        }
-    }
-
-    fn of(info: &ServerInfo) -> Self {
-        if info.gamespy {
-            AddGame::GameSpy2
-        } else if info.goldsrc {
-            AddGame::GoldSrc
-        } else if info.real_app_id() == 730 {
-            AddGame::Cs2
-        } else {
-            AddGame::Source
-        }
+/// Game of the list that matches a detected server (shown when it is selected).
+fn add_game_of(info: &ServerInfo) -> AddGame {
+    if info.gamespy {
+        None
+    } else if info.goldsrc {
+        games::by_key("HL")
+    } else {
+        games::by_key("HL2")
     }
 }
 
@@ -1133,7 +1102,7 @@ impl OpenHlswApp {
             console_autoscroll: true,
             console_find: None,
             address_input: String::new(),
-            add_game: AddGame::default(),
+            add_game: None,
             search: String::new(),
             join_password: String::new(),
             hide_join_password: true,
@@ -2042,7 +2011,7 @@ impl OpenHlswApp {
         match action {
             Action::Select(id) => {
                 if let Some(info) = self.server(id).and_then(|s| s.info.as_ref()) {
-                    self.add_game = AddGame::of(info);
+                    self.add_game = add_game_of(info);
                 }
                 if self.selected != Some(id) {
                     self.selected = Some(id);
@@ -2056,11 +2025,24 @@ impl OpenHlswApp {
                 if input.is_empty() {
                     return;
                 }
-                let Some(address) = ServerAddress::parse(&input) else {
+                let Some(mut address) = ServerAddress::parse(&input) else {
                     self.status_message = tr!("Invalid address: {input}", input = input);
                     return;
                 };
-                if self.add_game == AddGame::GameSpy2 && address.query_port.is_none() {
+                let gamespy = self
+                    .add_game
+                    .is_some_and(|g| g.protocol == games::Protocol::GameSpy2);
+                if gamespy && address.query_port.is_none() {
+                    // Default query port of the game (e.g. 2303 for ArmA), if HLSW knows one.
+                    if let Some(port) = self
+                        .add_game
+                        .map(|g| g.default_query_port)
+                        .filter(|&p| p > 0)
+                    {
+                        address.query_port = Some(port);
+                    }
+                }
+                if gamespy && address.query_port.is_none() {
                     // GameSpy 2 answers on a separate query port.
                     self.status_message = tr!(
                         "GameSpy 2 servers need the query port: ip:gameport:queryport (e.g. {host}:{port}:34567)",
@@ -3384,19 +3366,61 @@ impl OpenHlswApp {
         ui.horizontal(|ui| {
             label(ui, tr!("IP/Port:"));
             if let Some(icons) = &self.game_icons {
-                icons.show(ui, self.add_game.icon(), 16.0);
+                icons.show(ui, self.add_game.map_or("", |g| g.icon), 16.0);
             }
+            let selected_text = self.add_game.map_or(tr!("Auto detect"), |g| g.name);
+            let add_game = &mut self.add_game;
+            let game_icons = self.game_icons.as_ref();
             egui::ComboBox::from_id_salt("game_type")
-                .selected_text(self.add_game.label())
-                .width(140.0)
+                .selected_text(selected_text)
+                .width(180.0)
+                .height(420.0)
                 .show_ui(ui, |ui| {
-                    for g in AddGame::ALL {
+                    // Like HLSW: automatic detection first, then the games that cannot be
+                    // detected, then all games.
+                    if ui
+                        .selectable_label(add_game.is_none(), tr!("Auto detect"))
+                        .on_hover_text(tr!(
+                            "Source, Half-Life 1 and CS2 servers are detected automatically"
+                        ))
+                        .clicked()
+                    {
+                        *add_game = None;
+                    }
+                    let mut row = |ui: &mut Ui, g: &'static games::Game| {
                         ui.horizontal(|ui| {
-                            if let Some(icons) = &self.game_icons {
-                                icons.show(ui, g.icon(), 16.0);
+                            if let Some(icons) = game_icons {
+                                icons.show(ui, g.icon, 16.0);
                             }
-                            ui.selectable_value(&mut self.add_game, g, g.label());
+                            let selected = add_game.is_some_and(|a| std::ptr::eq(a, g));
+                            let r = ui
+                                .add_enabled(
+                                    g.supported(),
+                                    egui::Button::selectable(selected, g.name),
+                                )
+                                .on_disabled_hover_text(tr!(
+                                    "Protocol {protocol} is not supported yet",
+                                    protocol = g.hlsw_protocol
+                                ));
+                            if r.clicked() {
+                                *add_game = Some(g);
+                                ui.close();
+                            }
                         });
+                    };
+                    ui.label(
+                        RichText::new(tr!("--- Not detectable games ---"))
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    for g in games::GAMES.iter().filter(|g| g.not_detectable) {
+                        row(ui, g);
+                    }
+                    ui.label(
+                        RichText::new(tr!("--- All games ---"))
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    for g in games::GAMES {
+                        row(ui, g);
                     }
                 });
             let hint = match self.selected.and_then(|id| self.server(id)) {
@@ -3405,7 +3429,7 @@ impl OpenHlswApp {
                     s.address,
                     s.info.as_ref().map(|i| i.name.as_str()).unwrap_or_default()
                 ),
-                _ => self.add_game.hint().into(),
+                _ => add_game_hint(self.add_game),
             };
             let input = ui
                 .add(

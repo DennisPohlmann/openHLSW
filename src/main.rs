@@ -21,6 +21,7 @@ mod discover;
 mod filter;
 mod flags;
 mod game_icons;
+mod games;
 mod geo;
 mod i18n;
 mod iddb;
