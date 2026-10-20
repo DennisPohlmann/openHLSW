@@ -189,6 +189,8 @@ struct ChatLine {
     team: String,
     team_only: bool,
     text: String,
+    /// Sent from openHLSW (Message to all players) and not yet echoed by the server log.
+    own: bool,
 }
 
 impl Server {
@@ -1509,9 +1511,25 @@ impl OpenHlswApp {
                     ));
                 }
             }
-            s.chat.push(chat);
-            if s.chat.len() > CHAT_MAX_LINES {
-                s.chat.remove(0);
+            // Our own message is shown right away when sent; the server log repeats it as
+            // "Console" – take that as confirmation instead of showing it twice.
+            let echo = (chat.name == "Console")
+                .then(|| {
+                    s.chat
+                        .iter_mut()
+                        .rev()
+                        .take(20)
+                        .find(|c| c.own && c.text == chat.text)
+                })
+                .flatten();
+            if let Some(own) = echo {
+                own.own = false;
+                own.time = chat.time;
+            } else {
+                s.chat.push(chat);
+                if s.chat.len() > CHAT_MAX_LINES {
+                    s.chat.remove(0);
+                }
             }
         }
         if let Some(msg) = admin_call {
@@ -2756,15 +2774,18 @@ impl OpenHlswApp {
                 }
                 self.chat_input.clear();
                 if let Some(s) = self.server_mut(id) {
-                    if s.log_target.is_none() {
-                        // Without a log stream we would never see our own message.
-                        s.chat.push(ChatLine {
-                            time: String::new(),
-                            name: "Console".into(),
-                            team: String::new(),
-                            team_only: false,
-                            text: text.clone(),
-                        });
+                    // Show the message right away: the server log may not reach us (no Get
+                    // Log, firewall, NAT). If it does, its echo only confirms this line.
+                    s.chat.push(ChatLine {
+                        time: chrono::Local::now().format("%H:%M:%S").to_string(),
+                        name: "Console".into(),
+                        team: String::new(),
+                        team_only: false,
+                        text: text.clone(),
+                        own: true,
+                    });
+                    if s.chat.len() > CHAT_MAX_LINES {
+                        s.chat.remove(0);
                     }
                     s.configure_rcon();
                     s.rcon_send(format!("say {text}"), RconTag::Silent);
@@ -8615,6 +8636,17 @@ fn apply_log_stats(players: &mut HashMap<String, LogPlayer>, line: &str) {
 fn parse_chat_line(line: &str) -> Option<ChatLine> {
     let (stamp, rest) = line.split_once(": ")?;
     let time = stamp.rsplit(' ').next().unwrap_or_default().to_string();
+    // HLDS logs `rcon say` as: Server say "text"
+    if let Some(text) = rest.strip_prefix("Server say \"") {
+        return Some(ChatLine {
+            time,
+            name: "Console".into(),
+            team: String::new(),
+            team_only: false,
+            text: text.strip_suffix('"').unwrap_or(text).to_string(),
+            own: false,
+        });
+    }
     let (player, team_only, text) = if let Some((p, t)) = rest.split_once("\" say_team \"") {
         (p, true, t)
     } else {
@@ -8635,6 +8667,7 @@ fn parse_chat_line(line: &str) -> Option<ChatLine> {
         team,
         team_only,
         text,
+        own: false,
     })
 }
 
@@ -8901,6 +8934,14 @@ mod tests {
         assert!(
             parse_chat_line(r#"10/18/2026 - 19:22:33: World triggered "Round_Start""#).is_none()
         );
+        // rcon say: srcds and HLDS log it differently, both count as "Console".
+        for line in [
+            r#"10/18/2026 - 19:22:34: "Console<0><Console><Console>" say "hello all""#,
+            r#"10/18/2026 - 19:22:34: Server say "hello all""#,
+        ] {
+            let c = parse_chat_line(line).unwrap();
+            assert_eq!((c.name.as_str(), c.text.as_str()), ("Console", "hello all"));
+        }
     }
 
     #[test]
