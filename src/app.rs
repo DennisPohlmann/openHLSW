@@ -7133,22 +7133,52 @@ fn graph_labels(
     let x_of = |i: usize| rect.left() + step * i as f32 + step.max(1.0) / 2.0;
     let small = egui::FontId::proportional(9.0);
     let ink = Color32::from_gray(40);
-    // Text with a light halo, kept inside the graph.
-    let label = |pos: egui::Pos2, align: egui::Align2, text: String, color: Color32| {
-        let galley = painter.layout_no_wrap(text, small.clone(), color);
-        let mut r = align
-            .anchor_size(pos, galley.size())
-            .expand2(egui::vec2(2.0, 0.0));
+    // Where a label goes: anchored at `pos`, moved inside the graph.
+    let fit = |pos: egui::Pos2, align: egui::Align2, text: &str| {
+        let size = painter
+            .layout_no_wrap(text.to_string(), small.clone(), ink)
+            .size();
+        let r = align.anchor_size(pos, size).expand2(egui::vec2(2.0, 0.0));
         let dx =
             (rect.left() + 1.0 - r.left()).max(0.0) - (r.right() - rect.right() + 1.0).max(0.0);
         let dy =
             (rect.top() + 1.0 - r.top()).max(0.0) - (r.bottom() - rect.bottom() + 1.0).max(0.0);
-        r = r.translate(egui::vec2(dx, dy));
+        r.translate(egui::vec2(dx, dy))
+    };
+    // Text with a light halo in the rect from `fit`.
+    let draw = |r: egui::Rect, text: String, color: Color32| {
+        let galley = painter.layout_no_wrap(text, small.clone(), color);
         painter.rect_filled(r, 2.0, Color32::from_white_alpha(170));
         painter.galley(r.min + egui::vec2(2.0, 0.0), galley, color);
         r
     };
+    let label = |pos: egui::Pos2, align: egui::Align2, text: String, color: Color32| {
+        draw(fit(pos, align, &text), text, color)
+    };
     let tall = rect.height() >= 40.0;
+    let mut placed: Vec<egui::Rect> = Vec::new();
+
+    // Current value at the newest bar; placed first so the other labels keep clear of it.
+    let current = if tall && let Some(last) = history.back() {
+        let i = history.len() - 1;
+        let (text, y, color) = match last {
+            Some(v) => (format!("{v} ms"), y_of(*v as f32), ink),
+            None => (
+                tr!("Timeout").to_string(),
+                rect.top() + 10.0,
+                Color32::from_rgb(200, 0, 0),
+            ),
+        };
+        let r = fit(
+            egui::pos2(x_of(i) + 4.0, y),
+            egui::Align2::LEFT_BOTTOM,
+            &text,
+        );
+        placed.push(r.expand(1.0));
+        Some((r, text, color))
+    } else {
+        None
+    };
 
     if tall {
         // Scale: up to three "nice" grid lines with their value on the left.
@@ -7160,6 +7190,7 @@ fn graph_labels(
             .find(|s| *s >= target)
             .unwrap_or(target);
         let mut v = nice;
+        let mut scale = Vec::new();
         while v < max {
             let y = y_of(v);
             if y > rect.top() + 6.0 {
@@ -7168,16 +7199,21 @@ fn graph_labels(
                     y,
                     Stroke::new(1.0, Color32::from_black_alpha(25)),
                 );
-                label(
+                let text = format!("{v}");
+                let r = fit(
                     egui::pos2(rect.left() + 3.0, y),
                     egui::Align2::LEFT_CENTER,
-                    format!("{v}"),
-                    Color32::from_gray(110),
+                    &text,
                 );
+                if !placed.iter().any(|p| p.intersects(r)) {
+                    scale.push(draw(r, text, Color32::from_gray(110)));
+                }
             }
             v += nice;
         }
-        // Average: dashed line with its value on the right.
+        placed.extend(scale);
+        // Average: dashed line; its value goes right above the line, or – when the current
+        // value sits there – below it, further left, or on the left side.
         if avg > 0.0 {
             let y = y_of(avg);
             painter.add(egui::Shape::dashed_line(
@@ -7186,12 +7222,27 @@ fn graph_labels(
                 5.0,
                 3.0,
             ));
-            label(
-                egui::pos2(rect.right() - 3.0, y - 1.0),
-                egui::Align2::RIGHT_BOTTOM,
-                format!("Ø {avg:.0} ms"),
-                Color32::from_rgb(30, 70, 170),
-            );
+            let text = format!("Ø {avg:.0} ms");
+            let right = rect.right() - 3.0;
+            let left = rect.left() + 40.0;
+            let candidates = [
+                (egui::pos2(right, y - 1.0), egui::Align2::RIGHT_BOTTOM),
+                (egui::pos2(right, y + 1.0), egui::Align2::RIGHT_TOP),
+                (
+                    egui::pos2(right - 70.0, y - 1.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                ),
+                (egui::pos2(right - 70.0, y + 1.0), egui::Align2::RIGHT_TOP),
+                (egui::pos2(left, y - 1.0), egui::Align2::LEFT_BOTTOM),
+                (egui::pos2(left, y + 1.0), egui::Align2::LEFT_TOP),
+            ];
+            let r = candidates
+                .iter()
+                .map(|&(pos, align)| fit(pos, align, &text))
+                .find(|r| !placed.iter().any(|p| p.intersects(*r)));
+            if let Some(r) = r {
+                placed.push(draw(r, text, Color32::from_rgb(30, 70, 170)));
+            }
         }
     }
 
@@ -7210,41 +7261,18 @@ fn graph_labels(
         })
         .collect();
     peaks.sort_by_key(|p| std::cmp::Reverse(p.1));
-    let mut placed: Vec<egui::Rect> = Vec::new();
     for (i, v) in peaks.into_iter().take(if tall { 8 } else { 3 }) {
         let pos = egui::pos2(x_of(i), y_of(v as f32) - 1.0);
         let text = v.to_string();
-        let size = painter
-            .layout_no_wrap(text.clone(), small.clone(), ink)
-            .size();
-        let probe = egui::Align2::CENTER_BOTTOM
-            .anchor_size(pos, size)
-            .expand(3.0);
-        if placed.iter().any(|r| r.intersects(probe)) {
+        let r = fit(pos, egui::Align2::CENTER_BOTTOM, &text);
+        if placed.iter().any(|p| p.intersects(r.expand(1.0))) {
             continue;
         }
         placed.push(label(pos, egui::Align2::CENTER_BOTTOM, text, ink));
     }
 
-    // Current value at the newest bar.
-    if tall && let Some(last) = history.back() {
-        let i = history.len() - 1;
-        let (text, y, color) = match last {
-            Some(v) => (format!("{v} ms"), y_of(*v as f32), ink),
-            None => (
-                tr!("Timeout").to_string(),
-                rect.top() + 10.0,
-                Color32::from_rgb(200, 0, 0),
-            ),
-        };
-        let pos = egui::pos2(x_of(i) + 4.0, y);
-        let size = painter
-            .layout_no_wrap(text.clone(), small.clone(), color)
-            .size();
-        let probe = egui::Align2::LEFT_BOTTOM.anchor_size(pos, size).expand(2.0);
-        if !placed.iter().any(|r| r.intersects(probe)) {
-            label(pos, egui::Align2::LEFT_BOTTOM, text, color);
-        }
+    if let Some((r, text, color)) = current {
+        draw(r, text, color);
     }
 
     // Mouse over the graph: cursor line and the value of that query.
