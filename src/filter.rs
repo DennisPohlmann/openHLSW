@@ -36,7 +36,9 @@ impl Range {
 pub struct ServerFilter {
     /// Filter switched on (toolbar check box).
     pub enabled: bool,
-    /// Hide servers that do not answer.
+    /// Hide servers that do not answer. Off by default: offline servers stay in the list
+    /// (red, at the end). Stored under a new key, so the old default "on" is not taken over.
+    #[serde(rename = "hide_offline")]
     pub hide_timeout: bool,
     /// Hide servers with a higher ping (0 = off).
     pub max_ping: u32,
@@ -69,7 +71,7 @@ impl Default for ServerFilter {
     fn default() -> Self {
         Self {
             enabled: false,
-            hide_timeout: true,
+            hide_timeout: false,
             max_ping: 0,
             password: PasswordFilter::Any,
             game: String::new(),

@@ -6123,6 +6123,8 @@ fn server_table(
             .filter(|i| !kept.contains(i))
             .collect();
         kept.extend(new);
+        // Servers that went offline still move to the end right away.
+        kept.sort_by_key(|&i| servers[i].is_offline());
         kept
     } else {
         fresh
@@ -6555,7 +6557,12 @@ fn sorted_servers(
                 .then_with(|| x.address.to_string().cmp(&y.address.to_string())),
         };
         let ord = if ascending { ord } else { ord.reverse() };
-        ord.then(a.cmp(&b))
+        // Offline servers always go to the end (sorted among themselves the same way) and
+        // move back up as soon as they answer again.
+        x.is_offline()
+            .cmp(&y.is_offline())
+            .then(ord)
+            .then(a.cmp(&b))
     });
     order
 }
