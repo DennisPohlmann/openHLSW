@@ -1812,6 +1812,9 @@ impl OpenHlswApp {
                             }
                             RconTag::Silent => {}
                             RconTag::BanIds | RconTag::BanIps => {
+                                if !text.trim().is_empty() {
+                                    s.console_add(LineKind::Response, &text, false);
+                                }
                                 let is_ip = tag == RconTag::BanIps;
                                 s.bans.retain(|b| b.is_ip != is_ip);
                                 s.bans.extend(parse_ban_list(&text, is_ip));
@@ -2483,17 +2486,22 @@ impl OpenHlswApp {
                 }
             }
             Action::BanCommand(id, cmd) => {
-                if let Some(s) = self.server(id) {
+                if let Some(s) = self.server_mut(id) {
                     s.configure_rcon();
-                    s.rcon.exec(cmd, RconTag::Silent);
-                    s.rcon.exec("listid", RconTag::BanIds);
-                    s.rcon.exec("listip", RconTag::BanIps);
+                    for c in cmd.split(';') {
+                        s.console_add(LineKind::Command, c, false);
+                        s.rcon.exec(c, RconTag::Console);
+                    }
                 }
+                self.apply(Action::FetchBans(id), ctx);
             }
             Action::FetchBans(id) => {
-                if let Some(s) = self.server(id) {
+                // Shown in the console like in HLSW, so the raw server answer can be checked.
+                if let Some(s) = self.server_mut(id) {
                     s.configure_rcon();
+                    s.console_add(LineKind::Command, "listid", false);
                     s.rcon.exec("listid", RconTag::BanIds);
+                    s.console_add(LineKind::Command, "listip", false);
                     s.rcon.exec("listip", RconTag::BanIps);
                 }
             }
@@ -8017,9 +8025,14 @@ fn parse_ban_list(text: &str, is_ip: bool) -> Vec<BanEntry> {
     text.lines()
         .filter_map(|line| {
             let (left, duration) = line.trim().split_once(" : ")?;
-            let mut parts = left.split_whitespace();
-            parts.next()?.parse::<u32>().ok()?;
-            let ident = parts.next()?.to_string();
+            let (index, rest) = left.trim().split_once(char::is_whitespace)?;
+            index.parse::<u32>().ok()?;
+            // HLDS pads each octet of an IP to three characters ("193. 24.211.152"), so the
+            // address may contain spaces: join everything between the index and " : ".
+            let ident: String = rest.split_whitespace().collect();
+            if ident.is_empty() {
+                return None;
+            }
             Some(BanEntry {
                 is_ip,
                 ident,
@@ -8764,6 +8777,14 @@ mod tests {
             (bans[1].ident.as_str(), bans[1].duration.as_str()),
             ("STEAM_1:1:5", "30.000 min")
         );
+        // HLDS pads the octets of banned IPs.
+        let ips = parse_ban_list(
+            "IP filter list: 2 entries\n1 193. 24.211.152 : permanent\n2  10.  0.  0.  1 : 5.000 min\n",
+            true,
+        );
+        assert_eq!(ips.len(), 2);
+        assert_eq!(ips[0].ident, "193.24.211.152");
+        assert_eq!(ips[1].ident, "10.0.0.1");
         let maps = parse_map_list(
             "Dir:  maps/*.bsp\nPENDING:   (fs) de_dust2.bsp\nPENDING:   (fs) cs_office.bsp\n",
         );
