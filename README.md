@@ -296,6 +296,7 @@ src/
   discover.rs          Steam favorites (serverbrowser_hist.vdf) and LAN search
   flags.rs             country flags (assets/flags.png)
   game_icons.rs        game icons (assets/games/*.ico, atlas built by build.rs)
+  toolbar_icons.rs     toolbar icons (assets/toolbar/*.png, drawn from assets/icon-sources/toolbar/*.svg)
   config.rs            JSON settings
   settings.rs          settings + settings dialog
   theme.rs             skins (White/Black), text size, fonts (system / Arial / Tahoma / Liberation Sans / Inconsolata)

@@ -713,6 +713,10 @@ enum Action {
     CancelWait,
     /// Select the next server of the Find window (F3).
     FindNext,
+    /// Toolbar: show / hide the Rcon section, server list or rules.
+    ToggleView(crate::toolbar_icons::ToolIcon),
+    /// Toolbar: About openHLSW.
+    ShowAbout,
     CopyText(String),
     /// Opens a web page in the default browser.
     OpenUrl(String),
@@ -1285,6 +1289,7 @@ pub struct OpenHlswApp {
     show_about: bool,
     /// Program icon for the About window (loaded when it is first opened).
     about_icon: Option<egui::TextureHandle>,
+    toolbar_icons: Option<crate::toolbar_icons::ToolbarIcons>,
     show_license: bool,
     editing_comment: Option<(ServerId, String)>,
     /// "Connecting..." window: server we wait on for a free slot, since when.
@@ -1467,6 +1472,7 @@ impl OpenHlswApp {
             history_pos: None,
             show_about: false,
             about_icon: None,
+            toolbar_icons: crate::toolbar_icons::ToolbarIcons::load(&cc.egui_ctx),
             show_license: false,
             editing_comment: None,
             waiting: None,
@@ -3276,6 +3282,18 @@ impl OpenHlswApp {
                 }
                 self.save_config();
             }
+            Action::ToggleView(icon) => {
+                use crate::toolbar_icons::ToolIcon;
+                let v = &mut self.settings.view;
+                match icon {
+                    ToolIcon::Rcon => v.rcon_section = !v.rcon_section,
+                    ToolIcon::ServerList => v.server_list = !v.server_list,
+                    ToolIcon::Rules => v.rules = !v.rules,
+                    _ => {}
+                }
+                self.save_config();
+            }
+            Action::ShowAbout => self.show_about = true,
             Action::SaveConfig => self.save_config(),
             Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
@@ -3748,6 +3766,80 @@ impl OpenHlswApp {
         });
     }
 
+    /// HLSW's icon toolbar: Connect | Rcon section, server list, rules | Delete |
+    /// Refresh, Update | server list and server properties | About.
+    fn icon_toolbar(
+        &self,
+        ui: &mut Ui,
+        p: &Palette,
+        icons: &crate::toolbar_icons::ToolbarIcons,
+        actions: &mut Vec<Action>,
+    ) {
+        use crate::toolbar_icons::ToolIcon;
+        let selected = self.selected;
+        let id = selected.unwrap_or_default();
+        let has = selected.is_some();
+        let view = &self.settings.view;
+        let gap = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 1.0;
+        if icons
+            .button(ui, ToolIcon::Connect, has, false, tr!("Connect to server"))
+            .clicked()
+        {
+            actions.push(Action::Connect(id));
+        }
+        toolbar_separator(ui, p);
+        let toggles = [
+            (ToolIcon::Rcon, view.rcon_section, tr!("Toggle Rcon Section")),
+            (ToolIcon::ServerList, view.server_list, tr!("Toggle Server List")),
+            (ToolIcon::Rules, view.rules, tr!("Toggle Rules")),
+        ];
+        for (icon, on, tip) in toggles {
+            if icons.button(ui, icon, true, on, tip).clicked() {
+                actions.push(Action::ToggleView(icon));
+            }
+        }
+        toolbar_separator(ui, p);
+        if icons
+            .button(ui, ToolIcon::Delete, has, false, tr!("Delete Server"))
+            .clicked()
+        {
+            actions.push(Action::Remove(id));
+        }
+        toolbar_separator(ui, p);
+        if icons
+            .button(ui, ToolIcon::Refresh, true, false, tr!("Refresh server list"))
+            .clicked()
+        {
+            actions.push(Action::RefreshAll);
+        }
+        // HLSW downloads LAN / web lists again here; a custom list has nothing to update.
+        icons.button(ui, ToolIcon::Update, false, false, tr!("Update server list"));
+        toolbar_separator(ui, p);
+        if icons
+            .button(ui, ToolIcon::ListProperties, true, false, tr!("Server List Properties"))
+            .clicked()
+        {
+            actions.push(Action::OpenDialog(Dialog::ListProperties(
+                self.list_name.clone(),
+            )));
+        }
+        if icons
+            .button(ui, ToolIcon::ServerProperties, has, false, tr!("Server Properties"))
+            .clicked()
+        {
+            actions.push(Action::OpenDialog(self.server_props_dialog(id)));
+        }
+        toolbar_separator(ui, p);
+        if icons
+            .button(ui, ToolIcon::About, true, false, tr!("About"))
+            .clicked()
+        {
+            actions.push(Action::ShowAbout);
+        }
+        ui.spacing_mut().item_spacing.x = gap;
+    }
+
     fn toolbar(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
         // Right-aligned labels of the first two rows, as wide as the longer (translated) one.
         let label_w = text_width(ui, tr!("Server list:"))
@@ -3896,35 +3988,30 @@ impl OpenHlswApp {
             if view.toolbar {
                 let selected = self.selected;
                 let id = selected.unwrap_or_default();
-                // Flat toolbar buttons like HLSW: a frame only under the mouse.
-                let tool = |text: &str| Button::new(text).frame_when_inactive(false);
-                if ui
-                    .add_enabled(selected.is_some(), tool(tr!("Refresh")))
-                    .on_hover_text("F5")
-                    .clicked()
-                {
-                    actions.push(Action::Refresh(id));
-                }
-                if ui
-                    .add(tool(tr!("Refresh all")))
-                    .on_hover_text(tr!("Shift+F5"))
-                    .clicked()
-                {
-                    actions.push(Action::RefreshAll);
-                }
-                if ui
-                    .add_enabled(selected.is_some(), tool(tr!("Connect")))
-                    .on_hover_text(tr!("Join via Steam"))
-                    .clicked()
-                {
-                    actions.push(Action::Connect(id));
-                }
-                if ui
-                    .add_enabled(selected.is_some(), tool(tr!("Remove")))
-                    .on_hover_text(tr!("Del"))
-                    .clicked()
-                {
-                    actions.push(Action::Remove(id));
+                if let Some(icons) = &self.toolbar_icons {
+                    self.icon_toolbar(ui, p, icons, actions);
+                } else {
+                    // Without the icons: flat text buttons.
+                    let tool = |text: &str| Button::new(text).frame_when_inactive(false);
+                    if ui
+                        .add(tool(tr!("Refresh all")))
+                        .on_hover_text(tr!("Shift+F5"))
+                        .clicked()
+                    {
+                        actions.push(Action::RefreshAll);
+                    }
+                    if ui
+                        .add_enabled(selected.is_some(), tool(tr!("Connect")))
+                        .clicked()
+                    {
+                        actions.push(Action::Connect(id));
+                    }
+                    if ui
+                        .add_enabled(selected.is_some(), tool(tr!("Remove")))
+                        .clicked()
+                    {
+                        actions.push(Action::Remove(id));
+                    }
                 }
                 toolbar_separator(ui, p);
             }

@@ -28,6 +28,7 @@ mod iddb;
 mod native_window;
 mod settings;
 mod theme;
+mod toolbar_icons;
 mod trace;
 #[cfg(windows)]
 mod win_icon;
