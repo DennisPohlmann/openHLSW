@@ -6177,6 +6177,9 @@ pub(crate) fn list_frame_with<R>(
         .inner_margin(1)
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size());
+            // Nothing inside (header cells, row highlights) may paint over the border line.
+            let inside = ui.max_rect().intersect(ui.clip_rect());
+            ui.set_clip_rect(inside);
             add(ui)
         })
         .inner
