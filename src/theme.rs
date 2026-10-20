@@ -299,16 +299,24 @@ pub enum UiFont {
     Tahoma,
     /// Inconsolata (bundled).
     Inconsolata,
+    /// Liberation Sans (bundled; Arial's metric-compatible open replacement).
+    LiberationSans,
 }
 
 impl UiFont {
-    pub const ALL: [UiFont; 3] = [UiFont::Arial, UiFont::Tahoma, UiFont::Inconsolata];
+    pub const ALL: [UiFont; 4] = [
+        UiFont::Arial,
+        UiFont::Tahoma,
+        UiFont::LiberationSans,
+        UiFont::Inconsolata,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             UiFont::Arial => "Arial",
             UiFont::Tahoma => "Tahoma",
             UiFont::Inconsolata => "Inconsolata",
+            UiFont::LiberationSans => "Liberation Sans",
         }
     }
 
@@ -335,7 +343,7 @@ impl UiFont {
                 "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
                 "/usr/share/fonts/TTF/tahoma.ttf",
             ],
-            UiFont::Inconsolata => &[],
+            UiFont::Inconsolata | UiFont::LiberationSans => &[],
         }
     }
 
@@ -352,6 +360,7 @@ impl UiFont {
             UiFont::Arial => BUNDLED_ARIAL,
             UiFont::Tahoma => BUNDLED_TAHOMA,
             UiFont::Inconsolata => INCONSOLATA,
+            UiFont::LiberationSans => LIBERATION_SANS,
         })
     }
 }
@@ -360,8 +369,9 @@ impl UiFont {
 /// Font License 1.1, `OFL.txt`), Wine's Tahoma (LGPL-2.1-or-later, `LGPL-2.1.txt`).
 /// Windows always has Arial and Tahoma, so their replacements are only bundled elsewhere.
 static INCONSOLATA: &[u8] = include_bytes!("../assets/fonts/Inconsolata-Regular.ttf");
+static LIBERATION_SANS: &[u8] = include_bytes!("../assets/fonts/LiberationSans-Regular.ttf");
 #[cfg(not(windows))]
-static BUNDLED_ARIAL: &[u8] = include_bytes!("../assets/fonts/LiberationSans-Regular.ttf");
+static BUNDLED_ARIAL: &[u8] = LIBERATION_SANS;
 #[cfg(not(windows))]
 static BUNDLED_TAHOMA: &[u8] = include_bytes!("../assets/fonts/tahoma.ttf");
 #[cfg(windows)]

@@ -3188,10 +3188,13 @@ impl eframe::App for OpenHlswApp {
                 .show(ui, |ui| self.tools_panel(ui, &p, &mut actions));
         }
         if view.server_list {
+            // Like HLSW: the server list takes a bit less than half of the window, the
+            // details (info, players, rules) get the rest above the Rcon section.
+            let list_height = 300.0;
             egui::Panel::top("server_list")
                 .frame(chrome)
                 .resizable(true)
-                .default_size(420.0)
+                .default_size(list_height)
                 .min_size(80.0)
                 .show(ui, |ui| {
                     let needle = self.search.trim().to_lowercase();
@@ -3730,29 +3733,31 @@ impl OpenHlswApp {
             if view.toolbar {
                 let selected = self.selected;
                 let id = selected.unwrap_or_default();
+                // Flat toolbar buttons like HLSW: a frame only under the mouse.
+                let tool = |text: &str| Button::new(text).frame_when_inactive(false);
                 if ui
-                    .add_enabled(selected.is_some(), Button::new(tr!("Refresh")))
+                    .add_enabled(selected.is_some(), tool(tr!("Refresh")))
                     .on_hover_text("F5")
                     .clicked()
                 {
                     actions.push(Action::Refresh(id));
                 }
                 if ui
-                    .button(tr!("Refresh all"))
+                    .add(tool(tr!("Refresh all")))
                     .on_hover_text(tr!("Shift+F5"))
                     .clicked()
                 {
                     actions.push(Action::RefreshAll);
                 }
                 if ui
-                    .add_enabled(selected.is_some(), Button::new(tr!("Connect")))
+                    .add_enabled(selected.is_some(), tool(tr!("Connect")))
                     .on_hover_text(tr!("Join via Steam"))
                     .clicked()
                 {
                     actions.push(Action::Connect(id));
                 }
                 if ui
-                    .add_enabled(selected.is_some(), Button::new(tr!("Remove")))
+                    .add_enabled(selected.is_some(), tool(tr!("Remove")))
                     .on_hover_text(tr!("Del"))
                     .clicked()
                 {
@@ -3808,7 +3813,7 @@ impl OpenHlswApp {
                     actions.push(Action::SaveConfig);
                 }
                 if ui
-                    .button(tr!("Edit filter..."))
+                    .add(Button::new(tr!("Edit filter...")).frame_when_inactive(false))
                     .on_hover_text(tr!("Server List Filter Properties"))
                     .clicked()
                 {
@@ -6794,19 +6799,25 @@ fn info_panel(
                     .map(|i| i.name.clone())
                     .unwrap_or_else(|| s.address.to_string())
             });
+            // Like HLSW: the name in link colour, underlined, in the normal font size.
             ui.horizontal(|ui| {
                 ui.add_space(3.0);
                 match &title {
-                    Some(t) => ui.add(Label::new(RichText::new(t).strong().size(15.0)).wrap()),
+                    Some(t) => ui.add(
+                        Label::new(RichText::new(t).color(p.link).underline())
+                            .wrap()
+                            .selectable(false),
+                    ),
                     None => ui.label(""),
                 };
             });
+            ui.add_space(2.0);
             if show_graph {
                 ui.horizontal(|ui| {
                     ui.add_space(3.0);
                     // The graph grows with the panel (drag the panel border to enlarge it).
                     let width = (ui.available_width() - 6.0).max(100.0);
-                    let height = (width * 0.12).clamp(40.0, 120.0);
+                    let height = (width * 0.09).clamp(36.0, 110.0);
                     ping_graph(
                         ui,
                         p,
@@ -6816,7 +6827,7 @@ fn info_panel(
                     );
                 });
             }
-            ui.add_space(8.0);
+            ui.add_space(5.0);
 
             let Some(s) = server else {
                 ui.label(RichText::new(tr!("No server selected.")).color(p.weak_text));
@@ -6827,7 +6838,7 @@ fn info_panel(
             ui.spacing_mut().interact_size.y = 14.0;
             egui::Grid::new("info_grid")
                 .num_columns(2)
-                .spacing([12.0, 4.0])
+                .spacing([10.0, 2.0])
                 .show(ui, |ui| {
                     let row = |ui: &mut Ui, key: &str, value: RichText| {
                         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -7593,13 +7604,14 @@ fn filter_bar(
     total: usize,
 ) -> String {
     ui.horizontal(|ui| {
-        ui.label(tr!("Filter:"));
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(RichText::new(tr!("Filter:")).color(p.weak_text));
         ui.add(
             TextEdit::singleline(text)
                 .align(egui::Align2::LEFT_CENTER)
                 .id_salt(id)
                 .hint_text(hint)
-                .desired_width(200.0),
+                .desired_width(180.0),
         )
         .with_edit_menu();
         if !text.is_empty()
@@ -7612,7 +7624,7 @@ fn filter_bar(
         }
         ui.label(RichText::new(tr!("{total} total", total = total)).color(p.weak_text));
     });
-    ui.add_space(2.0);
+    ui.add_space(1.0);
     text.trim().to_lowercase()
 }
 
