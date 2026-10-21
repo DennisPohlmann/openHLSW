@@ -8856,6 +8856,8 @@ fn rules_table(
                 let n = row.index() + 1;
                 row.set_selected(sel.contains(&r.key));
                 row.col(|ui| {
+                    // One pixel away from the list frame.
+                    ui.add_space(1.0);
                     ui.label(format!("{n:02}"));
                 });
                 row.col(|ui| {
