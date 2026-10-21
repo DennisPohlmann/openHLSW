@@ -128,10 +128,12 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   Ping Graph, Skin). Keyboard shortcuts like HLSW (F3, F5, F6, Ctrl+G/D/F/P/T/I/O/R/L/U/M/W).
 - **Settings**: My Games (all HLSW games with icons, own game executable and start
   parameters), Startup, Connecting (incl. Quit openHLSW), Rcon, Connections, Plugins (empty),
-  Sounds, Misc (laid out like HLSW: server list, **language**, skin, then **font** – every font
-  installed on the computer or the system font, Arial by default (the bundled Liberation Sans
-  where Arial is missing, Wine's Tahoma likewise) – and **text size** 12–16 px; font sizes are
-  snapped to whole screen pixels so text stays sharp).
+  Sounds, Misc (laid out like HLSW: server list, **language**, skin, then **font** – the system
+  font by default or any font installed on the computer, each shown in its own look in the list
+  (Arial and Tahoma are bundled for systems without them) – and **text size** 12–16 px, 13 px by
+  default; font sizes are snapped to whole screen pixels so text stays sharp).
+- **Dropdowns**: typing in an open dropdown jumps to the matching entry ("de" → Deutsch);
+  Enter picks it.
 - **File → Advanced**: clear the location / provider cache, reset all ping graphs.
 - **Unicode**: names in every script (fallback fonts for symbols, CJK, Cyrillic …).
 - Servers: all Source games, **Counter-Strike 2** and all **Half-Life 1 games** (GoldSrc,
@@ -299,7 +301,8 @@ src/
   toolbar_icons.rs     toolbar icons (assets/toolbar/*.png, drawn from assets/icon-sources/toolbar/*.svg)
   config.rs            JSON settings
   settings.rs          settings + settings dialog
-  theme.rs             skins (White/Black), text size, fonts (system / Arial / Tahoma / Liberation Sans / Inconsolata)
+  theme.rs             skins (White/Black), text size, fonts (system / all installed fonts, list previews)
+  typeahead.rs         typing in an open dropdown jumps to the matching entry
   i18n.rs              user interface languages (tr! / t(), assets/lang/*.json)
   app.rs               GUI (egui/eframe) in the HLSW layout
   main.rs              program start

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::{EditMenu, fit, group_box, list_frame, plain_header, styled_table, tab_strip};
 use crate::theme::{Palette, TextSize, Theme, UiFont};
+use crate::typeahead::TypeAhead;
 
 /// A game from HLSW's "My Games" list. Games with a Steam `app_id` are Source or GoldSrc
 /// (Half-Life 1) games whose servers openHLSW can query today; the others are listed for their
@@ -705,7 +706,7 @@ impl Default for Settings {
             keep_order_on_hover: false,
             geo_lookup: true,
             theme: Theme::Light,
-            text_size: TextSize::Px12,
+            text_size: TextSize::default(),
             font: UiFont::default(),
             language: crate::i18n::Language::System,
             appearance: APPEARANCE,
@@ -797,8 +798,8 @@ const GOLDSRC_PRESETS: &[(&str, &str, &str)] = &[
 ];
 
 /// Current revision of the look defaults, see [`Settings::appearance`].
-/// 1: Tahoma 12 px, 2: Arial (default font).
-pub const APPEARANCE: u32 = 2;
+/// 1: Tahoma 12 px, 2: Arial, 3: system font at 13 px.
+pub const APPEARANCE: u32 = 3;
 
 /// State of an open settings dialog: a draft that is applied on OK / Apply.
 pub struct SettingsDialog {
@@ -1057,7 +1058,10 @@ impl SettingsDialog {
                                 .selected_text(tr!("Custom server list"))
                                 .width(260.0)
                                 .show_ui(ui, |ui| {
-                                    let _ = ui.selectable_label(true, tr!("Custom server list"));
+                                    let mut find = TypeAhead::begin(ui);
+                                    let r = ui.selectable_label(true, tr!("Custom server list"));
+                                    find.item(&r, tr!("Custom server list"));
+                                    find.finish(ui);
                                 });
                             ui.end_row();
                             ui.label(tr!("IP/Port:"));
@@ -1068,14 +1072,18 @@ impl SettingsDialog {
                                     d.startup_address.as_str()
                                 })
                                 .width(260.0)
+                                .height(popup_height(ui))
                                 .show_ui(ui, |ui| {
+                                    let mut find = TypeAhead::begin(ui);
                                     for addr in server_list {
-                                        ui.selectable_value(
+                                        let r = ui.selectable_value(
                                             &mut d.startup_address,
                                             addr.clone(),
                                             addr,
                                         );
+                                        find.item(&r, addr);
                                     }
+                                    find.finish(ui);
                                 });
                             ui.end_row();
                         });
@@ -1092,14 +1100,17 @@ impl SettingsDialog {
                 .selected_text(d.on_connect.label())
                 .width(250.0)
                 .show_ui(ui, |ui| {
+                    let mut find = TypeAhead::begin(ui);
                     for v in [
                         OnConnect::Nothing,
                         OnConnect::Minimize,
                         OnConnect::MinimizeNoTraffic,
                         OnConnect::Quit,
                     ] {
-                        ui.selectable_value(&mut d.on_connect, v, v.label());
+                        let r = ui.selectable_value(&mut d.on_connect, v, v.label());
+                        find.item(&r, v.label());
                     }
+                    find.finish(ui);
                 });
         });
         ui.add_space(8.0);
@@ -1371,9 +1382,13 @@ impl SettingsDialog {
                 .width(260.0)
                 .height(popup_height(ui))
                 .show_ui(ui, |ui| {
+                    let mut find = TypeAhead::begin(ui);
                     for l in crate::i18n::Language::ALL {
-                        ui.selectable_value(&mut d.language, l, label(l));
+                        let text = label(l);
+                        let r = ui.selectable_value(&mut d.language, l, &text);
+                        find.item(&r, &text);
                     }
+                    find.finish(ui);
                 });
         });
 
@@ -1383,9 +1398,12 @@ impl SettingsDialog {
                 .width(260.0)
                 .height(popup_height(ui))
                 .show_ui(ui, |ui| {
+                    let mut find = TypeAhead::begin(ui);
                     for t in [Theme::Light, Theme::Dark] {
-                        ui.selectable_value(&mut d.theme, t, t.label());
+                        let r = ui.selectable_value(&mut d.theme, t, t.label());
+                        find.item(&r, t.label());
                     }
+                    find.finish(ui);
                 });
         });
 
@@ -1396,12 +1414,7 @@ impl SettingsDialog {
                     .width(260.0)
                     .height(popup_height(ui))
                     .show_ui(ui, |ui| match crate::theme::font_choices() {
-                        Some(fonts) => {
-                            for f in fonts {
-                                let text = f.label().to_owned();
-                                ui.selectable_value(&mut d.font, f, text);
-                            }
-                        }
+                        Some(fonts) => font_list(ui, &mut d.font, fonts),
                         None => {
                             ui.label(RichText::new(tr!("Loading fonts…")).color(p.weak_text));
                             ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
@@ -1413,9 +1426,12 @@ impl SettingsDialog {
                     .selected_text(d.text_size.label())
                     .width(70.0)
                     .show_ui(ui, |ui| {
+                        let mut find = TypeAhead::begin(ui);
                         for t in TextSize::ALL {
-                            ui.selectable_value(&mut d.text_size, t, t.label());
+                            let r = ui.selectable_value(&mut d.text_size, t, t.label());
+                            find.item(&r, t.label());
                         }
+                        find.finish(ui);
                     });
             });
             ui.label(
@@ -1432,6 +1448,63 @@ impl SettingsDialog {
                 tr!("Automatically add player name with known Global ID to Global ID Database"),
             );
         });
+    }
+}
+
+/// The fonts of Settings → Misc, each name shown in its own font (drawn when its entry
+/// becomes visible, a few per frame), so the list shows what a font looks like.
+fn font_list(ui: &mut Ui, current: &mut UiFont, fonts: Vec<UiFont>) {
+    let mut find = TypeAhead::begin(ui);
+    let mut budget = 3;
+    let mut waiting = false;
+    let row = egui::vec2(ui.available_width().max(250.0), 24.0);
+    for f in fonts {
+        let label = f.label().to_owned();
+        let selected = *current == f;
+        let (rect, response) = ui.allocate_exact_size(row, Sense::click());
+        if ui.is_rect_visible(rect) {
+            let visuals = ui.style().interact_selectable(&response, selected);
+            if selected || response.hovered() || response.has_focus() {
+                ui.painter().rect_filled(rect, 2.0, visuals.weak_bg_fill);
+            }
+            let left = rect.left_center() + egui::vec2(6.0, 0.0);
+            match crate::theme::font_preview(ui.ctx(), &f, &label, 15.0, &mut budget) {
+                Ok((texture, size)) => {
+                    // Fonts with very tall letters are scaled down to the row.
+                    let size = size * (rect.height() / size.y).min(1.0);
+                    let image = egui::Rect::from_min_size(
+                        egui::pos2(left.x, left.y - size.y / 2.0),
+                        size,
+                    );
+                    ui.painter().with_clip_rect(rect).image(
+                        texture,
+                        image,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        visuals.text_color(),
+                    );
+                }
+                Err(not_yet) => {
+                    waiting |= not_yet;
+                    ui.painter().text(
+                        left,
+                        egui::Align2::LEFT_CENTER,
+                        &label,
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        visuals.text_color(),
+                    );
+                }
+            }
+        }
+        let response = response.on_hover_text(&label);
+        if response.clicked() {
+            *current = f;
+            ui.close();
+        }
+        find.item(&response, &label);
+    }
+    find.finish(ui);
+    if waiting {
+        ui.ctx().request_repaint();
     }
 }
 

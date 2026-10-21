@@ -33,6 +33,7 @@ use crate::config::{self, Config, SavedList, SavedServer};
 use crate::discover;
 use crate::flags::Flags;
 use crate::game_icons::{self, GameIcons};
+use crate::typeahead::TypeAhead;
 use crate::games;
 use crate::geo::{self, GeoInfo};
 use crate::iddb::{self, IdDb, IdEntry, IdKind};
@@ -1390,13 +1391,10 @@ impl OpenHlswApp {
         let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
         let mut config = config::load();
         crate::i18n::set_language(config.settings.language);
-        // Old configs: switch once to the current default look (Arial; 12 px for configs from
-        // before the pixel sizes).
+        // Old configs: switch once to the current default look (system font, 13 px).
         if config.settings.appearance < crate::settings::APPEARANCE {
             config.settings.font = crate::theme::UiFont::default();
-            if config.settings.appearance < 1 {
-                config.settings.text_size = crate::theme::TextSize::Px12;
-            }
+            config.settings.text_size = crate::theme::TextSize::default();
             config.settings.appearance = crate::settings::APPEARANCE;
         }
         theme::install_fonts(&cc.egui_ctx, &config.settings.font);
@@ -3969,13 +3967,15 @@ impl OpenHlswApp {
                 .selected_text(self.list_name.clone())
                 .width(width)
                 .show_ui(ui, |ui| {
+                    let mut find = TypeAhead::begin(ui);
                     for name in names {
-                        if ui.selectable_label(name == self.list_name, &name).clicked()
-                            && name != self.list_name
-                        {
+                        let r = ui.selectable_label(name == self.list_name, &name);
+                        find.item(&r, &name);
+                        if r.clicked() && name != self.list_name {
                             actions.push(Action::OpenList(name));
                         }
                     }
+                    find.finish(ui);
                 });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if self.settings.filter.enabled || !self.search.trim().is_empty() {
@@ -4006,14 +4006,16 @@ impl OpenHlswApp {
                 .show_ui(ui, |ui| {
                     // Like HLSW: automatic detection first, then the games that cannot be
                     // detected, then all games.
-                    if ui
+                    let mut find = TypeAhead::begin(ui);
+                    let auto = ui
                         .selectable_label(add_game.is_none(), tr!("Auto detect"))
                         .on_hover_text(tr!(
                             "Source, Half-Life 1 and CS2 servers are detected automatically"
-                        ))
-                        .clicked()
-                    {
+                        ));
+                    find.item(&auto, tr!("Auto detect"));
+                    if auto.clicked() {
                         *add_game = None;
+                        ui.close();
                     }
                     let mut row = |ui: &mut Ui, g: &'static games::Game| {
                         ui.horizontal(|ui| {
@@ -4030,6 +4032,9 @@ impl OpenHlswApp {
                                     "Protocol {protocol} is not supported yet",
                                     protocol = g.hlsw_protocol
                                 ));
+                            if g.supported() {
+                                find.item(&r, g.name);
+                            }
                             if r.clicked() {
                                 *add_game = Some(g);
                                 ui.close();
@@ -4050,6 +4055,7 @@ impl OpenHlswApp {
                     for g in games::GAMES {
                         row(ui, g);
                     }
+                    find.finish(ui);
                 });
             let hint = match self.selected.and_then(|id| self.server(id)) {
                 Some(s) if self.address_input.is_empty() => format!(
@@ -5722,13 +5728,14 @@ impl OpenHlswApp {
                                     egui::ComboBox::from_id_salt("iddb_kind")
                                         .selected_text(crate::i18n::t(ed.kind.name()))
                                         .show_ui(ui, |ui| {
+                                            let mut find = TypeAhead::begin(ui);
                                             for k in IdKind::ALL {
-                                                ui.selectable_value(
-                                                    &mut ed.kind,
-                                                    k,
-                                                    crate::i18n::t(k.name()),
-                                                );
+                                                let text = crate::i18n::t(k.name());
+                                                let r =
+                                                    ui.selectable_value(&mut ed.kind, k, text);
+                                                find.item(&r, text);
                                             }
+                                            find.finish(ui);
                                         });
                                     ui.checkbox(&mut ed.banned, tr!("Banned"));
                                 });
@@ -5981,21 +5988,16 @@ impl OpenHlswApp {
                                     PasswordFilter::With => tr!("With password"),
                                 })
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut f.password,
-                                        PasswordFilter::Any,
-                                        tr!("Any"),
-                                    );
-                                    ui.selectable_value(
-                                        &mut f.password,
-                                        PasswordFilter::Without,
-                                        tr!("Without password"),
-                                    );
-                                    ui.selectable_value(
-                                        &mut f.password,
-                                        PasswordFilter::With,
-                                        tr!("With password"),
-                                    );
+                                    let mut find = TypeAhead::begin(ui);
+                                    for (v, text) in [
+                                        (PasswordFilter::Any, tr!("Any")),
+                                        (PasswordFilter::Without, tr!("Without password")),
+                                        (PasswordFilter::With, tr!("With password")),
+                                    ] {
+                                        let r = ui.selectable_value(&mut f.password, v, text);
+                                        find.item(&r, text);
+                                    }
+                                    find.finish(ui);
                                 });
                             ui.end_row();
                             for (label, value, hint) in [

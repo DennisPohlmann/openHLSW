@@ -20,9 +20,9 @@ pub enum Theme {
 /// scaling). Scales the whole UI so lists and columns stay aligned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TextSize {
-    #[default]
     #[serde(rename = "px12", alias = "normal")]
     Px12,
+    #[default]
     #[serde(rename = "px13")]
     Px13,
     #[serde(rename = "px14", alias = "large")]
@@ -360,9 +360,9 @@ fn crisp(mut data: FontData) -> FontData {
 pub struct UiFont(pub String);
 
 impl Default for UiFont {
-    /// Arial: the system's, otherwise the bundled Liberation Sans (same letter widths).
+    /// The system's user interface font (Segoe UI on Windows).
     fn default() -> Self {
-        UiFont("Arial".into())
+        UiFont::system()
     }
 }
 
@@ -546,6 +546,102 @@ pub fn font_choices() -> Option<Vec<UiFont>> {
     names.sort_by_key(|n| n.to_lowercase());
     out.extend(names.into_iter().map(|n| UiFont(n.to_string())));
     Some(out)
+}
+
+/// Font list previews: the name of a font drawn in that font.
+struct Preview {
+    texture: egui::TextureHandle,
+    /// Size in points.
+    size: egui::Vec2,
+}
+
+type PreviewCache = std::collections::HashMap<(String, u32), Option<Preview>>;
+static PREVIEWS: std::sync::Mutex<Option<PreviewCache>> = std::sync::Mutex::new(None);
+
+/// `text` drawn in `font` at `size` points, for the font list in the settings. Fonts are
+/// only read when their entry is shown, at most `budget` per frame (it is counted down);
+/// `Err(true)` = not drawn yet (ask again next frame), `Err(false)` = this font cannot draw
+/// the text (show it in the interface font instead).
+pub fn font_preview(
+    ctx: &egui::Context,
+    font: &UiFont,
+    text: &str,
+    size: f32,
+    budget: &mut u32,
+) -> Result<(egui::TextureId, egui::Vec2), bool> {
+    let ppp = ctx.pixels_per_point();
+    let key = (font.0.clone(), (ppp * 100.0).round() as u32);
+    let mut cache = PREVIEWS.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = cache.get_or_insert_with(Default::default);
+    if let Some(entry) = cache.get(&key) {
+        return entry.as_ref().map(|p| (p.texture.id(), p.size)).ok_or(false);
+    }
+    if *budget == 0 {
+        return Err(true);
+    }
+    *budget -= 1;
+    let preview = rasterize(&font.data(), text, size * ppp).map(|image| {
+        let size = egui::vec2(image.size[0] as f32, image.size[1] as f32) / ppp;
+        let texture = ctx.load_texture(
+            format!("font-preview-{}", font.0),
+            image,
+            egui::TextureOptions::LINEAR,
+        );
+        Preview { texture, size }
+    });
+    let result = preview.as_ref().map(|p| (p.texture.id(), p.size)).ok_or(false);
+    cache.insert(key, preview);
+    result
+}
+
+/// White text with the coverage as alpha (tinted when drawn); `None` if the font has none of
+/// the letters.
+fn rasterize(data: &FontData, text: &str, em_px: f32) -> Option<egui::ColorImage> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let font = FontRef::try_from_slice_and_index((*data.font).as_ref(), data.index).ok()?;
+    let units_per_em = font.units_per_em()?;
+    let scale = PxScale::from(em_px * font.height_unscaled() / units_per_em);
+    let scaled = font.as_scaled(scale);
+    if text.chars().all(|c| font.glyph_id(c).0 == 0) {
+        return None;
+    }
+    let (ascent, descent) = (scaled.ascent(), scaled.descent());
+    let mut glyphs = Vec::new();
+    let mut x = 1.0;
+    let mut previous = None;
+    for c in text.chars() {
+        let id = font.glyph_id(c);
+        if let Some(p) = previous {
+            x += scaled.kern(p, id);
+        }
+        glyphs.push(id.with_scale_and_position(scale, point(x, ascent.ceil() + 1.0)));
+        x += scaled.h_advance(id);
+        previous = Some(id);
+    }
+    let (w, h) = (x.ceil() as usize + 2, (ascent.ceil() - descent.floor()) as usize + 2);
+    if w > 4000 || h > 400 {
+        return None;
+    }
+    let mut alpha = vec![0u8; w * h];
+    for glyph in glyphs {
+        let Some(outline) = font.outline_glyph(glyph) else {
+            continue;
+        };
+        let bounds = outline.px_bounds();
+        outline.draw(|gx, gy, coverage| {
+            let px = bounds.min.x as i64 + i64::from(gx);
+            let py = bounds.min.y as i64 + i64::from(gy);
+            if (0..w as i64).contains(&px) && (0..h as i64).contains(&py) {
+                let a = &mut alpha[py as usize * w + px as usize];
+                *a = (*a).max((coverage.clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+        });
+    }
+    let pixels = alpha
+        .into_iter()
+        .map(egui::Color32::from_white_alpha)
+        .collect();
+    Some(egui::ColorImage::new([w, h], pixels))
 }
 
 /// The file of fontconfig's "sans-serif" (a .ttf / .otf, not a collection).
