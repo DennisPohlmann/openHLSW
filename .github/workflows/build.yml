@@ -20,9 +20,9 @@ env:
 jobs:
   check:
     name: clippy + tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -33,7 +33,7 @@ jobs:
   linux:
     name: linux ${{ matrix.arch }}
     needs: check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +45,7 @@ jobs:
           - arch: riscv64
             target: riscv64gc-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -87,7 +87,7 @@ jobs:
         run: cargo generate-rpm --target ${{ matrix.target }} --output dist/
 
       - run: ls -l dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openhlsw-linux-${{ matrix.arch }}
           path: dist/*
@@ -97,19 +97,19 @@ jobs:
     needs: linux
     runs-on: ${{ matrix.runner }}
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
       options: --privileged
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: openhlsw-linux-${{ matrix.arch }}
           path: linux
@@ -144,7 +144,7 @@ jobs:
       - name: Collect
         shell: bash
         run: mkdir -p dist && mv openhlsw-*.flatpak dist/ && ls -l dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openhlsw-flatpak-${{ matrix.arch }}
           path: dist/*
@@ -152,7 +152,7 @@ jobs:
   windows:
     name: windows ${{ matrix.arch }}
     needs: check
-    runs-on: windows-latest
+    runs-on: windows-2025
     strategy:
       fail-fast: false
       matrix:
@@ -167,7 +167,7 @@ jobs:
             target: aarch64-pc-windows-msvc
             wix_arch: arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -230,7 +230,7 @@ jobs:
 
       - run: Get-ChildItem dist
         shell: pwsh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openhlsw-windows-${{ matrix.arch }}
           path: dist/*
@@ -238,9 +238,9 @@ jobs:
   macos:
     name: macos universal
     needs: check
-    runs-on: macos-14
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -307,7 +307,7 @@ jobs:
           hdiutil create -volname "openHLSW" -srcfolder "build/$name" -ov -format UDZO "dist/$name.dmg"
 
       - run: ls -l dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openhlsw-macos-universal
           path: dist/*
@@ -315,9 +315,9 @@ jobs:
   freebsd:
     name: freebsd x86_64
     needs: check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Version
         id: version
@@ -330,6 +330,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         with:
+          release: "15"
           envs: VERSION
           usesh: true
           prepare: |
@@ -350,7 +351,7 @@ jobs:
             rm -rf "dist/$name"
 
       - run: ls -l dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openhlsw-freebsd-x86_64
           path: dist/*.tar.gz
@@ -358,10 +359,10 @@ jobs:
   release:
     name: GitHub release
     needs: [linux, flatpak, windows, macos, freebsd]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -381,7 +382,7 @@ jobs:
           printf '\nFull history: [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md)\n' \
             "${GITHUB_REPOSITORY}" "${tag}" >> release-notes.md
           cat release-notes.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           body_path: release-notes.md
