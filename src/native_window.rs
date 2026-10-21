@@ -123,10 +123,11 @@ impl<'a> NativeWindow<'a> {
             egui::CentralPanel::default()
                 .frame(Frame::new().fill(fill).inner_margin(Margin::same(margin)))
                 .show(ui, |ui| {
-                    content(ui);
+                    // Measured in its own scope: the panel itself always spans the window.
+                    let used = ui.scope(|ui| content(ui)).response.rect.size();
                     if !resizable {
                         let m = 2.0 * margin as f32;
-                        let want = ui.min_rect().size() + egui::vec2(m, m);
+                        let want = used + egui::vec2(m, m);
                         let want = egui::vec2(want.x.ceil(), want.y.ceil());
                         if measured.is_none_or(|old| (old - want).length() > 1.0) {
                             new_size = Some(want);

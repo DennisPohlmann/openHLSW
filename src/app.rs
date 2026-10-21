@@ -5240,6 +5240,15 @@ impl OpenHlswApp {
                 Dialog::MultiInsert(_) | Dialog::ConnectLog
             ))
             .default_width(380.0)
+            // Message boxes draw their own white area and button band, edge to edge.
+            .margin(if matches!(
+                dialog,
+                Dialog::Confirm(_) | Dialog::ConfirmDeleteList | Dialog::Message(..)
+            ) {
+                0
+            } else {
+                8
+            })
             .show(ctx, |ui| {
                 let ok_cancel = |ui: &mut Ui| -> (bool, bool) {
                     ui.add_space(6.0);
@@ -5409,8 +5418,7 @@ impl OpenHlswApp {
                         close |= cancel;
                     }
                     Dialog::Confirm(confirm) => {
-                        ui.label(&confirm_text);
-                        let (ok, cancel) = ok_cancel(ui);
+                        let (ok, cancel) = message_box(ui, BoxIcon::Question, &confirm_text, true);
                         if ok {
                             actions.push(match confirm.clone() {
                                 Confirm::DeleteServer(id) => Action::RemoveConfirmed(id),
@@ -5424,19 +5432,15 @@ impl OpenHlswApp {
                         close |= cancel;
                     }
                     Dialog::Message(_, text) => {
-                        ui.label(text.as_str());
-                        ui.add_space(6.0);
-                        let ok = ui
-                            .add(Button::new(tr!("OK")).min_size(egui::vec2(75.0, 22.0)))
-                            .clicked();
-                        close |= ok || ui.input(|i| i.key_pressed(Key::Enter));
+                        let (ok, _) = message_box(ui, BoxIcon::Information, text, false);
+                        close |= ok;
                     }
                     Dialog::ConfirmDeleteList => {
-                        ui.label(tr!(
+                        let text = tr!(
                             "Delete the server list \"{list_name}\" and all its servers?",
                             list_name = list_name
-                        ));
-                        let (ok, cancel) = ok_cancel(ui);
+                        );
+                        let (ok, cancel) = message_box(ui, BoxIcon::Question, &text, true);
                         if ok {
                             actions.push(Action::DeleteList);
                             close = true;
@@ -9573,6 +9577,102 @@ fn password_field(ui: &mut Ui, text: &mut String, hide: bool, width: f32) -> egu
         edit = edit.layouter(&mut layouter);
     }
     ui.add(edit)
+}
+
+/// Icon of a [`message_box`].
+#[derive(Clone, Copy)]
+enum BoxIcon {
+    Question,
+    Information,
+}
+
+/// A Windows-style message box like HLSW's: icon and text on a white area, OK (and Cancel)
+/// on the right of a gray band below. Enter = OK. Returns (ok, cancel).
+fn message_box(ui: &mut Ui, icon: BoxIcon, text: &str, cancel: bool) -> (bool, bool) {
+    const WIDTH: f32 = 380.0;
+    let visuals = ui.visuals().clone();
+    let top = if visuals.dark_mode {
+        visuals.extreme_bg_color
+    } else {
+        Color32::WHITE
+    };
+    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+    Frame::new()
+        .fill(top)
+        .inner_margin(Margin {
+            left: 20,
+            right: 20,
+            top: 22,
+            bottom: 22,
+        })
+        .show(ui, |ui| {
+            ui.set_width(WIDTH - 40.0);
+            ui.horizontal_top(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), Sense::hover());
+                draw_box_icon(ui.painter(), rect, icon);
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    // Centred next to the icon when it is one line.
+                    let galley = ui.fonts_mut(|f| {
+                        f.layout(
+                            text.to_string(),
+                            TextStyle::Body.resolve(ui.style()),
+                            visuals.text_color(),
+                            ui.available_width(),
+                        )
+                    });
+                    ui.add_space(((32.0 - galley.size().y) / 2.0).max(0.0));
+                    ui.add(Label::new(text).wrap().selectable(false));
+                });
+            });
+        });
+    let mut result = (false, false);
+    Frame::new()
+        .fill(visuals.panel_fill)
+        .inner_margin(Margin::symmetric(12, 11))
+        .show(ui, |ui| {
+            ui.set_width(WIDTH - 24.0);
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+            let row = egui::vec2(WIDTH - 24.0, 24.0);
+            ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                let size = egui::vec2(88.0, 24.0);
+                if cancel {
+                    result.1 = ui.add(Button::new(tr!("Cancel")).min_size(size)).clicked();
+                }
+                let ok = ui.add(Button::new(tr!("OK")).min_size(size));
+                // The default button, like Windows': highlighted frame.
+                ui.painter().rect_stroke(
+                    ok.rect,
+                    2.0,
+                    Stroke::new(1.0, visuals.selection.stroke.color),
+                    StrokeKind::Inside,
+                );
+                result.0 = ok.clicked();
+            });
+        });
+    if ui.input(|i| i.key_pressed(Key::Enter)) {
+        result.0 = true;
+    }
+    result
+}
+
+/// Blue round icon with a white "?" or "i", like Windows' message box icons.
+fn draw_box_icon(painter: &egui::Painter, rect: egui::Rect, icon: BoxIcon) {
+    let c = rect.center();
+    let r = rect.width() / 2.0 - 1.0;
+    painter.circle_filled(c, r, Color32::from_rgb(0x1C, 0x6D, 0xD0));
+    painter.circle_stroke(c, r, Stroke::new(1.0, Color32::from_rgb(0x15, 0x55, 0xA8)));
+    let mark = match icon {
+        BoxIcon::Question => "?",
+        BoxIcon::Information => "i",
+    };
+    painter.text(
+        c + egui::vec2(0.0, 0.5),
+        egui::Align2::CENTER_CENTER,
+        mark,
+        egui::FontId::new(r * 1.3, crate::theme::bold()),
+        Color32::WHITE,
+    );
 }
 
 /// Right-click menu for text fields: Cut / Copy / Paste / Select All
