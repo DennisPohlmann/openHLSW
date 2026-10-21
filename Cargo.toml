@@ -1,10 +1,10 @@
 [package]
 name = "openhlsw"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"
-description = "Game server browser and RCON admin tool (HLSW remake for Source, GoldSrc and GameSpy 2)"
+description = "Game server browser and RCON admin tool (HLSW remake for Source, GoldSrc and many other games)"
 
 [dependencies]
 ab_glyph = "0.2.32"
@@ -41,7 +41,8 @@ section = "games"
 priority = "optional"
 extended-description = """\
 openHLSW is a free remake of HLSW: a game server browser and RCON admin tool for \
-Source (SRCDS, CS2), Half-Life 1 (HLDS) and GameSpy 2 servers."""
+Source (SRCDS, CS2) and Half-Life 1 (HLDS) servers that also queries GameSpy, Quake, \
+Unreal, Minecraft, TeamSpeak and many other game and voice servers."""
 # Cross builds cannot run dpkg-shlibdeps; X11 / Wayland / GL are loaded at runtime.
 depends = "libc6, libgl1, libxkbcommon0, libx11-6 | libwayland-client0"
 assets = [

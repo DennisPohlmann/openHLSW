@@ -8,7 +8,8 @@
   <description>
     <p>
       openHLSW is a free remake of HLSW: a game server browser and RCON admin tool for
-      Source (SRCDS, CS2), Half-Life 1 (HLDS) and GameSpy 2 servers.
+      Source (SRCDS, CS2) and Half-Life 1 (HLDS) servers that also queries GameSpy, Quake,
+      Unreal, Minecraft, TeamSpeak and many other game and voice servers.
     </p>
   </description>
   <launchable type="desktop-id">io.github.openhlsw.openHLSW.desktop</launchable>

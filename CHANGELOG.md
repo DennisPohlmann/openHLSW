@@ -4,6 +4,104 @@ All notable changes to openHLSW are listed here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [Semantic Versioning](https://semver.org/).
 
+## [v0.2.0] - 2026-10-21
+
+### Added
+- **Toolbar with icons like HLSW**: Connect | Rcon section, Server list, Rules (pressed while
+  shown) | Delete | Refresh, refresh interval, Update | Server List Properties, Server
+  Properties | About. Refresh switches the automatic refresh on and off, Update refreshes all
+  servers once while it is off. The icons are drawn for openHLSW (`assets/icon-sources/toolbar/`).
+- **"?" menu and About openHLSW window** like HLSW's (banner, version, license, homepage).
+- **ClearType-like text** on Windows, Linux and macOS: glyphs use the red, green and blue
+  stripes of every screen pixel, which makes small text much sharper. Settings → Misc →
+  Text smoothing: Automatic (on for normal screens, off from 150 % / Retina), ClearType
+  (RGB / BGR) or Grayscale. Needs OpenGL 3.3; older drivers keep gray text. Two of egui's
+  crates are included in a modified form for this (`vendor/`, see `vendor/README.md`).
+- **Fonts**: every font installed on the computer can be chosen, each shown in its own look in
+  the list; **text size** 12, 13, 14, 15 or 16 px.
+- **Type to find in dropdowns**: typing in an open list jumps to the matching entry ("de" →
+  Deutsch), Enter picks it – in the settings and in the main window.
+- **Player name** in the toolbar like HLSW: a dropdown of the names used before and a delete
+  button.
+- **Multi Kick, Multi Ban ID, Multi Ban ID Kick, Multi Ban IP …** in the players' right-click
+  menu when several players are marked.
+- Windows installer: pictures in the style of the About banner on all pages of the setup wizard.
+- **All games of the game list are supported**, plus the games of GameQ's list (about 180
+  games). New queries: GameSpy 1, Unreal 2, Quake 1 / 2 / 3, Medal of Honor, Doom 3,
+  All-Seeing Eye, Frostbite (Battlefield Bad Company 2, 3, 4, Hardline), TeamSpeak 2 / 3,
+  Ventrilo, Mumble, Tribes 2, Savage, Frontlines, SA-MP, Teeworlds, OpenTTD, Minecraft
+  (Java and Bedrock), FiveM / RedM, Counter-Strike 2D, Tibia, StarMade, Lost Heaven and Mafia 2
+  Multiplayer, Terraria (TShock), Eco and Stationeers (HTTP). Valve games with their own query
+  port (ARK, Squad, Rust, Valheim, …) get it filled in. The usual port of the chosen game is used
+  when the address has none. Shockvoice has no documented query: only whether the server can be
+  reached is shown.
+- **Auto detect finds GameSpy 1 and GameSpy 2 servers** as well as Valve servers.
+- Game icons are shown at 16x16 screen pixels (the icons' own 16 px pictures, 32 px ones on
+  high-DPI screens), sharp and never cut off; in a row that is too low they are scaled down
+  as a whole.
+- Servers that need a password to join show HLSW's gold key next to the game icon in the
+  server list; every row keeps room for the key, so the names stay in line.
+- Connect for the new games: the game from My Games with the server address (Quake / Doom 3
+  `+connect`, Unreal `ip:port`, Battlefield 1942 `+joinServer`, …) or the client's link
+  (TeamSpeak, Ventrilo, Mumble, SA-MP, FiveM / RedM).
+
+### Changed
+- **Look like HLSW 1.4**: flat toolbar buttons, white list frames, HLSW's header and line
+  colours, compact spacing; dialogs (Settings, Properties, About, …) are real windows of the
+  operating system with its title bar.
+- **Settings → Misc** laid out like HLSW: Server list (incl. Connect on double click), Language,
+  Skin, Font with text size and text smoothing, Global ID Database. Dropdown lists open
+  downwards and scroll when they are long.
+- Default look: the **system font** (Segoe UI on Windows) at **13 px**; existing settings are
+  switched once.
+- **openHLSW brings no fonts of its own any more**: all text uses the fonts of the system
+  (the console its monospace font). A chosen font that is missing falls back to the system font.
+- The "Auto refresh every" check box is gone: the toolbar's Refresh button does that, the
+  interval is next to it.
+- The rules list marks one rule at a time, like HLSW.
+- The player name field is empty until you type a name (the hint is in the tooltip).
+- **Builds** run on the newest long-term images: Ubuntu 26.04 (x64 and arm64), Windows Server
+  2025, macOS 26; the Flatpak uses the Freedesktop 26.08 runtime; the FreeBSD package is
+  built on FreeBSD 15 (it needs FreeBSD 15 or newer). The Linux binaries are still built
+  with an old glibc, so they keep running on older distributions.
+- The build uses the current versions of its GitHub actions (Node.js 24).
+- Server info panel: the game's icon is shown before the game name.
+- Server info panel: the server name is bold, two sizes larger, in the normal text colour (no
+  longer a blue, underlined link), the ping graph has a 1 px black frame, the text below the
+  graph keeps 2 px more distance from the panel's left border, and the panel lines up with the
+  server list and the Rcon box.
+
+### Fixed
+- **Adding servers**: a new server was hidden while the server list filter was on (it had
+  not answered yet), so Add seemed to do nothing. New servers now stay visible until they
+  answer, the list scrolls to the added server, problems (invalid address) open a message
+  window, and the address field can no longer cover the Add button. The same server can be
+  in several server lists.
+- **Players not updated** (frozen time and frags) on servers that allow only about one query
+  per second (many HLDS, or after dropped queries): the server info used up all queries.
+  Info, players and rules now take turns, so all three stay current.
+- The rules list's header covered the white frame line at the top left; no list paints over
+  its frame any more. The rule numbers have one pixel more room to the frame.
+- Blurry text at some sizes: font sizes are snapped to whole screen pixels.
+- **RCON password**: typing it no longer logs in to the server on every key (servers ban
+  addresses after a few failed RCON logins). The server is asked when Test (or Enter) is
+  pressed or a command is sent; after "Bad password" openHLSW stops logging in by itself
+  until Test is pressed again.
+- Hidden passwords show clean, round dots with a little room between them.
+- Questions and messages (Delete server, Delete server list, Change level, Add errors …) look
+  like HLSW's / Windows' message boxes: icon and text on a white area, OK and Cancel on the
+  right of a gray band; Enter = OK. Small dialogs fit their content instead of leaving empty
+  space below it.
+
+### Removed
+- The bundled fonts (Inconsolata, Liberation Sans, Wine's Tahoma) and egui's built-in fonts.
+- Deer Hunter 2005 from the game list (its servers still work as `ip:gameport:queryport`
+  with Auto detect).
+- The message about a missing GameSpy query port: without one, the game port is asked.
+
+### Security
+- Tests, examples and the test server use documentation IP addresses instead of real ones.
+
 ## [v0.1.4] - 2026-10-20
 
 ### Added
@@ -46,7 +144,7 @@ project uses [Semantic Versioning](https://semver.org/).
 - Windows: the Start menu and the taskbar showed a blank white icon. The installer's icon
   now has the `.ico` name Windows needs for Start menu shortcuts, and the .exe embeds the
   small icon sizes as bitmaps instead of PNG.
-- Ban list: IPs of Half-Life 1 servers (`193. 24.211.152`) were cut off; Unban now removes
+- Ban list: IPs of Half-Life 1 servers (`203.  0.113. 52`) were cut off; Unban now removes
   the right IP.
 - Battlefield 2 servers (`ip:port:queryport`) did not answer the old GameSpy 2 request.
 - Servers disappeared from the list once they were offline while the filter was on.
