@@ -4416,8 +4416,15 @@ impl OpenHlswApp {
     fn details(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
         let idx = self.selected_index();
         let chrome = Frame::new().fill(p.window).inner_margin(Margin::same(4));
+        // The info box starts at the same x as the server list and the Rcon box below.
+        let info_chrome = chrome.inner_margin(Margin {
+            left: 0,
+            right: 4,
+            top: 4,
+            bottom: 4,
+        });
         egui::Panel::left("server_info")
-            .frame(chrome)
+            .frame(info_chrome)
             .resizable(true)
             .default_size(385.0)
             .min_size(220.0)
@@ -7401,7 +7408,8 @@ fn info_panel(
                     .map(|i| i.name.clone())
                     .unwrap_or_else(|| s.address.to_string())
             });
-            // The name in bold, in the normal font size and text colour.
+            // The name in bold, two sizes larger than the text, in the normal text colour.
+            let title_size = egui::TextStyle::Body.resolve(ui.style()).size + 2.0;
             ui.horizontal(|ui| {
                 ui.add_space(3.0);
                 match &title {
@@ -7409,6 +7417,7 @@ fn info_panel(
                         Label::new(
                             RichText::new(t)
                                 .color(p.text)
+                                .size(title_size)
                                 .family(crate::theme::bold()),
                         )
                             .wrap()
