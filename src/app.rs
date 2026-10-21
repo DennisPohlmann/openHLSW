@@ -3577,6 +3577,7 @@ impl eframe::App for OpenHlswApp {
                             .collect();
                         let opts = ListOptions {
                             game_icons: self.game_icons.as_ref(),
+                            toolbar_icons: self.toolbar_icons.as_ref(),
                             other_lists: &other_lists,
                             show_comment: self.settings.view.comment,
                             hidden: &self.settings.view.hidden_server_columns,
@@ -6838,6 +6839,8 @@ fn cell(
 
 struct ListOptions<'a> {
     game_icons: Option<&'a GameIcons>,
+    /// For the key of password-protected servers (like HLSW).
+    toolbar_icons: Option<&'a crate::toolbar_icons::ToolbarIcons>,
     other_lists: &'a [String],
     show_comment: bool,
     /// Columns switched off in the header's right-click menu (titles).
@@ -6932,7 +6935,12 @@ fn server_table(
                         Col::Address => (s.address.to_string(), 0.0),
                         Col::Name => (
                             info.map(|i| i.name.clone()).unwrap_or_default(),
-                            14.0 + spacing,
+                            14.0 + spacing
+                                + if info.is_some_and(|i| i.passworded) {
+                                    16.0 + spacing
+                                } else {
+                                    0.0
+                                },
                         ),
                         Col::Game => (s.game_short(), 0.0),
                         Col::Map => (info.map(|i| i.map.clone()).unwrap_or_default(), 0.0),
@@ -7075,6 +7083,14 @@ fn server_table(
                                         game_icons::icon_for_server(i.real_app_id(), &i.folder)
                                     };
                                     icons.show(ui, icon, 14.0);
+                                }
+                                // A key for servers that need a password to join, like HLSW.
+                                if let (Some(icons), true) =
+                                    (opts.toolbar_icons, info.is_some_and(|i| i.passworded))
+                                {
+                                    icons
+                                        .icon(ui, crate::toolbar_icons::ToolIcon::Rcon)
+                                        .on_hover_text(tr!("With password"));
                                 }
                                 let mut name =
                                     RichText::new(info.map(|i| i.name.clone()).unwrap_or_default());

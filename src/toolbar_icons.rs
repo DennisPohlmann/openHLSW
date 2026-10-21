@@ -61,6 +61,30 @@ impl ToolbarIcons {
         })
     }
 
+    /// Just the icon (16×16 screen pixels, 32 on high-DPI screens), e.g. the key of
+    /// password-protected servers in the server list.
+    pub fn icon(&self, ui: &mut Ui, icon: ToolIcon) -> Response {
+        let ppp = ui.pixels_per_point();
+        let strip = match &self.large {
+            Some(large) if ppp >= 1.5 => large,
+            _ => &self.small,
+        };
+        let side = strip.size as f32 / ppp;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let target = Rect::from_min_size(rect.min.round_to_pixels(ppp), rect.size());
+            let (w, h) = ((strip.size * COUNT) as f32, (strip.size * 2) as f32);
+            let s = strip.size as f32;
+            let uv = Rect::from_min_size(
+                egui::pos2(icon as usize as f32 * s / w, 0.0),
+                egui::vec2(s / w, s / h),
+            );
+            ui.painter()
+                .image(strip.texture.id(), target, uv, Color32::WHITE);
+        }
+        response
+    }
+
     /// Flat 22×22 px button: a frame under the mouse, a pressed frame for toggles that are on
     /// (`checked`), a greyed-out icon when disabled.
     pub fn button(
