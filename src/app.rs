@@ -8553,21 +8553,34 @@ fn player_context_menu(
     // Everything below needs the userid from RCON `status`.
     let with_status: Vec<&StatusPlayer> =
         targets.iter().filter_map(|r| r.status.as_ref()).collect();
-    if with_status.is_empty() {
-        for label in [
+    // Several marked players: HLSW's "Multi Kick", "Multi Ban ID", … entries.
+    let (kick, kick_connect, ban_id, ban_id_kick, ban_ip, ban_ip_kick) = if single {
+        (
             tr!("Kick"),
             tr!("Kick & Connect"),
             tr!("Ban ID"),
             tr!("Ban ID Kick"),
             tr!("Ban IP"),
             tr!("Ban IP Kick"),
-        ] {
+        )
+    } else {
+        (
+            tr!("Multi Kick"),
+            tr!("Multi Kick & Connect"),
+            tr!("Multi Ban ID"),
+            tr!("Multi Ban ID Kick"),
+            tr!("Multi Ban IP"),
+            tr!("Multi Ban IP Kick"),
+        )
+    };
+    if with_status.is_empty() {
+        for label in [kick, kick_connect, ban_id, ban_id_kick, ban_ip, ban_ip_kick] {
             ui.add_enabled(false, Button::new(label))
                 .on_disabled_hover_text(tr!("Needs RCON (Rcon Config → Test)"));
         }
         return;
     }
-    if ui.button(tr!("Kick")).clicked() {
+    if ui.button(kick).clicked() {
         for st in &with_status {
             actions.push(Action::KickPlayer(server, st.userid));
         }
@@ -8575,7 +8588,7 @@ fn player_context_menu(
     }
     // Takes over one slot: only for a single player.
     if ui
-        .add_enabled(with_status.len() == 1, Button::new(tr!("Kick & Connect")))
+        .add_enabled(with_status.len() == 1, Button::new(kick_connect))
         .clicked()
     {
         actions.push(Action::KickAndConnect(server, with_status[0].userid));
@@ -8583,10 +8596,10 @@ fn player_context_menu(
     }
     ui.separator();
     for (label, by_ip, kick) in [
-        (tr!("Ban ID"), false, false),
-        (tr!("Ban ID Kick"), false, true),
-        (tr!("Ban IP"), true, false),
-        (tr!("Ban IP Kick"), true, true),
+        (ban_id, false, false),
+        (ban_id_kick, false, true),
+        (ban_ip, true, false),
+        (ban_ip_kick, true, true),
     ] {
         let bans: Vec<(u32, String)> = with_status
             .iter()
@@ -8781,23 +8794,16 @@ fn rules_table(
         .copied()
         .filter(|r| sel.contains(&r.key))
         .collect();
-    // Ctrl+C / Ctrl+A while the mouse is over the list.
+    // Like HLSW only one rule is marked at a time (no Ctrl / Shift / Ctrl+A).
+    // Ctrl+C while the mouse is over the list copies it.
     if ui.rect_contains_pointer(ui.max_rect()) && !ui.ctx().text_edit_focused() {
-        let (copy, all_keys) = ui.input_mut(|i| {
-            (
-                i.consume_key(egui::Modifiers::COMMAND, Key::C),
-                i.consume_key(egui::Modifiers::COMMAND, Key::A),
-            )
-        });
+        let copy = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::C));
         if copy && !marked.is_empty() {
             actions.push(Action::CopyText(rules_as_text(&marked)));
         }
-        if all_keys {
-            sel.keys = order.iter().map(|k| k.to_string()).collect();
-        }
     }
     let scroll_to =
-        arrow_keys(ui.ctx(), "rules").and_then(|(down, shift)| sel.step(&order, down, shift));
+        arrow_keys(ui.ctx(), "rules").and_then(|(down, _)| sel.step(&order, down, false));
     let mut clicked: Option<(String, egui::Modifiers)> = None;
     let mut table = styled_table(ui, "rules");
     if let Some(i) = scroll_to {
@@ -8844,7 +8850,7 @@ fn rules_table(
                 row.col(|_| {});
                 let resp = row.response();
                 if resp.clicked() {
-                    clicked = Some((r.key.clone(), ui_modifiers(&resp)));
+                    clicked = Some((r.key.clone(), egui::Modifiers::NONE));
                 }
                 if resp.secondary_clicked() {
                     sel.right_click(&r.key);

@@ -76,9 +76,10 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   Status Command, Kick, Kick & Connect, Ban ID, Ban ID Kick, Ban IP, Ban IP Kick with a
   duration), rules (Copy Key/Value/Both/All Rules/All Keys, Change Value…).
 - **Copy / paste / cut** in every text field (Ctrl+C/V/X/A and right-click menu).
-- **Marking rows** in the players and rules lists like in Windows lists: click, Ctrl+click,
-  Shift+click, Ctrl+A, arrow keys (with Shift); Ctrl+C copies the marked rows. The
-  right-click menu acts on all marked rows (copy, kick, ban, open Steam profiles, …).
+- **Marking rows** in the players list like in Windows lists: click, Ctrl+click, Shift+click,
+  Ctrl+A, arrow keys (with Shift); Ctrl+C copies the marked rows. With several players marked
+  the right-click menu offers HLSW's Multi Kick / Multi Ban ID / Multi Ban IP … for all of
+  them. In the rules list one rule is marked at a time, like in HLSW.
 - **Server info** (bottom left) with an HLSW style ping graph that grows with the panel,
   drawn in 3D on a fixed scale (100 ms in the middle, 200 ms at the top): every bar runs from
   green at the foot through yellow to red, timeouts are full red bars; scale, average, peak
