@@ -134,10 +134,10 @@ mod tests {
         assert!(ServerAddress::parse("host:99999").is_none());
         assert!(ServerAddress::parse("").is_none());
         assert!(ServerAddress::parse("a b").is_none());
-        let a = ServerAddress::parse("116.203.178.232:23459:34567").unwrap();
+        let a = ServerAddress::parse("203.0.113.232:23459:34567").unwrap();
         assert_eq!((a.port, a.query_port), (23459, Some(34567)));
-        assert_eq!(a.to_string(), "116.203.178.232:23459:34567");
-        assert_eq!(a.game_address(), "116.203.178.232:23459");
+        assert_eq!(a.to_string(), "203.0.113.232:23459:34567");
+        assert_eq!(a.game_address(), "203.0.113.232:23459");
         let a = ServerAddress::parse("::1").unwrap();
         assert_eq!((a.host.as_str(), a.query_port), ("::1", None));
     }

@@ -179,7 +179,7 @@ mod tests {
         assert!(!is_public("192.168.1.10".parse().unwrap()));
         assert!(!is_public("10.0.0.1".parse().unwrap()));
         assert!(!is_public("100.64.1.1".parse().unwrap()));
-        assert!(is_public("116.203.178.232".parse().unwrap()));
-        assert!(is_public("46.174.53.40".parse().unwrap()));
+        assert!(is_public("8.8.8.8".parse().unwrap()));
+        assert!(is_public("1.1.1.1".parse().unwrap()));
     }
 }

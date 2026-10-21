@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn parses_trace_output() {
-        let tracert = "\nRoutenverfolgung zu 192.162.84.174 über maximal 30 Hops\n\n  1    <1 ms    <1 ms    <1 ms  192.168.178.1\n  2    43 ms     8 ms     8 ms  62.155.242.3\n  3     *        *        *     Zeitüberschreitung der Anforderung.\n  4    45 ms    45 ms    45 ms  192.162.84.174\n\nAblaufverfolgung beendet.\n";
+        let tracert = "\nRoutenverfolgung zu 203.0.113.174 über maximal 30 Hops\n\n  1    <1 ms    <1 ms    <1 ms  192.168.178.1\n  2    43 ms     8 ms     8 ms  198.51.100.3\n  3     *        *        *     Zeitüberschreitung der Anforderung.\n  4    45 ms    45 ms    45 ms  203.0.113.174\n\nAblaufverfolgung beendet.\n";
         let h = parse_trace(tracert);
         assert_eq!(h.len(), 4);
         assert_eq!(h[0], Some("192.168.178.1".parse().unwrap()));

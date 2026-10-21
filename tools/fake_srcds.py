@@ -256,10 +256,10 @@ class Server:
             if self.args.goldsrc:
                 lines[-1] = "#      name userid uniqueid frag time ping loss adr"
                 for i, (n, score) in enumerate(self.players):
-                    lines.append(f'#{i + 1:2d} "{n}" {i + 2} STEAM_0:1:{1000 + i} {score} 01:{i:02d}:11 {30 + i} 0 94.31.108.{10 + i}:27005')
+                    lines.append(f'#{i + 1:2d} "{n}" {i + 2} STEAM_0:1:{1000 + i} {score} 01:{i:02d}:11 {30 + i} 0 198.51.100.{10 + i}:27005')
                 return "\n".join(lines) + f"\n{len(self.players)} users\n"
             for i, (n, _) in enumerate(self.players):
-                lines.append(f'#  {i + 2:3d} "{n}" STEAM_0:1:{1000 + i} 01:{i:02d}:11 {30 + i} 0 active 94.31.108.{10 + i}:27005')
+                lines.append(f'#  {i + 2:3d} "{n}" STEAM_0:1:{1000 + i} 01:{i:02d}:11 {30 + i} 0 active 198.51.100.{10 + i}:27005')
             return "\n".join(lines) + "\n"
         if name == "cvarlist":
             return "".join(f"fake_cvar_{i:05d} : {i} : , \"sv\" : description number {i}\n" for i in range(1500))
