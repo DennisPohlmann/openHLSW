@@ -48,7 +48,7 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
 
 - **Server lists**: several lists (Server list → New/Open/Delete/Import/Export/Properties,
   Multi Server Insert, Change ID to reorder); add servers as `IP:port`, host name or `steam://connect/…`;
-  GameSpy 2 servers as `IP:gameport:queryport` (e.g. `116.203.178.232:23459:34567`);
+  GameSpy 2 servers as `IP:gameport:queryport` (e.g. `203.0.113.232:23459:34567`);
   Import Steam Favorites and Search LAN in the Server list menu.
   The game list next to "IP/Port" works like HLSW's: **Auto detect** (Source, Half-Life 1
   and CS2 are recognised by themselves), then the **not detectable games** (Armed Assault,
@@ -128,9 +128,10 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   Ping Graph, Skin). Keyboard shortcuts like HLSW (F3, F5, F6, Ctrl+G/D/F/P/T/I/O/R/L/U/M/W).
 - **Settings**: My Games (all HLSW games with icons, own game executable and start
   parameters), Startup, Connecting (incl. Quit openHLSW), Rcon, Connections, Plugins (empty),
-  Sounds, Misc (skin, **language**, **font** – Tahoma like HLSW (default), the system font (Segoe UI on
-  Windows, the desktop font on Linux, San Francisco on macOS), Arial, Liberation Sans or
-  Inconsolata – and **text size**: 12 px (default) / 14 px / 16 px; font sizes are snapped to whole screen pixels so text stays sharp).
+  Sounds, Misc (laid out like HLSW: server list, **language**, skin, then **font** – every font
+  installed on the computer or the system font, Arial by default (the bundled Liberation Sans
+  where Arial is missing, Wine's Tahoma likewise) – and **text size** 12–16 px; font sizes are
+  snapped to whole screen pixels so text stays sharp).
 - **File → Advanced**: clear the location / provider cache, reset all ping graphs.
 - **Unicode**: names in every script (fallback fonts for symbols, CJK, Cyrillic …).
 - Servers: all Source games, **Counter-Strike 2** and all **Half-Life 1 games** (GoldSrc,

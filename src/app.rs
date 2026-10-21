@@ -1390,13 +1390,18 @@ impl OpenHlswApp {
         let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
         let mut config = config::load();
         crate::i18n::set_language(config.settings.language);
-        // Old configs: switch once to HLSW's look (Tahoma, 12 px), the sharpest text.
+        // Old configs: switch once to the current default look (Arial; 12 px for configs from
+        // before the pixel sizes).
         if config.settings.appearance < crate::settings::APPEARANCE {
-            config.settings.font = crate::theme::UiFont::Tahoma;
-            config.settings.text_size = crate::theme::TextSize::Px12;
+            config.settings.font = crate::theme::UiFont::default();
+            if config.settings.appearance < 1 {
+                config.settings.text_size = crate::theme::TextSize::Px12;
+            }
             config.settings.appearance = crate::settings::APPEARANCE;
         }
-        theme::install_fonts(&cc.egui_ctx, config.settings.font);
+        theme::install_fonts(&cc.egui_ctx, &config.settings.font);
+        // The font list of Settings → Misc.
+        theme::scan_fonts_in_background();
         theme::apply(&cc.egui_ctx, config.settings.theme);
         cc.egui_ctx
             .set_zoom_factor(config.settings.text_size.zoom());
@@ -3260,7 +3265,7 @@ impl OpenHlswApp {
                     ctx.set_zoom_factor(new.text_size.zoom());
                 }
                 if new.font != self.settings.font {
-                    theme::install_fonts(ctx, new.font);
+                    theme::install_fonts(ctx, &new.font);
                 }
                 if new.language != self.settings.language {
                     crate::i18n::set_language(new.language);
@@ -9796,11 +9801,11 @@ mod tests {
         );
         // HLDS pads the octets of banned IPs.
         let ips = parse_ban_list(
-            "IP filter list: 2 entries\n1 193. 24.211.152 : permanent\n2  10.  0.  0.  1 : 5.000 min\n",
+            "IP filter list: 2 entries\n1 203.  0.113. 52 : permanent\n2  10.  0.  0.  1 : 5.000 min\n",
             true,
         );
         assert_eq!(ips.len(), 2);
-        assert_eq!(ips[0].ident, "193.24.211.152");
+        assert_eq!(ips[0].ident, "203.0.113.52");
         assert_eq!(ips[1].ident, "10.0.0.1");
         let maps = parse_map_list(
             "Dir:  maps/*.bsp\nPENDING:   (fs) de_dust2.bsp\nPENDING:   (fs) cs_office.bsp\n",
@@ -9850,7 +9855,7 @@ mod tests {
     #[test]
     fn parses_goldsrc_status() {
         let text = "#      name userid uniqueid frag time ping loss adr\n\
-                    # 1 \"Bob\"   12 STEAM_0:1:42   7 12:34   48    0 94.31.108.10:27005\n\
+                    # 1 \"Bob\"   12 STEAM_0:1:42   7 12:34   48    0 198.51.100.10:27005\n\
                     # 2 \"bot\"   13 BOT            0 12:00    0    0\n2 users\n";
         let p = parse_status_players(text);
         assert_eq!(p.len(), 2);

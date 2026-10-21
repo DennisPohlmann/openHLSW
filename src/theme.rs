@@ -23,19 +23,31 @@ pub enum TextSize {
     #[default]
     #[serde(rename = "px12", alias = "normal")]
     Px12,
+    #[serde(rename = "px13")]
+    Px13,
     #[serde(rename = "px14", alias = "large")]
     Px14,
+    #[serde(rename = "px15")]
+    Px15,
     #[serde(rename = "px16", alias = "extralarge")]
     Px16,
 }
 
 impl TextSize {
-    pub const ALL: [TextSize; 3] = [TextSize::Px12, TextSize::Px14, TextSize::Px16];
+    pub const ALL: [TextSize; 5] = [
+        TextSize::Px12,
+        TextSize::Px13,
+        TextSize::Px14,
+        TextSize::Px15,
+        TextSize::Px16,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             TextSize::Px12 => "12 px",
+            TextSize::Px13 => "13 px",
             TextSize::Px14 => "14 px",
+            TextSize::Px15 => "15 px",
             TextSize::Px16 => "16 px",
         }
     }
@@ -43,7 +55,9 @@ impl TextSize {
     fn pixels(self) -> f32 {
         match self {
             TextSize::Px12 => 12.0,
+            TextSize::Px13 => 13.0,
             TextSize::Px14 => 14.0,
+            TextSize::Px15 => 15.0,
             TextSize::Px16 => 16.0,
         }
     }
@@ -338,57 +352,65 @@ fn crisp(mut data: FontData) -> FontData {
     data
 }
 
-/// Font of the user interface (Settings → Misc → Font).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum UiFont {
-    /// The system's user interface font: Segoe UI on Windows, San Francisco / Helvetica on
-    /// macOS, the desktop's sans-serif font on Linux (fontconfig). Its hinting is made for
-    /// small sizes on screen, so it is the sharpest choice.
-    System,
+/// Font of the user interface (Settings → Misc → Font): the family name of an installed
+/// font, or "System" for the system's user interface font. Old configs stored "System",
+/// "Arial", "Tahoma", "LiberationSans" or "Inconsolata"; all are still understood.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct UiFont(pub String);
+
+impl Default for UiFont {
     /// Arial: the system's, otherwise the bundled Liberation Sans (same letter widths).
-    Arial,
-    /// Tahoma, HLSW's font: the system's, otherwise the bundled Wine Tahoma. Default: at
-    /// small sizes it looks like HLSW and is drawn with the font's own screen hinting.
-    #[default]
-    Tahoma,
-    /// Inconsolata (bundled).
-    Inconsolata,
-    /// Liberation Sans (bundled; Arial's metric-compatible open replacement).
-    LiberationSans,
+    fn default() -> Self {
+        UiFont("Arial".into())
+    }
 }
 
-impl UiFont {
-    pub const ALL: [UiFont; 5] = [
-        UiFont::System,
-        UiFont::Arial,
-        UiFont::Tahoma,
-        UiFont::LiberationSans,
-        UiFont::Inconsolata,
-    ];
+/// "System": Segoe UI on Windows, San Francisco / Helvetica on macOS, the desktop's
+/// sans-serif font on Linux (fontconfig).
+pub const SYSTEM_FONT: &str = "System";
 
-    pub fn label(self) -> &'static str {
-        match self {
-            UiFont::System => tr!("System font"),
-            UiFont::Arial => "Arial",
-            UiFont::Tahoma => "Tahoma",
-            UiFont::Inconsolata => "Inconsolata",
-            UiFont::LiberationSans => "Liberation Sans",
+/// Fonts that come with openHLSW (used when they are not installed).
+const BUNDLED: [&str; 4] = ["Arial", "Tahoma", "Liberation Sans", "Inconsolata"];
+
+impl UiFont {
+    pub fn system() -> Self {
+        UiFont(SYSTEM_FONT.into())
+    }
+
+    /// Family name (old config spellings fixed).
+    pub fn family(&self) -> &str {
+        match self.0.as_str() {
+            "LiberationSans" => "Liberation Sans",
+            name => name,
         }
     }
 
-    /// Installed font files, tried in this order.
-    fn system_paths(self) -> &'static [&'static str] {
-        match self {
-            UiFont::System if cfg!(windows) => &[
+    pub fn label(&self) -> &str {
+        if self.is_system() {
+            tr!("System font")
+        } else {
+            self.family()
+        }
+    }
+
+    pub fn is_system(&self) -> bool {
+        self.0 == SYSTEM_FONT
+    }
+
+    /// Well-known files of the system font / Arial / Tahoma, tried before scanning all fonts.
+    fn known_paths(&self) -> &'static [&'static str] {
+        match self.family() {
+            SYSTEM_FONT if cfg!(windows) => &[
                 "C:\\Windows\\Fonts\\segoeui.ttf",
                 "C:\\Windows\\Fonts\\tahoma.ttf",
             ],
-            UiFont::System if cfg!(target_os = "macos") => &[
+            SYSTEM_FONT if cfg!(target_os = "macos") => &[
                 "/System/Library/Fonts/SFNS.ttf",
                 "/System/Library/Fonts/Helvetica.ttc",
                 "/System/Library/Fonts/Supplemental/Arial.ttf",
             ],
-            UiFont::System => &[
+            SYSTEM_FONT => &[
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/TTF/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
@@ -396,54 +418,134 @@ impl UiFont {
                 "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
                 "/usr/local/share/fonts/dejavu/DejaVuSans.ttf",
             ],
-            UiFont::Arial if cfg!(windows) => &["C:\\Windows\\Fonts\\arial.ttf"],
-            UiFont::Arial if cfg!(target_os = "macos") => &[
+            "Arial" if cfg!(windows) => &["C:\\Windows\\Fonts\\arial.ttf"],
+            "Arial" if cfg!(target_os = "macos") => &[
                 "/System/Library/Fonts/Supplemental/Arial.ttf",
                 "/Library/Fonts/Arial.ttf",
             ],
-            UiFont::Arial => &[
-                "/usr/share/fonts/truetype/msttcorefonts/arial.ttf",
-                "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
-                "/usr/share/fonts/TTF/arial.ttf",
-            ],
-            UiFont::Tahoma if cfg!(windows) => &["C:\\Windows\\Fonts\\tahoma.ttf"],
-            UiFont::Tahoma if cfg!(target_os = "macos") => &[
+            "Tahoma" if cfg!(windows) => &["C:\\Windows\\Fonts\\tahoma.ttf"],
+            "Tahoma" if cfg!(target_os = "macos") => &[
                 "/System/Library/Fonts/Supplemental/Tahoma.ttf",
                 "/Library/Fonts/Tahoma.ttf",
             ],
-            UiFont::Tahoma => &[
-                "/usr/share/fonts/truetype/msttcorefonts/tahoma.ttf",
-                "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
-                "/usr/share/fonts/TTF/tahoma.ttf",
-            ],
-            UiFont::Inconsolata | UiFont::LiberationSans => &[],
+            _ => &[],
         }
     }
 
     /// The font file to use: an installed one, otherwise the bundled replacement.
-    fn data(self) -> FontData {
+    fn data(&self) -> FontData {
+        let family = self.family();
         // Linux / BSD: ask fontconfig for the desktop's sans-serif font first.
-        if self == UiFont::System
+        if self.is_system()
             && cfg!(all(unix, not(target_os = "macos")))
             && let Some(bytes) = fontconfig_sans()
         {
             return FontData::from_owned(bytes);
         }
         if let Some(bytes) = self
-            .system_paths()
+            .known_paths()
             .iter()
             .find_map(|p| std::fs::read(p).ok())
         {
             return FontData::from_owned(bytes);
         }
-        FontData::from_static(match self {
-            UiFont::System => BUNDLED_ARIAL,
-            UiFont::Arial => BUNDLED_ARIAL,
-            UiFont::Tahoma => BUNDLED_TAHOMA,
-            UiFont::Inconsolata => INCONSOLATA,
-            UiFont::LiberationSans => LIBERATION_SANS,
+        // Any other installed font: look it up among all fonts of the system.
+        if !self.is_system()
+            && let Some(font) = scanned_fonts()
+                .iter()
+                .find(|f| f.family.eq_ignore_ascii_case(family))
+            && let Ok(bytes) = std::fs::read(&font.path)
+        {
+            let mut data = FontData::from_owned(bytes);
+            data.index = font.index;
+            return data;
+        }
+        FontData::from_static(match family {
+            "Tahoma" => BUNDLED_TAHOMA,
+            "Liberation Sans" => LIBERATION_SANS,
+            "Inconsolata" => INCONSOLATA,
+            // Arial, the system font and fonts that are gone: Arial's look-alike.
+            _ => BUNDLED_ARIAL,
         })
     }
+}
+
+/// An installed font family (its regular face).
+pub struct SystemFont {
+    pub family: String,
+    path: std::path::PathBuf,
+    index: u32,
+}
+
+static SYSTEM_FONTS: std::sync::OnceLock<Vec<SystemFont>> = std::sync::OnceLock::new();
+
+/// Starts looking up the installed fonts in the background (takes a moment on systems with
+/// many fonts), so the font list in the settings is ready when it is opened.
+pub fn scan_fonts_in_background() {
+    std::thread::spawn(|| {
+        scanned_fonts();
+    });
+}
+
+/// The installed fonts, `None` while they are still being looked up.
+pub fn system_fonts() -> Option<&'static [SystemFont]> {
+    SYSTEM_FONTS.get().map(Vec::as_slice)
+}
+
+/// The installed fonts (waits for the lookup).
+fn scanned_fonts() -> &'static [SystemFont] {
+    SYSTEM_FONTS.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        // Per family the face closest to regular (weight 400, upright, normal width).
+        let mut best: std::collections::BTreeMap<String, (u32, SystemFont)> = Default::default();
+        for face in db.faces() {
+            let fontdb::Source::File(path) = &face.source else {
+                continue;
+            };
+            let Some((family, _)) = face.families.first() else {
+                continue;
+            };
+            // Names starting with "." are the system's private fonts (macOS).
+            if family.is_empty() || family.starts_with('.') {
+                continue;
+            }
+            let score = u32::from(face.weight.0.abs_diff(400))
+                + if face.style == fontdb::Style::Normal { 0 } else { 1000 }
+                + (face.stretch.to_number() as i32 - 5).unsigned_abs() * 100;
+            let key = family.to_lowercase();
+            if best.get(&key).is_none_or(|(s, _)| score < *s) {
+                best.insert(
+                    key,
+                    (
+                        score,
+                        SystemFont {
+                            family: family.clone(),
+                            path: path.clone(),
+                            index: face.index,
+                        },
+                    ),
+                );
+            }
+        }
+        best.into_values().map(|(_, f)| f).collect()
+    })
+}
+
+/// All fonts the settings offer: the system font, the installed fonts and the bundled ones
+/// that are not installed. `None` while the installed fonts are still being looked up.
+pub fn font_choices() -> Option<Vec<UiFont>> {
+    let installed = system_fonts()?;
+    let mut out = vec![UiFont::system()];
+    let mut names: Vec<&str> = installed.iter().map(|f| f.family.as_str()).collect();
+    for b in BUNDLED {
+        if !names.iter().any(|n| n.eq_ignore_ascii_case(b)) {
+            names.push(b);
+        }
+    }
+    names.sort_by_key(|n| n.to_lowercase());
+    out.extend(names.into_iter().map(|n| UiFont(n.to_string())));
+    Some(out)
 }
 
 /// The file of fontconfig's "sans-serif" (a .ttf / .otf, not a collection).
@@ -477,7 +579,7 @@ static BUNDLED_TAHOMA: &[u8] = INCONSOLATA;
 
 /// Installs the chosen interface font (Inconsolata for monospace text) with fallbacks for
 /// all other scripts.
-pub fn install_fonts(ctx: &egui::Context, font: UiFont) {
+pub fn install_fonts(ctx: &egui::Context, font: &UiFont) {
     // Fallbacks for characters the interface font does not have (symbols, CJK, Cyrillic variants,
     // emoji, ...) - player and server names use all of Unicode.
     let fallbacks: &[&str] = if cfg!(windows) {

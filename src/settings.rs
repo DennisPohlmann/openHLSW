@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use eframe::egui::{
-    self, Button, Checkbox, DragValue, Frame, Label, Margin, RichText, Sense, TextEdit, Ui,
+    self, Button, Checkbox, DragValue, Label, RichText, Sense, TextEdit, Ui,
 };
 use egui_extras::Column;
 use serde::{Deserialize, Serialize};
@@ -566,7 +566,7 @@ pub struct Settings {
     /// User interface language.
     pub language: crate::i18n::Language,
     /// Look settings already updated to the current defaults (missing in old configs = 0:
-    /// they get Tahoma at 12 px once, like HLSW).
+    /// they get the default look once, see [`APPEARANCE`]).
     #[serde(default)]
     pub appearance: u32,
     /// Bumped when a default changes, so old configs are migrated once (1 = refresh 1 s).
@@ -706,7 +706,7 @@ impl Default for Settings {
             geo_lookup: true,
             theme: Theme::Light,
             text_size: TextSize::Px12,
-            font: UiFont::Tahoma,
+            font: UiFont::default(),
             language: crate::i18n::Language::System,
             appearance: APPEARANCE,
             defaults_revision: 1,
@@ -797,7 +797,8 @@ const GOLDSRC_PRESETS: &[(&str, &str, &str)] = &[
 ];
 
 /// Current revision of the look defaults, see [`Settings::appearance`].
-pub const APPEARANCE: u32 = 1;
+/// 1: Tahoma 12 px, 2: Arial (default font).
+pub const APPEARANCE: u32 = 2;
 
 /// State of an open settings dialog: a draft that is applied on OK / Apply.
 pub struct SettingsDialog {
@@ -1295,72 +1296,65 @@ impl SettingsDialog {
         });
     }
 
+    /// Misc, in HLSW's order: Server list, Language, Skin, then openHLSW's own settings.
     fn misc(&mut self, ui: &mut Ui, p: &Palette) {
         let d = &mut self.draft;
-        group_box(
-            ui,
-            p,
-            tr!("Server list"),
-            ui.available_width() - 20.0,
-            |ui| {
-                ui.checkbox(
-                    &mut d.auto_refresh,
-                    tr!("Auto update all servers in server list"),
-                );
+        let width = ui.available_width() - 20.0;
+        let indent = 22.0;
+        group_box(ui, p, tr!("Server list"), width, |ui| {
+            ui.checkbox(
+                &mut d.auto_refresh,
+                tr!("Auto update all servers in server list"),
+            );
+            ui.add_enabled_ui(d.auto_refresh, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add_space(20.0);
+                    ui.add_space(indent);
                     ui.label(tr!("Update interval"));
                     ui.add(
                         DragValue::new(&mut d.refresh_interval)
-                            .range((1.0 / d.max_queries_per_sec.max(0.1)).clamp(0.1, 10.0)..=3600.0)
+                            .range(
+                                (1.0 / d.max_queries_per_sec.max(0.1)).clamp(0.1, 10.0)..=3600.0,
+                            )
                             .speed(0.05)
                             .max_decimals(2),
                     );
                     ui.label(tr!("seconds."));
                 });
-                ui.horizontal(|ui| {
-                    ui.add_space(20.0);
-                    ui.label(tr!("Query limit"));
-                    ui.add(
-                        DragValue::new(&mut d.max_queries_per_sec)
-                            .range(0.5..=50.0)
-                            .speed(0.05)
-                            .max_decimals(1),
-                    );
-                    ui.label(tr!("queries per second and server."));
-                });
-                ui.horizontal(|ui| {
-                ui.add_space(20.0);
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(indent);
+                ui.label(tr!("Query limit"));
+                ui.add(
+                    DragValue::new(&mut d.max_queries_per_sec)
+                        .range(0.5..=50.0)
+                        .speed(0.05)
+                        .max_decimals(1),
+                );
+                ui.label(tr!("queries per second and server."));
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(indent);
                 ui.label(
-                    RichText::new(tr!("srcds answers only sv_max_queries_sec (default 3) queries per second from one IP."))
-                        .color(p.weak_text),
+                    RichText::new(tr!(
+                        "srcds answers only sv_max_queries_sec (default 3) queries per second from one IP."
+                    ))
+                    .color(p.weak_text),
                 );
             });
-                ui.checkbox(
-                    &mut d.keep_order_on_hover,
-                    tr!("Only change server list order if mouse cursor is out of server list"),
-                );
-                ui.checkbox(
-                    &mut d.geo_lookup,
-                    tr!("Show server location and provider (looks up server IPs at ip-api.com)"),
-                );
-                ui.checkbox(
-                    &mut d.iddb_auto_add,
-                    tr!("Automatically add player name with known Global ID to Global ID Database"),
-                );
-            },
-        );
-        group_box(ui, p, tr!("Skin"), ui.available_width() - 20.0, |ui| {
-            egui::ComboBox::from_id_salt("skin")
-                .selected_text(d.theme.label())
-                .width(180.0)
-                .show_ui(ui, |ui| {
-                    for t in [Theme::Light, Theme::Dark] {
-                        ui.selectable_value(&mut d.theme, t, t.label());
-                    }
-                });
+            ui.add_space(2.0);
+            ui.checkbox(
+                &mut d.keep_order_on_hover,
+                tr!("Only change server list order if mouse cursor is out of server list"),
+            );
+            ui.checkbox(&mut d.connect_on_double_click, tr!("Connect on double click"))
+                .on_hover_text(tr!("Double click on a server in the server list joins it"));
+            ui.checkbox(
+                &mut d.geo_lookup,
+                tr!("Show server location and provider (looks up server IPs at ip-api.com)"),
+            );
         });
-        group_box(ui, p, tr!("Language"), ui.available_width() - 20.0, |ui| {
+
+        group_box(ui, p, tr!("Language"), width, |ui| {
             let label = |l: crate::i18n::Language| {
                 if l == crate::i18n::Language::System {
                     format!(
@@ -1374,40 +1368,77 @@ impl SettingsDialog {
             };
             egui::ComboBox::from_id_salt("language")
                 .selected_text(label(d.language))
-                .width(240.0)
-                .height(420.0)
+                .width(260.0)
+                .height(popup_height(ui))
                 .show_ui(ui, |ui| {
                     for l in crate::i18n::Language::ALL {
                         ui.selectable_value(&mut d.language, l, label(l));
                     }
                 });
         });
-        group_box(ui, p, tr!("Font"), ui.available_width() - 20.0, |ui| {
-            egui::ComboBox::from_id_salt("ui_font")
-                .selected_text(d.font.label())
-                .width(180.0)
+
+        group_box(ui, p, tr!("Skin"), width, |ui| {
+            egui::ComboBox::from_id_salt("skin")
+                .selected_text(d.theme.label())
+                .width(260.0)
+                .height(popup_height(ui))
                 .show_ui(ui, |ui| {
-                    for f in UiFont::ALL {
-                        ui.selectable_value(&mut d.font, f, f.label());
+                    for t in [Theme::Light, Theme::Dark] {
+                        ui.selectable_value(&mut d.theme, t, t.label());
                     }
                 });
         });
-        group_box(ui, p, tr!("Text size"), ui.available_width() - 20.0, |ui| {
+
+        group_box(ui, p, tr!("Font"), width, |ui| {
             ui.horizontal(|ui| {
-                for t in TextSize::ALL {
-                    ui.radio_value(&mut d.text_size, t, t.label());
-                }
+                egui::ComboBox::from_id_salt("ui_font")
+                    .selected_text(d.font.label().to_owned())
+                    .width(260.0)
+                    .height(popup_height(ui))
+                    .show_ui(ui, |ui| match crate::theme::font_choices() {
+                        Some(fonts) => {
+                            for f in fonts {
+                                let text = f.label().to_owned();
+                                ui.selectable_value(&mut d.font, f, text);
+                            }
+                        }
+                        None => {
+                            ui.label(RichText::new(tr!("Loading fonts…")).color(p.weak_text));
+                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+                        }
+                    });
+                ui.add_space(12.0);
+                ui.label(tr!("Text size:"));
+                egui::ComboBox::from_id_salt("text_size")
+                    .selected_text(d.text_size.label())
+                    .width(70.0)
+                    .show_ui(ui, |ui| {
+                        for t in TextSize::ALL {
+                            ui.selectable_value(&mut d.text_size, t, t.label());
+                        }
+                    });
             });
+            ui.label(
+                RichText::new(tr!(
+                    "All fonts installed on this computer. Arial and Tahoma come with openHLSW if they are missing."
+                ))
+                .color(p.weak_text),
+            );
         });
-        Frame::new()
-            .inner_margin(Margin::symmetric(6, 4))
-            .show(ui, |ui| {
-                ui.checkbox(
-                    &mut d.connect_on_double_click,
-                    tr!("Connect on double click"),
-                );
-            });
+
+        group_box(ui, p, tr!("Global ID Database"), width, |ui| {
+            ui.checkbox(
+                &mut d.iddb_auto_add,
+                tr!("Automatically add player name with known Global ID to Global ID Database"),
+            );
+        });
     }
+}
+
+/// Height for a dropdown list so it opens downwards inside the dialog (instead of beside
+/// the dropdown when the list is taller than the room below it); longer lists scroll.
+fn popup_height(ui: &Ui) -> f32 {
+    (ui.ctx().content_rect().bottom() - ui.cursor().top() - 36.0).clamp(90.0, 420.0)
 }
 
 fn plugins(ui: &mut Ui, p: &Palette) {
