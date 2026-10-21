@@ -91,6 +91,9 @@ struct Server {
     rules: Vec<Rule>,
     /// In-flight queries: info, players, rules.
     busy: [bool; 3],
+    /// When info, players and rules were last asked for (to take turns when the server only
+    /// allows few queries per second).
+    sent: [Option<Instant>; 3],
     rcon_password: String,
     /// The password the RCON connection logs in with: the typed one once Test (or a command)
     /// used it. Typing alone never logs in (servers ban addresses after failed logins).
@@ -221,6 +224,7 @@ impl Server {
             players: Vec::new(),
             rules: Vec::new(),
             busy: [false; 3],
+            sent: [None; 3],
             rcon_password: String::new(),
             rcon_login: String::new(),
             save_password: false,
@@ -1692,9 +1696,11 @@ impl OpenHlswApp {
         s.budget_at = Instant::now();
 
         let rules_due = s.last_rules.is_none_or(|t| t.elapsed() >= RULES_REFRESH);
-        // Priority: info first (ping, map, players count must stay current even on servers
-        // that allow only one query per second, like many HLDS), then the rules when due
-        // (every 10 s), then the players of the selected server.
+        // Info always; the rules when due (every 10 s); the players of the selected server.
+        // They take turns: the one asked for longest ago goes first. With a fixed order, a
+        // server that allows only about one query per second (many HLDS, or after dropped
+        // queries) spent its whole budget on info, and the players (time, frags) and the
+        // rules were never updated.
         let mut kinds = vec![(0, QueryKind::Info)];
         if force_details || rules_due {
             kinds.push((2, QueryKind::Rules));
@@ -1702,6 +1708,7 @@ impl OpenHlswApp {
         if force_details || (selected && auto_details) {
             kinds.push((1, QueryKind::Players));
         }
+        kinds.sort_by_key(|&(slot, _)| s.sent[slot]);
         for (slot, kind) in kinds {
             if s.busy[slot] {
                 continue;
@@ -1713,6 +1720,7 @@ impl OpenHlswApp {
             }
             s.budget -= 1.0;
             s.busy[slot] = true;
+            s.sent[slot] = Some(Instant::now());
             if slot == 2 {
                 s.last_rules = Some(Instant::now());
             }
