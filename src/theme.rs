@@ -454,6 +454,49 @@ impl UiFont {
         Some(data)
     }
 
+    /// The bold face of this font (`None`: the font has none).
+    fn bold_data(&self) -> Option<FontData> {
+        let read = |path: &std::path::Path, index: u32| {
+            let mut data = FontData::from_owned(std::fs::read(path).ok()?);
+            data.index = index;
+            Some(data)
+        };
+        let scanned = |family: &str| {
+            scanned_fonts()
+                .iter()
+                .find(|f| f.family.eq_ignore_ascii_case(family))
+                .and_then(|f| f.bold.as_ref())
+                .and_then(|(path, index)| read(path, *index))
+        };
+        if !self.is_system() {
+            return scanned(self.family());
+        }
+        if cfg!(all(unix, not(target_os = "macos")))
+            && let Some(data) = fontconfig_file("sans-serif:style=Bold")
+        {
+            return Some(data);
+        }
+        let paths: &[&str] = if cfg!(windows) {
+            &["C:\\Windows\\Fonts\\segoeuib.ttf", "C:\\Windows\\Fonts\\tahomabd.ttf"]
+        } else if cfg!(target_os = "macos") {
+            &[]
+        } else {
+            &[
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            ]
+        };
+        if let Some(bytes) = paths.iter().find_map(|p| std::fs::read(p).ok()) {
+            return Some(FontData::from_owned(bytes));
+        }
+        // macOS: the system font (San Francisco) is a variable font whose bold cannot be
+        // picked here, so the bold of Helvetica Neue / Helvetica / Arial is used.
+        ["Helvetica Neue", "Helvetica", "Arial"]
+            .iter()
+            .find_map(|f| scanned(f))
+    }
+
     /// This font, otherwise the system font, otherwise any installed font.
     fn data_or_fallback(&self) -> Option<FontData> {
         self.data()
@@ -501,11 +544,12 @@ fn monospace_data() -> Option<FontData> {
         .map(FontData::from_owned)
 }
 
-/// An installed font family (its regular face).
+/// An installed font family (its regular face and, if there is one, its bold face).
 pub struct SystemFont {
     pub family: String,
     path: std::path::PathBuf,
     index: u32,
+    bold: Option<(std::path::PathBuf, u32)>,
 }
 
 static SYSTEM_FONTS: std::sync::OnceLock<Vec<SystemFont>> = std::sync::OnceLock::new();
@@ -528,8 +572,11 @@ fn scanned_fonts() -> &'static [SystemFont] {
     SYSTEM_FONTS.get_or_init(|| {
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
-        // Per family the face closest to regular (weight 400, upright, normal width).
+        // Per family the face closest to regular (weight 400, upright, normal width) and the
+        // one closest to bold (weight 700).
         let mut best: std::collections::BTreeMap<String, (u32, SystemFont)> = Default::default();
+        let mut bold: std::collections::HashMap<String, (u32, std::path::PathBuf, u32)> =
+            Default::default();
         for face in db.faces() {
             let fontdb::Source::File(path) = &face.source else {
                 continue;
@@ -541,10 +588,16 @@ fn scanned_fonts() -> &'static [SystemFont] {
             if family.is_empty() || family.starts_with('.') {
                 continue;
             }
-            let score = u32::from(face.weight.0.abs_diff(400))
-                + if face.style == fontdb::Style::Normal { 0 } else { 1000 }
+            let shape = if face.style == fontdb::Style::Normal { 0 } else { 1000 }
                 + (face.stretch.to_number() as i32 - 5).unsigned_abs() * 100;
+            let score = u32::from(face.weight.0.abs_diff(400)) + shape;
             let key = family.to_lowercase();
+            if face.weight.0 >= 600 {
+                let bold_score = u32::from(face.weight.0.abs_diff(700)) + shape;
+                if bold.get(&key).is_none_or(|(s, _, _)| bold_score < *s) {
+                    bold.insert(key.clone(), (bold_score, path.clone(), face.index));
+                }
+            }
             if best.get(&key).is_none_or(|(s, _)| score < *s) {
                 best.insert(
                     key,
@@ -554,12 +607,18 @@ fn scanned_fonts() -> &'static [SystemFont] {
                             family: family.clone(),
                             path: path.clone(),
                             index: face.index,
+                            bold: None,
                         },
                     ),
                 );
             }
         }
-        best.into_values().map(|(_, f)| f).collect()
+        best.into_iter()
+            .map(|(key, (_, mut f))| {
+                f.bold = bold.remove(&key).map(|(_, path, index)| (path, index));
+                f
+            })
+            .collect()
     })
 }
 
@@ -843,6 +902,23 @@ pub fn install_fonts(ctx: &egui::Context, font: &UiFont) {
     if fonts.font_data.contains_key("mono") {
         first(&mut fonts, FontFamily::Monospace, "mono");
     }
+    // Bold text (server name in the info panel): the font's bold face, else the font itself.
+    let bold_data = font
+        .bold_data()
+        .or_else(|| font.data().is_none().then(|| UiFont::system().bold_data()).flatten());
+    let mut bold_family = Vec::new();
+    if let Some(data) = bold_data {
+        fonts.font_data.insert("ui-bold".to_owned(), crisp(data).into());
+        bold_family.push("ui-bold".to_owned());
+    }
+    bold_family.extend(
+        fonts
+            .families
+            .get(&FontFamily::Proportional)
+            .cloned()
+            .unwrap_or_default(),
+    );
+    fonts.families.insert(bold(), bold_family);
 
     // Fallbacks go right after the main font in both families.
     let mut position = 1;
@@ -859,7 +935,19 @@ pub fn install_fonts(ctx: &egui::Context, font: &UiFont) {
             let at = position.min(list.len());
             list.insert(at, name.clone());
         }
+        // Bold: after the bold face and the interface font.
+        let list = fonts.families.entry(bold()).or_default();
+        let at = list
+            .iter()
+            .position(|n| n == "ui")
+            .map_or(list.len(), |i| i + position);
+        list.insert(at.min(list.len()), name.clone());
         position += 1;
     }
     ctx.set_fonts(fonts);
+}
+
+/// Font family of bold text (the interface font's bold face).
+pub fn bold() -> FontFamily {
+    FontFamily::Name("bold".into())
 }

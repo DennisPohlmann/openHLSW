@@ -7378,19 +7378,23 @@ fn info_panel(
         .show(ui, |ui| {
             let server = server_mut.as_deref();
             ui.add_space(2.0);
-            // Title (HLSW shows the server name as a link) and the ping graph.
+            // Title (the server name) and the ping graph.
             let title = server.map(|s| {
                 s.info
                     .as_ref()
                     .map(|i| i.name.clone())
                     .unwrap_or_else(|| s.address.to_string())
             });
-            // Like HLSW: the name in link colour, underlined, in the normal font size.
+            // The name in bold, in the normal font size and text colour.
             ui.horizontal(|ui| {
                 ui.add_space(3.0);
                 match &title {
                     Some(t) => ui.add(
-                        Label::new(RichText::new(t).color(p.link).underline())
+                        Label::new(
+                            RichText::new(t)
+                                .color(p.text)
+                                .family(crate::theme::bold()),
+                        )
                             .wrap()
                             .selectable(false),
                     ),
@@ -7404,185 +7408,198 @@ fn info_panel(
                     // The graph grows with the panel (drag the panel border to enlarge it).
                     let width = (ui.available_width() - 6.0).max(100.0);
                     let height = (width * 0.09).clamp(36.0, 110.0);
-                    ping_graph(
+                    let rect = ping_graph(
                         ui,
                         p,
                         egui::vec2(width, height),
                         server.map(|s| &s.ping_history),
                         PING_HISTORY,
                     );
+                    // 1 px black frame around the graph.
+                    ui.painter().rect_stroke(
+                        rect,
+                        0.0,
+                        Stroke::new(1.0, Color32::BLACK),
+                        egui::StrokeKind::Outside,
+                    );
                 });
             }
             ui.add_space(5.0);
 
-            let Some(s) = server else {
-                ui.label(RichText::new(tr!("No server selected.")).color(p.weak_text));
-                return;
-            };
-            let text = |t: String| RichText::new(if t.is_empty() { "-".to_string() } else { t });
-
-            ui.spacing_mut().interact_size.y = 14.0;
-            egui::Grid::new("info_grid")
-                .num_columns(2)
-                .spacing([10.0, 2.0])
+            // The text below the graph keeps 2 px from the left and right edge.
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(2, 0))
                 .show(ui, |ui| {
-                    let row = |ui: &mut Ui, key: &str, value: RichText| {
-                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                            ui.label(RichText::new(key).color(p.text));
-                        });
-                        ui.add(Label::new(value).wrap());
-                        ui.end_row();
+                    let server = server_mut.as_deref();
+                    let Some(s) = server else {
+                        ui.label(RichText::new(tr!("No server selected.")).color(p.weak_text));
+                        return;
                     };
-                    row(ui, tr!("Address"), text(s.address.to_string()));
-                    let ping = match (&s.state, s.ping) {
-                        (QueryState::Online, Some(ms)) => {
-                            let avg = s
-                                .avg_ping()
-                                .map(|a| format!(" (Ø {a:.1} ms)"))
-                                .unwrap_or_default();
-                            RichText::new(format!("{ms} ms{avg}"))
-                        }
-                        (QueryState::Offline(e), _) => RichText::new(e).color(p.red),
-                        _ => RichText::new(tr!("querying…")).color(p.weak_text),
-                    };
-                    row(ui, tr!("Ping"), ping);
-                    match &location {
-                        Some(Some(g)) if !g.country.is_empty() => {
-                            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                                ui.label(RichText::new(tr!("Location")).color(p.text));
-                            });
-                            ui.horizontal(|ui| {
-                                if let Some(f) = flags.filter(|f| f.has(&g.country_code)) {
-                                    f.show(ui, &g.country_code, 11.0);
-                                }
-                                ui.label(g.place());
-                            });
-                            ui.end_row();
-                            let provider = if g.asn.is_empty() {
-                                g.provider().to_string()
-                            } else {
-                                format!("{} ({})", g.provider(), g.asn)
-                            };
-                            row(ui, tr!("Provider"), text(provider));
-                        }
-                        Some(Some(_)) => row(ui, tr!("Location"), text(tr!("unknown").into())),
-                        Some(None) => row(ui, tr!("Location"), text(tr!("Local network").into())),
-                        None => {}
-                    }
-                    if let Some(i) = &s.info {
-                        let game = if let Some(g) = s.listed_game() {
-                            // "Unreal Tournament 2004 (Unreal 2, xDeathMatch)"
-                            let detail = [g.protocol.name(), i.game.as_str()]
-                                .into_iter()
-                                .filter(|t| !t.is_empty() && *t != g.name)
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            format!("{} ({detail})", g.name)
-                        } else if i.gamespy {
-                            format!("{} ({})", i.game, i.folder)
-                        } else {
-                            format!("{} ({}, AppID {})", i.game, i.folder, i.real_app_id())
-                        };
-                        row(ui, tr!("Game"), text(game));
-                        let mut players = format!("{} / {}", i.players, i.max_players);
-                        if i.bots > 0 {
-                            players += &tr!(" ({bots} bots)", bots = i.bots);
-                        }
-                        let pc = if s.humans() > 0 { p.green } else { p.text };
-                        row(ui, tr!("Players"), RichText::new(players).color(pc));
-                        let next = s
-                            .rule("sm_nextmap")
-                            .filter(|n| !n.is_empty())
-                            .map(|n| tr!("  ({n} next)", n = n))
-                            .unwrap_or_default();
-                        row(ui, tr!("Map"), text(format!("{}{next}", i.map)));
-                        row(ui, tr!("Limits"), text(s.limits()));
-                        let ff = match s
-                            .rule("mp_friendlyfire")
-                            .or(s.rule("bf2_friendlyfire"))
-                            .or(s.rule("bf2142_friendlyfire"))
-                        {
-                            Some("0") => tr!("No"),
-                            Some(_) => tr!("Yes"),
-                            None => "",
-                        };
-                        row(ui, tr!("Friendly Fire"), text(ff.into()));
-                        row(
-                            ui,
-                            tr!("Server Type"),
-                            text(format!("{}, {}", i.server_type_name(), i.os_name())),
-                        );
-                        row(ui, tr!("Version"), text(i.version.clone()));
-                        row(ui, tr!("AddOns"), text(s.addons_compact()));
-                        row(
-                            ui,
-                            tr!("Anti-Cheat"),
-                            text(if i.vac {
-                                tr!("Valve Anti-Cheat").into()
-                            } else {
-                                tr!("None").into()
-                            }),
-                        );
-                        row(
-                            ui,
-                            tr!("Password"),
-                            text(if i.passworded {
-                                tr!("Yes").into()
-                            } else {
-                                tr!("No").into()
-                            }),
-                        );
-                        if let Some(k) = &i.keywords {
-                            row(ui, tr!("Tags"), text(k.clone()));
-                        }
-                        if let Some(id) = i.steam_id {
-                            row(ui, tr!("Steam ID"), text(id.to_string()));
-                        }
-                        if let Some(port) = i.tv_port {
-                            row(
-                                ui,
-                                tr!("SourceTV"),
-                                text(tr!(
-                                    "{name} (port {port})",
-                                    name = i.tv_name.as_deref().unwrap_or(""),
-                                    port = port
-                                )),
-                            );
-                        }
-                    }
-                    if let Some(t) = s.last_seen {
-                        let ago = (chrono::Local::now() - t).num_seconds().max(0);
-                        row(ui, tr!("Last Seen"), text(tr!("{ago} s ago", ago = ago)));
-                    }
-                    if let Some(c) = &s.last_connected {
-                        row(ui, tr!("Last Connected"), text(c.clone()));
-                    }
-                });
+                    let text = |t: String| RichText::new(if t.is_empty() { "-".to_string() } else { t });
 
-            if let Some(s) = server_mut {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(80.0, 18.0),
-                        Layout::right_to_left(Align::Center),
-                        |ui| {
-                            ui.label(RichText::new(tr!("Comment")).color(p.text));
-                        },
-                    );
-                    let r = ui
-                        .add(
-                            TextEdit::singleline(&mut s.comment)
-                                .align(egui::Align2::LEFT_CENTER)
-                                .id_salt("info_comment")
-                                .hint_text(tr!("add a note for this server"))
-                                .desired_width(ui.available_width() - 8.0),
-                        )
-                        .with_edit_menu();
-                    if r.lost_focus() || (r.changed() && !r.has_focus()) {
-                        comment_changed = true;
+                    ui.spacing_mut().interact_size.y = 14.0;
+                    egui::Grid::new("info_grid")
+                        .num_columns(2)
+                        .spacing([10.0, 2.0])
+                        .show(ui, |ui| {
+                            let row = |ui: &mut Ui, key: &str, value: RichText| {
+                                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                                    ui.label(RichText::new(key).color(p.text));
+                                });
+                                ui.add(Label::new(value).wrap());
+                                ui.end_row();
+                            };
+                            row(ui, tr!("Address"), text(s.address.to_string()));
+                            let ping = match (&s.state, s.ping) {
+                                (QueryState::Online, Some(ms)) => {
+                                    let avg = s
+                                        .avg_ping()
+                                        .map(|a| format!(" (Ø {a:.1} ms)"))
+                                        .unwrap_or_default();
+                                    RichText::new(format!("{ms} ms{avg}"))
+                                }
+                                (QueryState::Offline(e), _) => RichText::new(e).color(p.red),
+                                _ => RichText::new(tr!("querying…")).color(p.weak_text),
+                            };
+                            row(ui, tr!("Ping"), ping);
+                            match &location {
+                                Some(Some(g)) if !g.country.is_empty() => {
+                                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                                        ui.label(RichText::new(tr!("Location")).color(p.text));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        if let Some(f) = flags.filter(|f| f.has(&g.country_code)) {
+                                            f.show(ui, &g.country_code, 11.0);
+                                        }
+                                        ui.label(g.place());
+                                    });
+                                    ui.end_row();
+                                    let provider = if g.asn.is_empty() {
+                                        g.provider().to_string()
+                                    } else {
+                                        format!("{} ({})", g.provider(), g.asn)
+                                    };
+                                    row(ui, tr!("Provider"), text(provider));
+                                }
+                                Some(Some(_)) => row(ui, tr!("Location"), text(tr!("unknown").into())),
+                                Some(None) => row(ui, tr!("Location"), text(tr!("Local network").into())),
+                                None => {}
+                            }
+                            if let Some(i) = &s.info {
+                                let game = if let Some(g) = s.listed_game() {
+                                    // "Unreal Tournament 2004 (Unreal 2, xDeathMatch)"
+                                    let detail = [g.protocol.name(), i.game.as_str()]
+                                        .into_iter()
+                                        .filter(|t| !t.is_empty() && *t != g.name)
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    format!("{} ({detail})", g.name)
+                                } else if i.gamespy {
+                                    format!("{} ({})", i.game, i.folder)
+                                } else {
+                                    format!("{} ({}, AppID {})", i.game, i.folder, i.real_app_id())
+                                };
+                                row(ui, tr!("Game"), text(game));
+                                let mut players = format!("{} / {}", i.players, i.max_players);
+                                if i.bots > 0 {
+                                    players += &tr!(" ({bots} bots)", bots = i.bots);
+                                }
+                                let pc = if s.humans() > 0 { p.green } else { p.text };
+                                row(ui, tr!("Players"), RichText::new(players).color(pc));
+                                let next = s
+                                    .rule("sm_nextmap")
+                                    .filter(|n| !n.is_empty())
+                                    .map(|n| tr!("  ({n} next)", n = n))
+                                    .unwrap_or_default();
+                                row(ui, tr!("Map"), text(format!("{}{next}", i.map)));
+                                row(ui, tr!("Limits"), text(s.limits()));
+                                let ff = match s
+                                    .rule("mp_friendlyfire")
+                                    .or(s.rule("bf2_friendlyfire"))
+                                    .or(s.rule("bf2142_friendlyfire"))
+                                {
+                                    Some("0") => tr!("No"),
+                                    Some(_) => tr!("Yes"),
+                                    None => "",
+                                };
+                                row(ui, tr!("Friendly Fire"), text(ff.into()));
+                                row(
+                                    ui,
+                                    tr!("Server Type"),
+                                    text(format!("{}, {}", i.server_type_name(), i.os_name())),
+                                );
+                                row(ui, tr!("Version"), text(i.version.clone()));
+                                row(ui, tr!("AddOns"), text(s.addons_compact()));
+                                row(
+                                    ui,
+                                    tr!("Anti-Cheat"),
+                                    text(if i.vac {
+                                        tr!("Valve Anti-Cheat").into()
+                                    } else {
+                                        tr!("None").into()
+                                    }),
+                                );
+                                row(
+                                    ui,
+                                    tr!("Password"),
+                                    text(if i.passworded {
+                                        tr!("Yes").into()
+                                    } else {
+                                        tr!("No").into()
+                                    }),
+                                );
+                                if let Some(k) = &i.keywords {
+                                    row(ui, tr!("Tags"), text(k.clone()));
+                                }
+                                if let Some(id) = i.steam_id {
+                                    row(ui, tr!("Steam ID"), text(id.to_string()));
+                                }
+                                if let Some(port) = i.tv_port {
+                                    row(
+                                        ui,
+                                        tr!("SourceTV"),
+                                        text(tr!(
+                                            "{name} (port {port})",
+                                            name = i.tv_name.as_deref().unwrap_or(""),
+                                            port = port
+                                        )),
+                                    );
+                                }
+                            }
+                            if let Some(t) = s.last_seen {
+                                let ago = (chrono::Local::now() - t).num_seconds().max(0);
+                                row(ui, tr!("Last Seen"), text(tr!("{ago} s ago", ago = ago)));
+                            }
+                            if let Some(c) = &s.last_connected {
+                                row(ui, tr!("Last Connected"), text(c.clone()));
+                            }
+                        });
+
+                    if let Some(s) = server_mut {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(80.0, 18.0),
+                                Layout::right_to_left(Align::Center),
+                                |ui| {
+                                    ui.label(RichText::new(tr!("Comment")).color(p.text));
+                                },
+                            );
+                            let r = ui
+                                .add(
+                                    TextEdit::singleline(&mut s.comment)
+                                        .align(egui::Align2::LEFT_CENTER)
+                                        .id_salt("info_comment")
+                                        .hint_text(tr!("add a note for this server"))
+                                        .desired_width(ui.available_width() - 8.0),
+                                )
+                                .with_edit_menu();
+                            if r.lost_focus() || (r.changed() && !r.has_focus()) {
+                                comment_changed = true;
+                            }
+                        });
                     }
                 });
-            }
         });
     comment_changed
 }
@@ -7802,7 +7819,7 @@ fn ping_graph(
     size: egui::Vec2,
     history: Option<&VecDeque<Option<u32>>>,
     capacity: usize,
-) {
+) -> egui::Rect {
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
     let empty: VecDeque<Option<u32>> = VecDeque::new();
@@ -7993,6 +8010,7 @@ fn ping_graph(
     graph_labels(
         ui, &painter, &response, rect, history, step, max, avg, capacity,
     );
+    rect
 }
 
 /// Numbers in the ping graph: scale lines, the average, labelled peaks, the current
