@@ -3863,7 +3863,6 @@ impl OpenHlswApp {
             .add(
                 TextEdit::singleline(&mut self.settings.player_name)
                     .align(egui::Align2::LEFT_CENTER)
-                    .hint_text(tr!("from the game"))
                     .desired_width(120.0),
             )
             .with_edit_menu()
