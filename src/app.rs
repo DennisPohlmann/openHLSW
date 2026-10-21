@@ -3777,11 +3777,13 @@ impl OpenHlswApp {
 
     /// HLSW's icon toolbar: Connect | Rcon section, server list, rules | Delete |
     /// Refresh, Update | server list and server properties | About.
+    /// `interval`: the refresh interval, edited between Refresh and Update.
     fn icon_toolbar(
         &self,
         ui: &mut Ui,
         p: &Palette,
         icons: &crate::toolbar_icons::ToolbarIcons,
+        interval: &mut f32,
         actions: &mut Vec<Action>,
     ) {
         use crate::toolbar_icons::ToolIcon;
@@ -3825,6 +3827,16 @@ impl OpenHlswApp {
         {
             actions.push(Action::ToggleAutoRefresh);
         }
+        // The interval of the automatic refresh, between the two buttons.
+        ui.add_space(3.0);
+        let rate = self.settings.max_queries_per_sec;
+        if ui
+            .add_enabled_ui(auto, |ui| interval_edit(ui, interval, rate))
+            .inner
+        {
+            actions.push(Action::SaveConfig);
+        }
+        ui.add_space(3.0);
         if icons
             .button(ui, ToolIcon::Update, !auto, false, tr!("Update server list"))
             .clicked()
@@ -4099,7 +4111,9 @@ impl OpenHlswApp {
                 let selected = self.selected;
                 let id = selected.unwrap_or_default();
                 if let Some(icons) = &self.toolbar_icons {
-                    self.icon_toolbar(ui, p, icons, actions);
+                    let mut interval = self.settings.refresh_interval;
+                    self.icon_toolbar(ui, p, icons, &mut interval, actions);
+                    self.settings.refresh_interval = interval;
                 } else {
                     // Without the icons: flat text buttons.
                     let tool = |text: &str| Button::new(text).frame_when_inactive(false);
@@ -4168,9 +4182,12 @@ impl OpenHlswApp {
                     self.show_filter = true;
                     self.settings.filter.enabled = true;
                 }
-                toolbar_separator(ui, p);
+                if view.toolbar && self.toolbar_icons.is_none() {
+                    toolbar_separator(ui, p);
+                }
             }
-            if view.toolbar {
+            // Without the icons there is no Refresh button: the check box stays.
+            if view.toolbar && self.toolbar_icons.is_none() {
                 if ui
                     .checkbox(&mut self.settings.auto_refresh, tr!("Auto refresh every"))
                     .changed()

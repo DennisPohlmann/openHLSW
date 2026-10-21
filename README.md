@@ -69,7 +69,9 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   rules). A single click on a header sorts.
   Right-click a header of the server or players list to show/hide columns or to reset the
   column widths.
-- **Refresh** every **1 s** by default (can be lowered to 0.4 s, see below).
+- **Refresh** every **1 s** by default (can be lowered to 0.4 s, see below). Like HLSW, the
+  toolbar's Refresh button switches the automatic refresh on and off, the interval sits right
+  next to it, and Update refreshes all servers once while the automatic refresh is off.
 - **Right-click menus** like HLSW: servers (Connect, Copy, Delete, Move/Copy, Reset Average
   Ping, Properties, Trace Route, Rcon Status Command), players (Copy Name/Steam ID/Addr/Whole
   Table, Steam ID / ID3 / ID64 / profile URL, Open Steam Profile, Global ID Database, Rcon
