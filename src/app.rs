@@ -994,9 +994,6 @@ const HOMEPAGE: &str = "https://github.com/DennisPohlmann/openHLSW";
 const LICENSE_TEXT: &str = include_str!("../LICENSE");
 const GAME_ICONS_NOTICE: &str = include_str!("../assets/games/NOTICE.txt");
 const FLAGS_NOTICE: &str = include_str!("../assets/FLAGS-LICENSE.txt");
-const FONT_NOTICE: &str = include_str!("../assets/fonts/NOTICE.txt");
-const OFL_TEXT: &str = include_str!("../assets/fonts/OFL.txt");
-const LGPL_TEXT: &str = include_str!("../assets/fonts/LGPL-2.1.txt");
 
 /// Joins the hard-wrapped lines of a notice file into paragraphs that wrap with the window.
 fn unwrap_paragraphs(text: &str) -> String {
@@ -1163,25 +1160,12 @@ fn license_view(ui: &mut Ui) {
         ui.heading(tr!("Country flags"));
         ui.label(unwrap_paragraphs(FLAGS_NOTICE));
         ui.add_space(8.0);
-        ui.heading(tr!("Fonts"));
-        ui.label(unwrap_paragraphs(FONT_NOTICE));
-        egui::CollapsingHeader::new(tr!("SIL Open Font License 1.1 (full text)"))
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.label(RichText::new(OFL_TEXT).monospace().size(11.0));
-            });
-        egui::CollapsingHeader::new(tr!("GNU Lesser General Public License v2.1 (full text)"))
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.label(RichText::new(LGPL_TEXT).monospace().size(11.0));
-            });
-        ui.add_space(8.0);
         ui.heading(tr!("Other components"));
         ui.label(
             tr!("openHLSW is built with Rust libraries (egui/eframe, serde and others) under the MIT \
-             and/or Apache-2.0 licenses, and egui's bundled fonts (Ubuntu Font Licence, \
-             SIL Open Font License, MIT). Fallback fonts for other scripts come from your \
-             system. Server locations come from ip-api.com."),
+             and/or Apache-2.0 licenses; two of egui's crates are included in a modified form \
+             (sharper text). openHLSW brings no fonts of its own: all text uses the fonts of \
+             your system. Server locations come from ip-api.com."),
         );
         ui.add_space(8.0);
         egui::CollapsingHeader::new(tr!("GNU General Public License v3.0 (full text)"))

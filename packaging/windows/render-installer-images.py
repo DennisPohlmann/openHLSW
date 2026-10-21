@@ -7,7 +7,7 @@
   banner.bmp  493 x 58   Top of the other pages: white on the left for the page title,
                          the banner fading in on the right.
 
-Needs Pillow and rsvg-convert (for assets/openhlsw.svg). Run from the repository root
+Needs Pillow, rsvg-convert (for assets/openhlsw.svg) and fontconfig (fc-match). Run from the repository root
 after changing the look:  python3 packaging/windows/render-installer-images.py
 """
 import io
@@ -19,7 +19,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.dirname(os.path.abspath(__file__))
-FONT = os.path.join(ROOT, "assets", "fonts", "LiberationSans-Regular.ttf")
+# A sans-serif font of the system (openHLSW brings no fonts), picked by fontconfig.
+FONT = subprocess.run(
+    ["fc-match", "-f", "%{file}", "Liberation Sans:style=Regular"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
 
 # Same colors as the About banner (src/app.rs, about_view).
 TOP_LEFT, TOP_RIGHT = (140, 24, 14), (232, 96, 40)

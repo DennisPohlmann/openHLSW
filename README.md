@@ -133,7 +133,8 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   parameters), Startup, Connecting (incl. Quit openHLSW), Rcon, Connections, Plugins (empty),
   Sounds, Misc (laid out like HLSW: server list, **language**, skin, then **font** – the system
   font by default or any font installed on the computer, each shown in its own look in the list
-  (Arial and Tahoma are bundled for systems without them) – **text size** 12–16 px, 13 px by
+  (openHLSW brings no fonts of its own; a missing font falls back to the system font, and the
+  console uses the system's monospace font) – **text size** 12–16 px, 13 px by
   default, and **text smoothing**: ClearType-like sub-pixel text on Windows, Linux and macOS,
   automatically on for normal screens and off for high-resolution ones; font sizes are snapped
   to whole screen pixels so text stays sharp).
@@ -350,9 +351,9 @@ openHLSW is free software: you can redistribute it and/or modify it under the te
 The game icons in `assets/games/` are **not** covered by this license: they show logos and
 artwork of the respective games, all rights belong to their owners, see
 [`assets/games/NOTICE.txt`](assets/games/NOTICE.txt). The country flags are public domain
-(`assets/FLAGS-LICENSE.txt`). The bundled fonts (Inconsolata and Liberation Sans under the
-SIL Open Font License 1.1, Wine's Tahoma under the LGPL-2.1-or-later) are listed in
-`assets/fonts/NOTICE.txt`.
+(`assets/FLAGS-LICENSE.txt`). openHLSW includes no fonts; it uses the fonts installed on
+the system. The modified egui crates in `vendor/` are under MIT or Apache-2.0, see
+[`vendor/README.md`](vendor/README.md).
 openHLSW is not affiliated with the original HLSW or with any
 game publisher. The license and these notices are also shown in the program under
 **? → License**.

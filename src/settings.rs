@@ -1439,7 +1439,7 @@ impl SettingsDialog {
             });
             ui.label(
                 RichText::new(tr!(
-                    "All fonts installed on this computer. Arial and Tahoma come with openHLSW if they are missing."
+                    "All fonts installed on this computer; without the chosen font the system font is used."
                 ))
                 .color(p.weak_text),
             );

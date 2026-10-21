@@ -349,8 +349,8 @@ fn crisp(mut data: FontData) -> FontData {
 }
 
 /// Font of the user interface (Settings → Misc → Font): the family name of an installed
-/// font, or "System" for the system's user interface font. Old configs stored "System",
-/// "Arial", "Tahoma", "LiberationSans" or "Inconsolata"; all are still understood.
+/// font, or "System" for the system's user interface font. openHLSW brings no fonts of its
+/// own: a font that is not installed falls back to the system font.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct UiFont(pub String);
@@ -365,9 +365,6 @@ impl Default for UiFont {
 /// "System": Segoe UI on Windows, San Francisco / Helvetica on macOS, the desktop's
 /// sans-serif font on Linux (fontconfig).
 pub const SYSTEM_FONT: &str = "System";
-
-/// Fonts that come with openHLSW (used when they are not installed).
-const BUNDLED: [&str; 4] = ["Arial", "Tahoma", "Liberation Sans", "Inconsolata"];
 
 impl UiFont {
     pub fn system() -> Self {
@@ -428,42 +425,80 @@ impl UiFont {
         }
     }
 
-    /// The font file to use: an installed one, otherwise the bundled replacement.
-    fn data(&self) -> FontData {
+    /// The installed font file, `None` if this font is not installed.
+    fn data(&self) -> Option<FontData> {
         let family = self.family();
         // Linux / BSD: ask fontconfig for the desktop's sans-serif font first.
         if self.is_system()
             && cfg!(all(unix, not(target_os = "macos")))
-            && let Some(bytes) = fontconfig_sans()
+            && let Some(data) = fontconfig_file("sans-serif:style=Regular")
         {
-            return FontData::from_owned(bytes);
+            return Some(data);
         }
         if let Some(bytes) = self
             .known_paths()
             .iter()
             .find_map(|p| std::fs::read(p).ok())
         {
-            return FontData::from_owned(bytes);
+            return Some(FontData::from_owned(bytes));
+        }
+        if self.is_system() {
+            return None;
         }
         // Any other installed font: look it up among all fonts of the system.
-        if !self.is_system()
-            && let Some(font) = scanned_fonts()
-                .iter()
-                .find(|f| f.family.eq_ignore_ascii_case(family))
-            && let Ok(bytes) = std::fs::read(&font.path)
-        {
-            let mut data = FontData::from_owned(bytes);
-            data.index = font.index;
-            return data;
-        }
-        FontData::from_static(match family {
-            "Tahoma" => BUNDLED_TAHOMA,
-            "Liberation Sans" => LIBERATION_SANS,
-            "Inconsolata" => INCONSOLATA,
-            // Arial, the system font and fonts that are gone: Arial's look-alike.
-            _ => BUNDLED_ARIAL,
-        })
+        let font = scanned_fonts()
+            .iter()
+            .find(|f| f.family.eq_ignore_ascii_case(family))?;
+        let mut data = FontData::from_owned(std::fs::read(&font.path).ok()?);
+        data.index = font.index;
+        Some(data)
     }
+
+    /// This font, otherwise the system font, otherwise any installed font.
+    fn data_or_fallback(&self) -> Option<FontData> {
+        self.data()
+            .or_else(|| UiFont::system().data())
+            .or_else(|| {
+                scanned_fonts().iter().find_map(|f| {
+                    let mut data = FontData::from_owned(std::fs::read(&f.path).ok()?);
+                    data.index = f.index;
+                    Some(data)
+                })
+            })
+    }
+}
+
+/// The system's monospace font, for the console (Consolas on Windows, Menlo on macOS, the
+/// desktop's monospace font on Linux).
+fn monospace_data() -> Option<FontData> {
+    if cfg!(all(unix, not(target_os = "macos")))
+        && let Some(data) = fontconfig_file("monospace:style=Regular")
+    {
+        return Some(data);
+    }
+    let paths: &[&str] = if cfg!(windows) {
+        &[
+            "C:\\Windows\\Fonts\\consola.ttf",
+            "C:\\Windows\\Fonts\\lucon.ttf",
+            "C:\\Windows\\Fonts\\cour.ttf",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &[
+            "/System/Library/Fonts/Menlo.ttc",
+            "/System/Library/Fonts/Monaco.ttf",
+            "/System/Library/Fonts/Supplemental/Courier New.ttf",
+        ]
+    } else {
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        ]
+    };
+    paths
+        .iter()
+        .find_map(|p| std::fs::read(p).ok())
+        .map(FontData::from_owned)
 }
 
 /// An installed font family (its regular face).
@@ -528,17 +563,12 @@ fn scanned_fonts() -> &'static [SystemFont] {
     })
 }
 
-/// All fonts the settings offer: the system font, the installed fonts and the bundled ones
-/// that are not installed. `None` while the installed fonts are still being looked up.
+/// All fonts the settings offer: the system font and the installed fonts. `None` while the
+/// installed fonts are still being looked up.
 pub fn font_choices() -> Option<Vec<UiFont>> {
     let installed = system_fonts()?;
     let mut out = vec![UiFont::system()];
     let mut names: Vec<&str> = installed.iter().map(|f| f.family.as_str()).collect();
-    for b in BUNDLED {
-        if !names.iter().any(|n| n.eq_ignore_ascii_case(b)) {
-            names.push(b);
-        }
-    }
     names.sort_by_key(|n| n.to_lowercase());
     out.extend(names.into_iter().map(|n| UiFont(n.to_string())));
     Some(out)
@@ -660,7 +690,10 @@ pub fn font_preview(
         return Err(true);
     }
     *budget -= 1;
-    let preview = rasterize(&font.data(), text, size * ppp).map(|image| {
+    let preview = font
+        .data()
+        .and_then(|data| rasterize(&data, text, size * ppp))
+        .map(|image| {
         let size = egui::vec2(image.size[0] as f32, image.size[1] as f32) / ppp;
         let texture = ctx.load_texture(
             format!("font-preview-{}", font.0),
@@ -724,37 +757,26 @@ fn rasterize(data: &FontData, text: &str, em_px: f32) -> Option<egui::ColorImage
     Some(egui::ColorImage::new([w, h], pixels))
 }
 
-/// The file of fontconfig's "sans-serif" (a .ttf / .otf, not a collection).
-fn fontconfig_sans() -> Option<Vec<u8>> {
+/// The font file fontconfig picks for `pattern` (e.g. "monospace:style=Regular").
+fn fontconfig_file(pattern: &str) -> Option<FontData> {
     let out = std::process::Command::new("fc-match")
-        .args(["-f", "%{file}", "sans-serif:style=Regular"])
+        .args(["-f", "%{file}\n%{index}", pattern])
         .output()
         .ok()?;
-    let path = String::from_utf8(out.stdout).ok()?;
-    let path = path.trim();
+    let text = String::from_utf8(out.stdout).ok()?;
+    let mut lines = text.lines();
+    let path = lines.next()?.trim();
     let lower = path.to_ascii_lowercase();
-    if !(lower.ends_with(".ttf") || lower.ends_with(".otf")) {
+    if ![".ttf", ".otf", ".ttc", ".otc"].iter().any(|e| lower.ends_with(e)) {
         return None;
     }
-    std::fs::read(path).ok()
+    let mut data = FontData::from_owned(std::fs::read(path).ok()?);
+    data.index = lines.next().and_then(|i| i.trim().parse().ok()).unwrap_or(0);
+    Some(data)
 }
 
-/// Bundled fonts, see `assets/fonts/NOTICE.txt`: Inconsolata and Liberation Sans (SIL Open
-/// Font License 1.1, `OFL.txt`), Wine's Tahoma (LGPL-2.1-or-later, `LGPL-2.1.txt`).
-/// Windows always has Arial and Tahoma, so their replacements are only bundled elsewhere.
-static INCONSOLATA: &[u8] = include_bytes!("../assets/fonts/Inconsolata-Regular.ttf");
-static LIBERATION_SANS: &[u8] = include_bytes!("../assets/fonts/LiberationSans-Regular.ttf");
-#[cfg(not(windows))]
-static BUNDLED_ARIAL: &[u8] = LIBERATION_SANS;
-#[cfg(not(windows))]
-static BUNDLED_TAHOMA: &[u8] = include_bytes!("../assets/fonts/tahoma.ttf");
-#[cfg(windows)]
-static BUNDLED_ARIAL: &[u8] = INCONSOLATA;
-#[cfg(windows)]
-static BUNDLED_TAHOMA: &[u8] = INCONSOLATA;
-
-/// Installs the chosen interface font (Inconsolata for monospace text) with fallbacks for
-/// all other scripts.
+/// Installs the chosen interface font and the system's monospace font (console) with
+/// fallbacks for all other scripts. Only fonts of the system are used.
 pub fn install_fonts(ctx: &egui::Context, font: &UiFont) {
     // Fallbacks for characters the interface font does not have (symbols, CJK, Cyrillic variants,
     // emoji, ...) - player and server names use all of Unicode.
@@ -800,13 +822,14 @@ pub fn install_fonts(ctx: &egui::Context, font: &UiFont) {
     };
 
     let mut fonts = FontDefinitions::default();
-    fonts
-        .font_data
-        .insert("ui".to_owned(), crisp(font.data()).into());
-    fonts.font_data.insert(
-        "inconsolata".to_owned(),
-        crisp(FontData::from_static(INCONSOLATA)).into(),
-    );
+    let ui_font = font.data_or_fallback();
+    let monospace = monospace_data().or_else(|| ui_font.clone());
+    if let Some(data) = ui_font {
+        fonts.font_data.insert("ui".to_owned(), crisp(data).into());
+    }
+    if let Some(data) = monospace {
+        fonts.font_data.insert("mono".to_owned(), crisp(data).into());
+    }
     let first = |fonts: &mut FontDefinitions, family: FontFamily, name: &str| {
         fonts
             .families
@@ -814,10 +837,14 @@ pub fn install_fonts(ctx: &egui::Context, font: &UiFont) {
             .or_default()
             .insert(0, name.to_owned());
     };
-    first(&mut fonts, FontFamily::Proportional, "ui");
-    first(&mut fonts, FontFamily::Monospace, "inconsolata");
+    if fonts.font_data.contains_key("ui") {
+        first(&mut fonts, FontFamily::Proportional, "ui");
+    }
+    if fonts.font_data.contains_key("mono") {
+        first(&mut fonts, FontFamily::Monospace, "mono");
+    }
 
-    // Fallbacks go right after the main font (before egui's bundled fonts) in both families.
+    // Fallbacks go right after the main font in both families.
     let mut position = 1;
     for (i, path) in fallbacks.iter().enumerate() {
         let Ok(bytes) = std::fs::read(path) else {
