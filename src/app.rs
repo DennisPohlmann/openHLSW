@@ -3577,7 +3577,6 @@ impl eframe::App for OpenHlswApp {
                             .collect();
                         let opts = ListOptions {
                             game_icons: self.game_icons.as_ref(),
-                            toolbar_icons: self.toolbar_icons.as_ref(),
                             other_lists: &other_lists,
                             show_comment: self.settings.view.comment,
                             hidden: &self.settings.view.hidden_server_columns,
@@ -6846,8 +6845,6 @@ fn cell(
 
 struct ListOptions<'a> {
     game_icons: Option<&'a GameIcons>,
-    /// For the key of password-protected servers (like HLSW).
-    toolbar_icons: Option<&'a crate::toolbar_icons::ToolbarIcons>,
     other_lists: &'a [String],
     show_comment: bool,
     /// Columns switched off in the header's right-click menu (titles).
@@ -6942,12 +6939,7 @@ fn server_table(
                         Col::Address => (s.address.to_string(), 0.0),
                         Col::Name => (
                             info.map(|i| i.name.clone()).unwrap_or_default(),
-                            14.0 + spacing
-                                + if info.is_some_and(|i| i.passworded) {
-                                    16.0 + spacing
-                                } else {
-                                    0.0
-                                },
+                            14.0 + spacing + KEY_SLOT + spacing,
                         ),
                         Col::Game => (s.game_short(), 0.0),
                         Col::Map => (info.map(|i| i.map.clone()).unwrap_or_default(), 0.0),
@@ -7091,13 +7083,13 @@ fn server_table(
                                     };
                                     icons.show(ui, icon, 14.0);
                                 }
-                                // A key for servers that need a password to join, like HLSW.
-                                if let (Some(icons), true) =
-                                    (opts.toolbar_icons, info.is_some_and(|i| i.passworded))
-                                {
-                                    icons
-                                        .icon(ui, crate::toolbar_icons::ToolIcon::Rcon)
-                                        .on_hover_text(tr!("With password"));
+                                // Room for a key on every row; the key shows on servers that
+                                // need a password to join, like HLSW.
+                                let (slot, response) =
+                                    ui.allocate_exact_size(egui::vec2(KEY_SLOT, 16.0), Sense::hover());
+                                if info.is_some_and(|i| i.passworded) {
+                                    draw_key(ui.painter(), slot);
+                                    response.on_hover_text(tr!("With password"));
                                 }
                                 let mut name =
                                     RichText::new(info.map(|i| i.name.clone()).unwrap_or_default());
@@ -7630,6 +7622,37 @@ fn info_panel(
                 });
         });
     comment_changed
+}
+
+/// Width of the key column in the server list's Name cells (room for the key on every row).
+const KEY_SLOT: f32 = 20.0;
+
+/// HLSW's gold key of password-protected servers: the bow at the top right, the blade with
+/// its teeth towards the bottom left, 18 px tall like HLSW's, centred on the cell `slot`.
+fn draw_key(painter: &egui::Painter, slot: egui::Rect) {
+    let side = 18.0_f32.min(slot.width());
+    let s = side / 16.0;
+    let origin = slot.center() - egui::vec2(side, side) / 2.0;
+    let at = |x: f32, y: f32| origin + egui::vec2(x * s, y * s);
+    let outline = Color32::from_rgb(0xC4, 0x7A, 0x12);
+    let gold = Color32::from_rgb(0xF6, 0xC7, 0x3C);
+    let light = Color32::from_rgb(0xFF, 0xEC, 0x9A);
+    let blade = [at(8.6, 7.4), at(2.4, 13.6)];
+    let teeth = [[at(4.4, 11.6), at(6.2, 13.4)], [at(2.9, 13.1), at(4.3, 14.5)]];
+    // Outline first, then the gold over it.
+    painter.line_segment(blade, Stroke::new(4.4 * s, outline));
+    for t in teeth {
+        painter.line_segment(t, Stroke::new(3.4 * s, outline));
+    }
+    painter.circle_filled(at(10.8, 5.2), 4.9 * s, outline);
+    painter.line_segment(blade, Stroke::new(2.8 * s, gold));
+    for t in teeth {
+        painter.line_segment(t, Stroke::new(1.9 * s, gold));
+    }
+    painter.circle_filled(at(10.8, 5.2), 3.9 * s, gold);
+    // Shine on the bow and the hole of the key.
+    painter.circle_filled(at(9.9, 4.2), 1.7 * s, light);
+    painter.circle_filled(at(12.0, 4.0), 1.0 * s, outline);
 }
 
 /// The hatched ping strip from HLSW's info panel, with the ping history drawn on top.
