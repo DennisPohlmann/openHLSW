@@ -67,3 +67,9 @@ assets = [
     { source = "LICENSE", dest = "/usr/share/licenses/openhlsw/LICENSE", mode = "644", doc = true },
     { source = "assets/games/NOTICE.txt", dest = "/usr/share/doc/openhlsw/GAME-ICONS-NOTICE.txt", mode = "644", doc = true },
 ]
+
+# Patched copies of egui's painting crates for sharper text (RGB sub-pixel text rendering,
+# like ClearType), see vendor/README.md.
+[patch.crates-io]
+epaint = { path = "vendor/epaint" }
+egui_glow = { path = "vendor/egui_glow" }

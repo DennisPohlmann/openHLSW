@@ -564,6 +564,8 @@ pub struct Settings {
     pub text_size: TextSize,
     /// Font of the user interface.
     pub font: UiFont,
+    /// Sub-pixel ("ClearType") or gray anti-aliasing of text.
+    pub text_smoothing: crate::theme::TextSmoothing,
     /// User interface language.
     pub language: crate::i18n::Language,
     /// Look settings already updated to the current defaults (missing in old configs = 0:
@@ -708,6 +710,7 @@ impl Default for Settings {
             theme: Theme::Light,
             text_size: TextSize::default(),
             font: UiFont::default(),
+            text_smoothing: Default::default(),
             language: crate::i18n::Language::System,
             appearance: APPEARANCE,
             defaults_revision: 1,
@@ -1440,6 +1443,31 @@ impl SettingsDialog {
                 ))
                 .color(p.weak_text),
             );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(tr!("Text smoothing:"));
+                egui::ComboBox::from_id_salt("text_smoothing")
+                    .selected_text(d.text_smoothing.label())
+                    .width(160.0)
+                    .show_ui(ui, |ui| {
+                        let mut find = TypeAhead::begin(ui);
+                        for t in crate::theme::TextSmoothing::ALL {
+                            let r = ui.selectable_value(&mut d.text_smoothing, t, t.label());
+                            find.item(&r, t.label());
+                        }
+                        find.finish(ui);
+                    })
+                    .response
+                    .on_hover_text(tr!(
+                        "ClearType uses the red, green and blue stripes of each screen pixel for sharper text. Automatic: on for normal screens, off for high-resolution screens (150 % and up)."
+                    ));
+                if !crate::theme::subpixel_supported() {
+                    ui.label(
+                        RichText::new(tr!("(needs OpenGL 3.3 – gray text on this computer)"))
+                            .color(p.weak_text),
+                    );
+                }
+            });
         });
 
         group_box(ui, p, tr!("Global ID Database"), width, |ui| {

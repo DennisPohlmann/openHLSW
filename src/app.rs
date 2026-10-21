@@ -3265,6 +3265,9 @@ impl OpenHlswApp {
                 if new.font != self.settings.font {
                     theme::install_fonts(ctx, &new.font);
                 }
+                if new.text_smoothing != self.settings.text_smoothing {
+                    theme::update_text_smoothing(ctx, new.text_smoothing, &new.font);
+                }
                 if new.language != self.settings.language {
                     crate::i18n::set_language(new.language);
                 }
@@ -3318,6 +3321,7 @@ impl eframe::App for OpenHlswApp {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         theme::snap_text_sizes(ui.ctx());
+        theme::update_text_smoothing(ui.ctx(), self.settings.text_smoothing, &self.settings.font);
         self.process_events();
         self.tick(&ui.ctx().clone());
         // While minimized the window has (almost) no size: laying out the panels now would

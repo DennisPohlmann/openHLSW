@@ -133,8 +133,10 @@ Layout and menus like HLSW 1.4, skin White (default) or Black.
   parameters), Startup, Connecting (incl. Quit openHLSW), Rcon, Connections, Plugins (empty),
   Sounds, Misc (laid out like HLSW: server list, **language**, skin, then **font** – the system
   font by default or any font installed on the computer, each shown in its own look in the list
-  (Arial and Tahoma are bundled for systems without them) – and **text size** 12–16 px, 13 px by
-  default; font sizes are snapped to whole screen pixels so text stays sharp).
+  (Arial and Tahoma are bundled for systems without them) – **text size** 12–16 px, 13 px by
+  default, and **text smoothing**: ClearType-like sub-pixel text on Windows, Linux and macOS,
+  automatically on for normal screens and off for high-resolution ones; font sizes are snapped
+  to whole screen pixels so text stays sharp).
 - **Dropdowns**: typing in an open dropdown jumps to the matching entry ("de" → Deutsch);
   Enter picks it.
 - **File → Advanced**: clear the location / provider cache, reset all ping graphs.
@@ -311,6 +313,8 @@ src/
   main.rs              program start
   bin/openhlsw-cli.rs  CLI
 build.rs               icon atlas, window icon, .exe icon (Windows)
+vendor/
+  epaint, egui_glow    egui's painting crates with sub-pixel (ClearType-like) text, see vendor/README.md
 assets/                flags, game icons, program icon (openhlsw.ico + SVG sources)
 tools/fake_srcds.py    test server
 ```

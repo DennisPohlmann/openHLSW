@@ -193,11 +193,7 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     // light skin, slightly stronger anti-aliasing so dark text does not look washed out.
     v.text_options.subpixel_binning = false;
     v.text_options.font_hinting = true;
-    // Fuller, darker strokes for dark text on light ground (thin grey text looks blurry).
-    if theme == Theme::Light {
-        v.text_options.color_transfer_function =
-            egui::epaint::FontColorTransferFunction::Gamma(0.55);
-    }
+    v.text_options.color_transfer_function = text_transfer(theme == Theme::Dark);
     v.panel_fill = p.window;
     v.window_fill = p.window;
     v.window_stroke = Stroke::new(1.0, p.list_border);
@@ -546,6 +542,90 @@ pub fn font_choices() -> Option<Vec<UiFont>> {
     names.sort_by_key(|n| n.to_lowercase());
     out.extend(names.into_iter().map(|n| UiFont(n.to_string())));
     Some(out)
+}
+
+/// Text smoothing (Settings → Misc → Font): sub-pixel ("ClearType") anti-aliasing uses the
+/// red, green and blue stripes of each screen pixel, which makes small text much sharper on
+/// normal screens. It needs OpenGL 3.3 (see `vendor/README.md`); without it, text is drawn
+/// in gray.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextSmoothing {
+    /// Sub-pixel (RGB) on normal screens, gray on high-DPI screens (150 % and up, Retina),
+    /// where the pixels are too small for it to help.
+    #[default]
+    Auto,
+    /// Sub-pixel for screens with red, green, blue stripes (almost all).
+    Rgb,
+    /// Sub-pixel for screens with blue, green, red stripes.
+    Bgr,
+    /// Gray anti-aliasing.
+    Gray,
+}
+
+impl TextSmoothing {
+    pub const ALL: [TextSmoothing; 4] = [
+        TextSmoothing::Auto,
+        TextSmoothing::Rgb,
+        TextSmoothing::Bgr,
+        TextSmoothing::Gray,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TextSmoothing::Auto => tr!("Automatic"),
+            TextSmoothing::Rgb => tr!("ClearType (RGB)"),
+            TextSmoothing::Bgr => tr!("ClearType (BGR)"),
+            TextSmoothing::Gray => tr!("Grayscale"),
+        }
+    }
+
+    fn order(self, pixels_per_point: f32) -> egui::epaint::text::SubpixelOrder {
+        use egui::epaint::text::SubpixelOrder;
+        match self {
+            TextSmoothing::Auto if pixels_per_point < 1.5 => SubpixelOrder::Rgb,
+            TextSmoothing::Auto | TextSmoothing::Gray => SubpixelOrder::None,
+            TextSmoothing::Rgb => SubpixelOrder::Rgb,
+            TextSmoothing::Bgr => SubpixelOrder::Bgr,
+        }
+    }
+}
+
+/// How strongly glyph coverage is darkened. Gray anti-aliasing in the light skin needs fuller
+/// strokes (thin gray text looks blurry); sub-pixel text is sharp already and a strong curve
+/// would only make its color fringes stand out, so it gets a mild one (like ClearType's).
+fn text_transfer(dark: bool) -> egui::epaint::FontColorTransferFunction {
+    use egui::epaint::FontColorTransferFunction;
+    if egui::epaint::text::subpixel_order() != egui::epaint::text::SubpixelOrder::None {
+        FontColorTransferFunction::Gamma(0.8)
+    } else if dark {
+        FontColorTransferFunction::DARK_MODE_DEFAULT
+    } else {
+        FontColorTransferFunction::Gamma(0.55)
+    }
+}
+
+/// Can the graphics driver show sub-pixel text (known after the first frame)?
+pub fn subpixel_supported() -> bool {
+    eframe::egui_glow::SUBPIXEL_TEXT_SUPPORTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Applies the text smoothing for the current screen; installs the fonts again when it
+/// changes (e.g. the window moved to a screen with another scaling). Cheap; every frame.
+pub fn update_text_smoothing(ctx: &egui::Context, smoothing: TextSmoothing, font: &UiFont) {
+    let order = if subpixel_supported() {
+        smoothing.order(ctx.pixels_per_point())
+    } else {
+        egui::epaint::text::SubpixelOrder::None
+    };
+    if order != egui::epaint::text::subpixel_order() {
+        egui::epaint::text::set_subpixel_order(order);
+        ctx.global_style_mut(|style| {
+            style.visuals.text_options.color_transfer_function =
+                text_transfer(style.visuals.dark_mode);
+        });
+        install_fonts(ctx, font);
+    }
 }
 
 /// Font list previews: the name of a font drawn in that font.
