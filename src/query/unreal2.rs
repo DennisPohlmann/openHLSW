@@ -101,8 +101,10 @@ impl<'a> Reader<'a> {
             let raw = self.d.get(self.i..self.i + bytes)?;
             self.i += bytes;
             let units: Vec<u16> = raw
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .take_while(|&u| u != 0)
                 .collect();
             return Some(clean(&String::from_utf16_lossy(&units)));
