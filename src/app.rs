@@ -644,6 +644,19 @@ impl Server {
         });
     }
 
+    /// Key of the game icon (the chosen game's, else from the server's answer).
+    fn icon_key(&self) -> Option<&'static str> {
+        if let Some(g) = self.listed_game() {
+            return Some(g.icon);
+        }
+        let i = self.info.as_ref()?;
+        Some(if i.gamespy {
+            game_icons::icon_for_gamespy(&i.folder)
+        } else {
+            game_icons::icon_for_server(i.real_app_id(), &i.folder)
+        })
+    }
+
     /// Logs in with the typed password from now on (Test, console commands, …).
     fn use_typed_rcon_password(&mut self) {
         self.rcon_login = self.rcon_password.clone();
@@ -4433,10 +4446,11 @@ impl OpenHlswApp {
                     .and_then(|i| self.location_of(&self.servers[i]))
                     .map(|g| g.cloned());
                 let flags = self.flags.as_ref();
+                let game_icons = self.game_icons.as_ref();
                 let server = idx.map(|i| &mut self.servers[i]);
                 let graph = self.settings.view.ping_graph;
                 if list_frame_with(ui, p, p.window, |ui| {
-                    info_panel(ui, p, server, location, flags, graph)
+                    info_panel(ui, p, server, location, flags, game_icons, graph)
                 }) {
                     actions.push(Action::SaveConfig);
                 }
@@ -7071,15 +7085,8 @@ fn server_table(
                                         bg,
                                     );
                                 }
-                                if let (Some(icons), Some(g)) = (opts.game_icons, s.listed_game()) {
-                                    // Quake 3, Unreal, TeamSpeak …: the icon of the chosen game.
-                                    icons.show(ui, g.icon, 16.0);
-                                } else if let (Some(icons), Some(i)) = (opts.game_icons, info) {
-                                    let icon = if i.gamespy {
-                                        game_icons::icon_for_gamespy(&i.folder)
-                                    } else {
-                                        game_icons::icon_for_server(i.real_app_id(), &i.folder)
-                                    };
+                                // Quake 3, Unreal, TeamSpeak …: the icon of the chosen game.
+                                if let (Some(icons), Some(icon)) = (opts.game_icons, s.icon_key()) {
                                     icons.show(ui, icon, 16.0);
                                 }
                                 // Room for a key on every row; the key shows on servers that
@@ -7383,6 +7390,7 @@ fn info_panel(
     server_mut: Option<&mut Server>,
     location: Option<Option<GeoInfo>>,
     flags: Option<&Flags>,
+    game_icons: Option<&GameIcons>,
     show_graph: bool,
 ) -> bool {
     let mut comment_changed = false;
@@ -7518,7 +7526,18 @@ fn info_panel(
                                 } else {
                                     format!("{} ({}, AppID {})", i.game, i.folder, i.real_app_id())
                                 };
-                                row(ui, tr!("Game"), text(game));
+                                // The game's icon before its name, like in the server list.
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                            ui.label(RichText::new(tr!("Game")).color(p.text));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            if let (Some(icons), Some(icon)) = (game_icons, s.icon_key()) {
+                                icons.show(ui, icon, 16.0);
+                            }
+                            ui.add(Label::new(text(game)).wrap());
+                        });
+                        ui.end_row();
                                 let mut players = format!("{} / {}", i.players, i.max_players);
                                 if i.bots > 0 {
                                     players += &tr!(" ({bots} bots)", bots = i.bots);
