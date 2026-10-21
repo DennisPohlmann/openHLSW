@@ -61,6 +61,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Lisää pelaajien nimet, joiden globaali ID tunnetaan, automaattisesti globaaliin ID-tietokantaan",
  "Available Plugins": "Saatavilla olevat laajennukset",
  "Bad RCON password": "Väärä Rcon-salasana",
+ "Bad RCON password: enter the right one and click Test": "Väärä RCON-salasana: anna oikea ja napsauta Testaa",
  "Bad password": "Väärä salasana",
  "Ban ID": "Bannaa ID",
  "Ban ID Kick": "Bannaa ID ja potki",

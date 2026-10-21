@@ -92,6 +92,9 @@ struct Server {
     /// In-flight queries: info, players, rules.
     busy: [bool; 3],
     rcon_password: String,
+    /// The password the RCON connection logs in with: the typed one once Test (or a command)
+    /// used it. Typing alone never logs in (servers ban addresses after failed logins).
+    rcon_login: String,
     save_password: bool,
     rcon_status: RconStatus,
     rcon: RconHandle,
@@ -219,6 +222,7 @@ impl Server {
             rules: Vec::new(),
             busy: [false; 3],
             rcon_password: String::new(),
+            rcon_login: String::new(),
             save_password: false,
             rcon_status: RconStatus::Unknown,
             rcon: RconHandle::spawn(notifier, id),
@@ -635,9 +639,15 @@ impl Server {
         }
         self.rcon.send(RconRequest::Configure {
             address,
-            password: self.rcon_password.clone(),
+            password: self.rcon_login.clone(),
             goldsrc: self.is_goldsrc(),
         });
+    }
+
+    /// Logs in with the typed password from now on (Test, console commands, …).
+    fn use_typed_rcon_password(&mut self) {
+        self.rcon_login = self.rcon_password.clone();
+        self.configure_rcon();
     }
 
     fn is_gamespy(&self) -> bool {
@@ -790,7 +800,6 @@ enum Action {
         no_traffic: bool,
     },
     OpenAppData,
-    RconConfigure(ServerId),
     RconTest(ServerId),
     RconDisconnect(ServerId),
     SendConsole(ServerId),
@@ -1573,6 +1582,7 @@ impl OpenHlswApp {
             server.console_cache = self.settings.console_cache.max(1);
             if let Some(pw) = &saved.rcon_password {
                 server.rcon_password = pw.clone();
+                server.rcon_login = pw.clone();
                 server.save_password = true;
             }
             self.servers.push(server);
@@ -1729,7 +1739,9 @@ impl OpenHlswApp {
         }
         let Some(id) = self.selected else { return };
         let Some(s) = self.server_mut(id) else { return };
-        if s.rcon_password.is_empty()
+        // Only with a password that was used on purpose (Test, a command), never one that
+        // is still being typed.
+        if s.rcon_login.is_empty()
             || matches!(
                 s.rcon_status,
                 RconStatus::BadPassword | RconStatus::Connecting
@@ -2964,7 +2976,7 @@ impl OpenHlswApp {
                     if s.rcon_password != draft.rcon_password {
                         s.rcon_password = draft.rcon_password;
                         s.rcon_status = RconStatus::Unknown;
-                        s.configure_rcon();
+                        s.use_typed_rcon_password();
                     }
                     if let Some(address) = address
                         && address != s.address
@@ -2975,7 +2987,7 @@ impl OpenHlswApp {
                         s.challenge = None;
                         s.ping_history.clear();
                         s.state = QueryState::Unknown;
-                        s.configure_rcon();
+                        s.use_typed_rcon_password();
                     }
                 }
                 self.refresh(id, true);
@@ -2991,7 +3003,7 @@ impl OpenHlswApp {
             }
             Action::RconStatus(id) => {
                 if let Some(s) = self.server_mut(id) {
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send("status", RconTag::Console);
                 }
                 self.tab = Tab::Console;
@@ -3027,15 +3039,9 @@ impl OpenHlswApp {
                     self.editing_comment = Some((id, s.comment.clone()));
                 }
             }
-            Action::RconConfigure(id) => {
-                if let Some(s) = self.server_mut(id) {
-                    s.rcon_status = RconStatus::Unknown;
-                    s.configure_rcon();
-                }
-            }
             Action::RconTest(id) => {
-                if let Some(s) = self.server(id) {
-                    s.configure_rcon();
+                if let Some(s) = self.server_mut(id) {
+                    s.use_typed_rcon_password();
                     s.rcon.send(RconRequest::Test);
                 }
             }
@@ -3055,7 +3061,7 @@ impl OpenHlswApp {
                 self.history_pos = None;
                 self.console_input.clear();
                 if let Some(s) = self.server_mut(id) {
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send(command, RconTag::Console);
                 }
             }
@@ -3083,7 +3089,7 @@ impl OpenHlswApp {
             }
             Action::BanCommand(id, cmd) => {
                 if let Some(s) = self.server_mut(id) {
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     for c in cmd.split(';') {
                         s.rcon_send(c, RconTag::Console);
                     }
@@ -3093,7 +3099,7 @@ impl OpenHlswApp {
             Action::FetchBans(id) => {
                 // Shown in the console like in HLSW, so the raw server answer can be checked.
                 if let Some(s) = self.server_mut(id) {
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send("listid", RconTag::BanIds);
                     s.rcon_send("listip", RconTag::BanIps);
                 }
@@ -3107,7 +3113,7 @@ impl OpenHlswApp {
                     s.maps.clear();
                     s.maps_loading = true;
                     s.maps_status = tr!("Loading maps…").into();
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send("maps *", RconTag::Maps);
                     s.rcon_send("listmaps", RconTag::MapCycle);
                 }
@@ -3121,7 +3127,7 @@ impl OpenHlswApp {
                     } else {
                         ("removeid", "writeid")
                     };
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send(format!("{remove} {}", ban.ident), RconTag::Console);
                     s.rcon_send(write, RconTag::Silent);
                     self.apply(Action::FetchBans(id), ctx);
@@ -3215,7 +3221,7 @@ impl OpenHlswApp {
             Action::BansFromIdDb(id) => {
                 let ids: Vec<String> = self.iddb.banned().map(str::to_string).collect();
                 if let Some(s) = self.server_mut(id) {
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     for i in &ids {
                         s.rcon_send(format!("banid 0 {i}"), RconTag::Silent);
                     }
@@ -3239,7 +3245,7 @@ impl OpenHlswApp {
                     } else {
                         ("banid", "writeid")
                     };
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send(format!("{add} {minutes} {ident}"), RconTag::Console);
                     s.rcon_send(write, RconTag::Silent);
                     self.ban_input.clear();
@@ -3256,7 +3262,7 @@ impl OpenHlswApp {
                         s.maps_status = tr!("No RCON password set (Rcon Config tab).").into();
                         return;
                     }
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     if kick_all {
                         // Kick everybody (userids from `status`), then change the level.
                         s.pending_change = Some(map.clone());
@@ -3288,7 +3294,7 @@ impl OpenHlswApp {
                     if s.chat.len() > CHAT_MAX_LINES {
                         s.chat.remove(0);
                     }
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send(format!("say {text}"), RconTag::Silent);
                 }
                 self.play(SoundEvent::SendingMessage);
@@ -3302,7 +3308,7 @@ impl OpenHlswApp {
                 let public_ip = self.settings.public_ip.trim().parse::<IpAddr>().ok();
                 if let Some(s) = self.server_mut(id) {
                     s.log_target = Some((SocketAddr::from(([0, 0, 0, 0], port)), internet));
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon.send(RconRequest::StartLog {
                         internet,
                         port,
@@ -3314,7 +3320,7 @@ impl OpenHlswApp {
             Action::KickPlayer(id, userid) => {
                 if let Some(s) = self.server_mut(id) {
                     let cmd = s.kick_cmd(userid, tr!("Kicked by admin"));
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send(cmd, RconTag::Console);
                     s.last_status = None;
                 }
@@ -3332,7 +3338,7 @@ impl OpenHlswApp {
                 minutes,
             } => {
                 if let Some(s) = self.server_mut(id) {
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     let mut cmds = Vec::new();
                     if ip {
                         cmds.push(format!("addip {minutes} {target}"));
@@ -3421,7 +3427,7 @@ impl OpenHlswApp {
             Action::SetCvar(id, key, value) => {
                 if let Some(s) = self.server_mut(id) {
                     let cmd = format!("{key} \"{}\"", value.replace('"', "'"));
-                    s.configure_rcon();
+                    s.use_typed_rcon_password();
                     s.rcon_send(cmd, RconTag::Console);
                     s.last_rules = None; // show the new value soon
                 }
@@ -4324,13 +4330,8 @@ impl OpenHlswApp {
             }
             if view.password {
                 ui.label(tr!("Password:"));
-                ui.add(
-                    TextEdit::singleline(&mut self.join_password)
-                        .align(egui::Align2::LEFT_CENTER)
-                        .password(self.hide_join_password)
-                        .desired_width(110.0),
-                )
-                .with_edit_menu()
+                password_field(ui, &mut self.join_password, self.hide_join_password, 110.0)
+                    .with_edit_menu()
                 .on_hover_text(tr!("Server password used by Connect"));
                 ui.checkbox(&mut self.hide_join_password, tr!("Hide"));
                 toolbar_separator(ui, p);
@@ -4619,16 +4620,13 @@ impl OpenHlswApp {
                     .num_columns(2)
                     .spacing([8.0, 5.0])
                     .show(ui, |ui| {
-                        let pw = ui.add(
-                            TextEdit::singleline(&mut s.rcon_password).align(egui::Align2::LEFT_CENTER)
-                                .password(*hide)
-                                .desired_width(105.0),
-                        ).with_edit_menu();
-                        if pw.changed() {
-                            actions.push(Action::RconConfigure(id));
-                            if s.save_password {
-                                actions.push(Action::SaveConfig);
-                            }
+                        let pw = password_field(ui, &mut s.rcon_password, *hide, 105.0)
+                            .with_edit_menu();
+                        // Typing only edits the password: the server is asked with it when
+                        // Test (or Enter) is pressed, not on every key (failed RCON logins get
+                        // the address banned).
+                        if pw.changed() && s.save_password {
+                            actions.push(Action::SaveConfig);
                         }
                         if pw.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                             actions.push(Action::RconTest(id));
@@ -5336,13 +5334,10 @@ impl OpenHlswApp {
                                 let rcon = draft.rcon;
                                 let no_rcon = tr!("RCON is not supported for this game");
                                 ui.label(tr!("Rcon password:"));
-                                ui.add_enabled(
-                                    rcon,
-                                    TextEdit::singleline(&mut draft.rcon_password)
-                                        .align(egui::Align2::LEFT_CENTER)
-                                        .password(true)
-                                        .desired_width(260.0),
-                                )
+                                ui.add_enabled_ui(rcon, |ui| {
+                                    password_field(ui, &mut draft.rcon_password, true, 260.0)
+                                })
+                                .inner
                                 .on_disabled_hover_text(no_rcon)
                                 .with_edit_menu();
                                 ui.end_row();
@@ -6327,11 +6322,11 @@ impl OpenHlswApp {
                         ui.label(
                             RichText::new(tr!("Password:")).color(ui.visuals().weak_text_color()),
                         );
-                        ui.add(
-                            TextEdit::singleline(&mut self.join_password)
-                                .align(egui::Align2::LEFT_CENTER)
-                                .password(self.hide_join_password)
-                                .desired_width(160.0),
+                        password_field(
+                            ui,
+                            &mut self.join_password,
+                            self.hide_join_password,
+                            160.0,
                         );
                         ui.end_row();
                     });
@@ -9546,6 +9541,38 @@ fn star(ui: &mut Ui, size: f32) -> egui::Response {
         .collect();
     ui.painter().add(egui::Shape::closed_line(outline, stroke));
     response
+}
+
+/// Password field: hidden passwords show round dots (●) with a little room between them,
+/// like Windows' password boxes, instead of egui's small bullets.
+fn password_field(ui: &mut Ui, text: &mut String, hide: bool, width: f32) -> egui::Response {
+    let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
+        let font = TextStyle::Body.resolve(ui.style());
+        let line_height = ui.fonts_mut(|f| f.row_height(&font));
+        let dots = "\u{25CF}".repeat(buf.as_str().chars().count());
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            &dots,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::new((font.size * 0.62).round(), font.family),
+                color: ui.visuals().text_color(),
+                extra_letter_spacing: 1.5,
+                line_height: Some(line_height),
+                valign: Align::Center,
+                ..Default::default()
+            },
+        );
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    let mut edit = TextEdit::singleline(text)
+        .align(egui::Align2::LEFT_CENTER)
+        .password(hide)
+        .desired_width(width);
+    if hide {
+        edit = edit.layouter(&mut layouter);
+    }
+    ui.add(edit)
 }
 
 /// Right-click menu for text fields: Cut / Copy / Paste / Select All

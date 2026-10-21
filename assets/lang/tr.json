@@ -61,6 +61,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Bilinen genel kimliğe sahip oyuncu adlarını genel kimlik veritabanına otomatik ekle",
  "Available Plugins": "Kullanılabilir eklentiler",
  "Bad RCON password": "Yanlış Rcon şifresi",
+ "Bad RCON password: enter the right one and click Test": "Yanlış RCON şifresi: doğrusunu girip Test'e tıklayın",
  "Bad password": "Yanlış şifre",
  "Ban ID": "ID banla",
  "Ban ID Kick": "ID banla ve at",

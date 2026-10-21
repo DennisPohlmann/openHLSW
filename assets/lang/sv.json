@@ -59,6 +59,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Lägg automatiskt till spelarnamn med känt globalt ID i den globala ID-databasen",
  "Available Plugins": "Tillgängliga insticksprogram",
  "Bad RCON password": "Fel Rcon-lösenord",
+ "Bad RCON password: enter the right one and click Test": "Fel RCON-lösenord: ange rätt lösenord och klicka på Testa",
  "Bad password": "Fel lösenord",
  "Ban ID": "Banna ID",
  "Ban ID Kick": "Banna ID & kicka",

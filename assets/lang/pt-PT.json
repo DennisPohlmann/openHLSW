@@ -59,6 +59,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Adicionar automaticamente nomes de jogadores com ID global conhecido à base de dados de IDs global",
  "Available Plugins": "Plugins disponíveis",
  "Bad RCON password": "Palavra-passe Rcon errada",
+ "Bad RCON password: enter the right one and click Test": "Palavra-passe RCON errada: introduza a correta e clique em Testar",
  "Bad password": "Palavra-passe errada",
  "Ban ID": "Banir ID",
  "Ban ID Kick": "Banir ID e expulsar",

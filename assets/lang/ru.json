@@ -61,6 +61,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Автоматически добавлять имена игроков с известным глобальным ID в глобальную базу ID",
  "Available Plugins": "Доступные плагины",
  "Bad RCON password": "Неверный пароль Rcon",
+ "Bad RCON password: enter the right one and click Test": "Неверный пароль RCON: введите правильный и нажмите «Проверить»",
  "Bad password": "Неверный пароль",
  "Ban ID": "Бан по ID",
  "Ban ID Kick": "Бан по ID и выгнать",

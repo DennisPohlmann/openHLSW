@@ -58,6 +58,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Tilføj automatisk spillernavne med kendt globalt ID til den globale ID-database",
  "Available Plugins": "Tilgængelige plugins",
  "Bad RCON password": "Forkert Rcon-adgangskode",
+ "Bad RCON password: enter the right one and click Test": "Forkert RCON-adgangskode: indtast den rigtige og klik på Test",
  "Bad password": "Forkert adgangskode",
  "Ban ID": "Ban id",
  "Ban ID Kick": "Ban id & kick",

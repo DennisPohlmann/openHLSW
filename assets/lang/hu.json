@@ -61,6 +61,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Ismert globális azonosítójú játékosnevek automatikus hozzáadása a globális azonosító-adatbázishoz",
  "Available Plugins": "Elérhető bővítmények",
  "Bad RCON password": "Hibás Rcon-jelszó",
+ "Bad RCON password: enter the right one and click Test": "Hibás RCON-jelszó: adja meg a helyeset, és kattintson a Teszt gombra",
  "Bad password": "Hibás jelszó",
  "Ban ID": "ID kitiltása",
  "Ban ID Kick": "ID kitiltása és kirúgás",

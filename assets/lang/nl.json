@@ -57,6 +57,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Spelersnamen met bekende globale ID automatisch aan de globale ID-database toevoegen",
  "Available Plugins": "Beschikbare plug-ins",
  "Bad RCON password": "Verkeerd Rcon-wachtwoord",
+ "Bad RCON password: enter the right one and click Test": "Onjuist RCON-wachtwoord: voer het juiste in en klik op Testen",
  "Bad password": "Verkeerd wachtwoord",
  "Ban ID": "ID verbannen",
  "Ban ID Kick": "ID verbannen & kicken",

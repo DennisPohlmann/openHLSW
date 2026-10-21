@@ -61,6 +61,7 @@
  "Automatically add player name with known Global ID to Global ID Database": "Automaticky přidávat jména hráčů se známým globálním ID do globální databáze ID",
  "Available Plugins": "Dostupné zásuvné moduly",
  "Bad RCON password": "Špatné heslo Rcon",
+ "Bad RCON password: enter the right one and click Test": "Špatné heslo RCON: zadejte správné a klikněte na Test",
  "Bad password": "Špatné heslo",
  "Ban ID": "Zabanovat ID",
  "Ban ID Kick": "Zabanovat ID a vyhodit",

@@ -390,6 +390,7 @@ impl RconHandle {
                     target: None,
                     goldsrc: false,
                     conn: None,
+                    rejected: false,
                 }
                 .run(rx)
             })
@@ -415,6 +416,9 @@ struct RconWorker {
     target: Option<(ServerAddress, String)>,
     goldsrc: bool,
     conn: Option<Conn>,
+    /// The server refused the password: no more automatic logins with it (servers ban
+    /// addresses after a few failed RCON logins) until Test is clicked or the password changes.
+    rejected: bool,
 }
 
 enum Conn {
@@ -446,6 +450,9 @@ impl RconWorker {
                 } => {
                     let new = Some((address, password));
                     if new != self.target || goldsrc != self.goldsrc {
+                        if new != self.target {
+                            self.rejected = false;
+                        }
                         self.conn = None;
                         self.target = new;
                         self.goldsrc = goldsrc;
@@ -457,6 +464,7 @@ impl RconWorker {
                 }
                 RconRequest::Test => {
                     self.conn = None; // close the old connection before logging in again
+                    self.rejected = false;
                     self.connect();
                 }
                 RconRequest::Exec { command, tag } => {
@@ -535,6 +543,7 @@ impl RconWorker {
                 true
             }
             Err(RconError::BadPassword) => {
+                self.rejected = true;
                 self.emit(RconEvent::Status(RconStatus::BadPassword));
                 self.emit(RconEvent::Error(tr!("Bad RCON password").into()));
                 false
@@ -549,6 +558,13 @@ impl RconWorker {
 
     /// Runs a command, reconnecting once if the connection was dropped.
     fn exec(&mut self, command: &str) -> Option<String> {
+        if self.conn.is_none() && self.rejected {
+            // Not again with a password the server refused (it would ban us).
+            self.emit(RconEvent::Error(
+                tr!("Bad RCON password: enter the right one and click Test").into(),
+            ));
+            return None;
+        }
         if self.conn.is_none() && !self.connect() {
             return None;
         }
