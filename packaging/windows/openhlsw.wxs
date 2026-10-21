@@ -87,6 +87,11 @@
     <!-- Setup wizard: welcome, license, destination folder, progress, finished. -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <!-- Pictures in the style of the "About openHLSW" banner, drawn by
+         packaging/windows/render-installer-images.py: dialog.bmp on the Welcome and
+         Finished pages, banner.bmp at the top of the other pages. -->
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.RepoDir)\packaging\windows\dialog.bmp" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.RepoDir)\packaging\windows\banner.bmp" />
 
     <!-- "Launch openHLSW" check box on the last page (ticked by default). -->
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch openHLSW" />
