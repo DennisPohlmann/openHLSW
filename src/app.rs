@@ -35,6 +35,7 @@ use crate::flags::Flags;
 use crate::game_icons::{self, GameIcons};
 use crate::typeahead::TypeAhead;
 use crate::games;
+use openhlsw::query::Protocol;
 use crate::geo::{self, GeoInfo};
 use crate::iddb::{self, IdDb, IdEntry, IdKind};
 use crate::native_window::NativeWindow;
@@ -71,6 +72,11 @@ enum QueryState {
 struct Server {
     id: ServerId,
     address: ServerAddress,
+    /// Game chosen in the IP/Port list when the server was added (decides how it is
+    /// queried); `None` = detected automatically (A2S, or GameSpy 2 with a query port).
+    game: Option<&'static games::Game>,
+    /// Protocol found by auto detection (no game chosen): A2S, GameSpy 2 or GameSpy 1.
+    detected: Option<Protocol>,
     comment: String,
     /// Extra start parameters for Connect (Server Properties).
     params: String,
@@ -200,6 +206,8 @@ impl Server {
         Self {
             id,
             address,
+            game: None,
+            detected: None,
             comment: String::new(),
             params: String::new(),
             info: None,
@@ -250,9 +258,31 @@ impl Server {
         }
     }
 
-    /// Source and Half-Life 1 servers have RCON; GameSpy servers (ip:port:queryport) not.
+    /// How the server is queried: the protocol of the chosen game, otherwise GameSpy 2 for
+    /// `ip:port:queryport` and Valve A2S for everything else.
+    fn protocol(&self) -> Protocol {
+        if let Some(g) = self.game {
+            return g.protocol;
+        }
+        if let Some(p) = self.detected {
+            return p;
+        }
+        if self.address.query_port.is_some() {
+            Protocol::GameSpy2
+        } else {
+            Protocol::A2s
+        }
+    }
+
+    /// Game of the list for the icon and name of servers that do not speak A2S / GameSpy 2.
+    fn listed_game(&self) -> Option<&'static games::Game> {
+        self.game
+            .filter(|g| !matches!(g.protocol, Protocol::A2s | Protocol::GameSpy2))
+    }
+
+    /// Source and Half-Life 1 servers have RCON; the other protocols not.
     fn supports_rcon(&self) -> bool {
-        self.address.query_port.is_none() && !self.info.as_ref().is_some_and(|i| i.gamespy)
+        self.protocol() == Protocol::A2s && !self.info.as_ref().is_some_and(|i| i.gamespy)
     }
 
     fn is_offline(&self) -> bool {
@@ -300,6 +330,9 @@ impl Server {
 
     /// "HL2 - CS:S" style short game name.
     fn game_short(&self) -> String {
+        if let Some(g) = self.listed_game() {
+            return g.name.to_string();
+        }
         let Some(i) = &self.info else {
             return String::new();
         };
@@ -594,8 +627,14 @@ impl Server {
     }
 
     fn configure_rcon(&self) {
+        // RCON goes to the game port; a query port in the address marks a server without
+        // RCON (GameSpy), unless the server speaks Valve A2S (ARK, Squad … query port).
+        let mut address = self.address.clone();
+        if self.supports_rcon() {
+            address.query_port = None;
+        }
         self.rcon.send(RconRequest::Configure {
-            address: self.address.clone(),
+            address,
             password: self.rcon_password.clone(),
             goldsrc: self.is_goldsrc(),
         });
@@ -966,16 +1005,28 @@ type AddGame = Option<&'static games::Game>;
 /// Hint of the address field for the chosen game.
 fn add_game_hint(game: AddGame) -> String {
     match game {
-        Some(g) if g.protocol == games::Protocol::GameSpy2 && g.default_query_port > 0 => tr!(
+        Some(g) if g.default_query_port > 0 => tr!(
             "ip:gameport (query port {port}) or ip:gameport:queryport, Enter to add",
             port = g.default_query_port
         ),
-        Some(g) if g.protocol == games::Protocol::GameSpy2 => {
-            tr!("ip:gameport:queryport, e.g. 1.2.3.4:23459:34567 (Deer Hunter 2005), Enter to add")
-                .into()
-        }
+        Some(g) if g.default_port > 0 => tr!(
+            "host or host:port (port {port}), Enter to add",
+            port = g.default_port
+        ),
         _ => tr!("host:port or steam://connect/… and press Enter to add").into(),
     }
+}
+
+/// Whether the address input names a port (`host:port`, `[v6]:port`, `host:port:query`).
+fn has_port(input: &str) -> bool {
+    let s = input.trim().trim_end_matches('/');
+    let s = s
+        .strip_prefix("steam://connect/")
+        .unwrap_or(s);
+    if let Some(rest) = s.strip_prefix('[') {
+        return rest.split_once(']').is_some_and(|(_, t)| t.starts_with(':'));
+    }
+    matches!(s.matches(':').count(), 1 | 2)
 }
 
 /// Game of the list that matches a detected server (shown when it is selected).
@@ -1211,6 +1262,8 @@ struct ServerPropsDraft {
     params: String,
     rcon_password: String,
     save_password: bool,
+    /// The server's protocol has RCON (Valve A2S servers).
+    rcon: bool,
 }
 
 struct Traffic {
@@ -1507,6 +1560,7 @@ impl OpenHlswApp {
             }
             let id = self.alloc_id();
             let mut server = Server::new(id, address, &self.notifier);
+            server.game = saved.game.as_deref().and_then(games::by_key);
             server.comment = saved.comment.clone();
             server.params = saved.params.clone();
             server.last_connected = saved.last_connected.clone();
@@ -1530,6 +1584,7 @@ impl OpenHlswApp {
     fn saved_server(s: &Server) -> SavedServer {
         SavedServer {
             address: s.address.to_string(),
+            game: s.game.map(|g| g.key.to_string()),
             rcon_password: s.save_password.then(|| s.rcon_password.clone()),
             comment: s.comment.clone(),
             params: s.params.clone(),
@@ -1638,7 +1693,18 @@ impl OpenHlswApp {
             if slot == 2 {
                 s.last_rules = Some(Instant::now());
             }
-            worker::spawn_query(&notifier, s.id, s.address.clone(), kind, s.challenge);
+            worker::spawn_query(
+                &notifier,
+                worker::QueryTarget {
+                    id: s.id,
+                    address: s.address.clone(),
+                    protocol: s.protocol(),
+                    game: s.game.map_or("", |g| g.key),
+                    detect: s.game.is_none() && s.detected.is_none(),
+                },
+                kind,
+                s.challenge,
+            );
         }
     }
 
@@ -1874,7 +1940,11 @@ impl OpenHlswApp {
 
     fn connect(&mut self, id: ServerId, ctx: &egui::Context) {
         let Some(s) = self.server(id) else { return };
-        if s.address.query_port.is_some() {
+        if let Some(game) = s.listed_game() {
+            self.connect_listed(id, game, ctx);
+            return;
+        }
+        if s.protocol() != Protocol::A2s {
             // GameSpy games have no connect URL: start the game, join from its server list.
             let game = s.info.as_ref().map(|i| i.game.clone()).unwrap_or_default();
             let addr = s.address.game_address();
@@ -1911,7 +1981,7 @@ impl OpenHlswApp {
             };
             return;
         }
-        let addr = s.address.to_string();
+        let addr = s.address.game_address();
         let (host, port) = (s.address.host.clone(), s.address.port.to_string());
         let app_id = s.info.as_ref().map(|i| i.real_app_id());
         let password = self.join_password.trim().to_string();
@@ -1953,6 +2023,11 @@ impl OpenHlswApp {
             return;
         }
         self.status_message = tr!("Connecting to {addr}", addr = addr);
+        self.connected(id, &addr, &host, &port, ctx);
+    }
+
+    /// After starting the game: connect log, "Execute applications", "On Connection".
+    fn connected(&mut self, id: ServerId, addr: &str, host: &str, port: &str, ctx: &egui::Context) {
         let now = chrono::Local::now().format("%d.%m.%Y %H:%M:%S").to_string();
         if let Some(s) = self.server_mut(id) {
             s.last_connected = Some(now.clone());
@@ -1972,9 +2047,9 @@ impl OpenHlswApp {
         {
             let command = app
                 .command
-                .replace("%addr%", &addr)
-                .replace("%ip%", &host)
-                .replace("%port%", &port);
+                .replace("%addr%", addr)
+                .replace("%ip%", host)
+                .replace("%port%", port);
             if let Err(e) = run_shell(&command) {
                 self.status_message = tr!("Could not run {command}: {e}", command = command, e = e);
             }
@@ -1988,6 +2063,114 @@ impl OpenHlswApp {
             }
             OnConnect::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
+    }
+
+    /// Connect for the games of the list that do not speak A2S / GameSpy 2: voice servers
+    /// open their client by URL, games start from "My Games" with the server address.
+    fn connect_listed(&mut self, id: ServerId, game: &'static games::Game, ctx: &egui::Context) {
+        let Some(s) = self.server(id) else { return };
+        let host = s.address.host.clone();
+        let port = s
+            .info
+            .as_ref()
+            .and_then(|i| i.game_port)
+            .unwrap_or(s.address.port);
+        let addr = if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        let password = self.join_password.trim().to_string();
+        let nick = self.settings.player_name.trim().to_string();
+        let server_name = s.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
+
+        let voice_url = match game.protocol {
+            Protocol::TeamSpeak3 => {
+                let mut url = format!("ts3server://{host}?port={port}");
+                if !nick.is_empty() {
+                    url += &format!("&nickname={}", url_encode(&nick));
+                }
+                if !password.is_empty() {
+                    url += &format!("&password={}", url_encode(&password));
+                }
+                Some(url)
+            }
+            Protocol::TeamSpeak2 => {
+                let mut query = Vec::new();
+                if !nick.is_empty() {
+                    query.push(format!("nickname={}", url_encode(&nick)));
+                }
+                if !password.is_empty() {
+                    query.push(format!("password={}", url_encode(&password)));
+                }
+                Some(format!("teamspeak://{addr}/?{}", query.join("?")))
+            }
+            Protocol::Ventrilo => Some(format!(
+                "ventrilo://{addr}/servername={}",
+                url_encode(&server_name)
+            )),
+            Protocol::Mumble => Some(if nick.is_empty() {
+                format!("mumble://{addr}/?version=1.2.0")
+            } else {
+                format!("mumble://{}@{addr}/?version=1.2.0", url_encode(&nick))
+            }),
+            Protocol::Samp => Some(format!("samp://{addr}")),
+            Protocol::Cfx if game.key == "RedM" => Some(format!("redm://connect/{addr}")),
+            Protocol::Cfx => Some(format!("fivem://connect/{addr}")),
+            _ => None,
+        };
+        if let Some(url) = voice_url {
+            if let Err(e) = open_url(&url) {
+                self.status_message = tr!("Could not start the game: {e}", e = e);
+                return;
+            }
+            self.status_message = tr!("Connecting to {addr}", addr = addr);
+            self.connected(id, &addr, &host, &port.to_string(), ctx);
+            return;
+        }
+
+        let exe = self
+            .settings
+            .game_paths
+            .get(game.name)
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+        let Some(exe) = exe else {
+            self.status_message = tr!(
+                "Set the path of {game} in Settings → My Games to start it (server: {addr})",
+                game = game.name,
+                addr = addr
+            );
+            return;
+        };
+        let mut params = split_args(
+            self.settings
+                .game_params
+                .get(game.name)
+                .map_or("", |p| p.as_str()),
+        );
+        let join = connect_args(game, &addr, &password, &nick);
+        let joins = !join.is_empty();
+        params.extend(join);
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(&params);
+        if let Some(dir) = std::path::Path::new(&exe).parent() {
+            cmd.current_dir(dir);
+        }
+        if let Err(e) = cmd.spawn() {
+            self.status_message = tr!("Could not start {exe}: {e}", exe = exe, e = e);
+            return;
+        }
+        self.status_message = if joins {
+            tr!("Connecting to {addr}", addr = addr)
+        } else {
+            tr!(
+                "Started {game} – join {addr} in the game",
+                game = game.name,
+                addr = addr
+            )
+        };
+        self.connected(id, &addr, &host, &port.to_string(), ctx);
     }
 
     /// Start parameters for Connect: the game's (My Games), the player name, the server's.
@@ -2079,11 +2262,18 @@ impl OpenHlswApp {
         let mut went_offline = false;
         while let Ok(event) = self.events.try_recv() {
             match event {
-                Event::Info { id, result } => {
+                Event::Info {
+                    id,
+                    result,
+                    detected,
+                } => {
                     let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
                         continue;
                     };
                     s.busy[0] = false;
+                    if detected.is_some() {
+                        s.detected = detected;
+                    }
                     match result {
                         Ok((info, meta, addr)) => {
                             let ping = meta.rtt.as_millis() as u32;
@@ -2431,8 +2621,12 @@ impl OpenHlswApp {
         };
         match action {
             Action::Select(id) => {
-                if let Some(info) = self.server(id).and_then(|s| s.info.as_ref()) {
-                    self.add_game = add_game_of(info);
+                if let Some(s) = self.server(id) {
+                    if let Some(g) = s.game {
+                        self.add_game = Some(g);
+                    } else if let Some(info) = &s.info {
+                        self.add_game = add_game_of(info);
+                    }
                 }
                 if self.selected != Some(id) {
                     self.selected = Some(id);
@@ -2455,29 +2649,15 @@ impl OpenHlswApp {
                     self.dialog = Some(Dialog::Message(tr!("Add").into(), text));
                     return;
                 };
-                let gamespy = self
-                    .add_game
-                    .is_some_and(|g| g.protocol == games::Protocol::GameSpy2);
-                if gamespy && address.query_port.is_none() {
-                    // Default query port of the game (e.g. 2303 for ArmA), if HLSW knows one.
-                    if let Some(port) = self
-                        .add_game
-                        .map(|g| g.default_query_port)
-                        .filter(|&p| p > 0)
-                    {
-                        address.query_port = Some(port);
+                if let Some(g) = self.add_game {
+                    // Without a port in the input the game's usual port is meant.
+                    if g.default_port > 0 && !has_port(&input) {
+                        address.port = g.default_port;
                     }
-                }
-                if gamespy && address.query_port.is_none() {
-                    // GameSpy 2 answers on a separate query port.
-                    let text = tr!(
-                        "GameSpy 2 servers need the query port: ip:gameport:queryport (e.g. {host}:{port}:34567)",
-                        host = address.host,
-                        port = address.port
-                    );
-                    self.status_message = text.clone();
-                    self.dialog = Some(Dialog::Message(tr!("Add").into(), text));
-                    return;
+                    // Query port of the game (ArmA 2303, ARK game port + 19238 …).
+                    if address.query_port.is_none() {
+                        address.query_port = g.query_port(address.port);
+                    }
                 }
                 // Each server list has its own servers: the same server can be in several lists.
                 if let Some(existing) = self.servers.iter().find(|s| s.address == address) {
@@ -2490,6 +2670,11 @@ impl OpenHlswApp {
                     self.status_message = tr!("Added {address}", address = address);
                     let mut server = Server::new(id, address, &self.notifier);
                     server.console_cache = self.settings.console_cache.max(1);
+                    // The chosen game decides how the server is queried; A2S and GameSpy
+                    // servers without a game are detected.
+                    server.game = self
+                        .add_game
+                        .filter(|g| g.protocol != Protocol::A2s || g.port_diff != 0);
                     self.servers.push(server);
                     self.apply(Action::Select(id), ctx);
                     self.save_config();
@@ -3535,6 +3720,7 @@ impl OpenHlswApp {
                 params: s.map(|s| s.params.clone()).unwrap_or_default(),
                 rcon_password: s.map(|s| s.rcon_password.clone()).unwrap_or_default(),
                 save_password: s.is_some_and(|s| s.save_password),
+                rcon: s.is_none_or(|s| s.supports_rcon()),
             },
         )
     }
@@ -4040,17 +4226,12 @@ impl OpenHlswApp {
                             }
                             let selected = add_game.is_some_and(|a| std::ptr::eq(a, g));
                             let r = ui
-                                .add_enabled(
-                                    g.supported(),
-                                    egui::Button::selectable(selected, g.name),
-                                )
-                                .on_disabled_hover_text(tr!(
-                                    "Protocol {protocol} is not supported yet",
-                                    protocol = g.hlsw_protocol
+                                .add(egui::Button::selectable(selected, g.name))
+                                .on_hover_text(tr!(
+                                    "Server query: {protocol}",
+                                    protocol = g.protocol.name()
                                 ));
-                            if g.supported() {
-                                find.item(&r, g.name);
-                            }
+                            find.item(&r, g.name);
                             if r.clicked() {
                                 *add_game = Some(g);
                                 ui.close();
@@ -5145,8 +5326,7 @@ impl OpenHlswApp {
                                 )
                                 .with_edit_menu();
                                 ui.end_row();
-                                let rcon = ServerAddress::parse(&draft.address)
-                                    .is_none_or(|a| a.query_port.is_none());
+                                let rcon = draft.rcon;
                                 let no_rcon = tr!("RCON is not supported for this game");
                                 ui.label(tr!("Rcon password:"));
                                 ui.add_enabled(
@@ -6885,7 +7065,10 @@ fn server_table(
                                         bg,
                                     );
                                 }
-                                if let (Some(icons), Some(i)) = (opts.game_icons, info) {
+                                if let (Some(icons), Some(g)) = (opts.game_icons, s.listed_game()) {
+                                    // Quake 3, Unreal, TeamSpeak …: the icon of the chosen game.
+                                    icons.show(ui, g.icon, 14.0);
+                                } else if let (Some(icons), Some(i)) = (opts.game_icons, info) {
                                     let icon = if i.gamespy {
                                         game_icons::icon_for_gamespy(&i.folder)
                                     } else {
@@ -7080,6 +7263,7 @@ fn props_dialog(s: &Server) -> Dialog {
             params: s.params.clone(),
             rcon_password: s.rcon_password.clone(),
             save_password: s.save_password,
+            rcon: s.supports_rcon(),
         },
     )
 }
@@ -7286,16 +7470,20 @@ fn info_panel(
                         None => {}
                     }
                     if let Some(i) = &s.info {
-                        row(
-                            ui,
-                            tr!("Game"),
-                            text(format!(
-                                "{} ({}, AppID {})",
-                                i.game,
-                                i.folder,
-                                i.real_app_id()
-                            )),
-                        );
+                        let game = if let Some(g) = s.listed_game() {
+                            // "Unreal Tournament 2004 (Unreal 2, xDeathMatch)"
+                            let detail = [g.protocol.name(), i.game.as_str()]
+                                .into_iter()
+                                .filter(|t| !t.is_empty() && *t != g.name)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("{} ({detail})", g.name)
+                        } else if i.gamespy {
+                            format!("{} ({})", i.game, i.folder)
+                        } else {
+                            format!("{} ({}, AppID {})", i.game, i.folder, i.real_app_id())
+                        };
+                        row(ui, tr!("Game"), text(game));
                         let mut players = format!("{} / {}", i.players, i.max_players);
                         if i.bots > 0 {
                             players += &tr!(" ({bots} bots)", bots = i.bots);
@@ -8997,14 +9185,84 @@ fn format_rate(bytes_per_sec: u64) -> String {
     }
 }
 
+/// Command line that makes a game of the list join `addr` directly (empty: the game has
+/// no such option, the player joins from the game's server browser).
+fn connect_args(game: &games::Game, addr: &str, password: &str, nick: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |a: &str| out.push(a.to_string());
+    match game.key {
+        // Unreal engine: the address is the map URL, options follow with '?'.
+        "UT" | "UT2003" | "UT2004" | "UT3" | "KF" | "DVS" | "Pariah" | "LOTD" | "ROO"
+        | "Postal2" | "Rune" | "SWAT4" | "SWAT4X" | "TribesV" | "AAO" => {
+            let mut url = addr.to_string();
+            if !nick.is_empty() {
+                url += &format!("?Name={nick}");
+            }
+            if !password.is_empty() {
+                url += &format!("?Password={password}");
+            }
+            push(&url);
+        }
+        "BF1942" | "BFV" => {
+            push("+restart");
+            push("1");
+            push("+joinServer");
+            push(addr);
+            if !password.is_empty() {
+                push("+password");
+                push(password);
+            }
+        }
+        "Tribes2" => {
+            push("-online");
+            push("-connect");
+            push(addr);
+        }
+        "OpenTTD" => {
+            push("-n");
+            push(addr);
+        }
+        "Teeworlds" => push(&format!("connect {addr}")),
+        _ => match game.protocol {
+            Protocol::Quake3 | Protocol::Quake | Protocol::Doom3 | Protocol::MoHAA => {
+                if !nick.is_empty() {
+                    push("+name");
+                    push(nick);
+                }
+                if !password.is_empty() {
+                    push("+password");
+                    push(password);
+                }
+                push("+connect");
+                push(addr);
+            }
+            _ => {}
+        },
+    }
+    out
+}
+
+/// Percent-encoding for URL query values.
+fn url_encode(v: &str) -> String {
+    v.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                char::from(b).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 fn open_url(url: &str) -> std::io::Result<()> {
     use std::process::Command;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        Command::new("cmd")
-            .args(["/C", "start", "", url])
+        // Not through cmd: '&' in URLs (ts3server://…&nickname=…) would split the command.
+        Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()?;
     }

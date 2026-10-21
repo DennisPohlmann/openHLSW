@@ -3,7 +3,7 @@
 //! Results come back as [`Event`]s over a channel; every send also wakes the UI.
 
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream, UdpSocket};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -13,6 +13,7 @@ use eframe::egui;
 use openhlsw::a2s::{self, Player, QueryMeta, Rule, ServerInfo};
 use openhlsw::address::ServerAddress;
 use openhlsw::gamespy2;
+use openhlsw::query::{self, Protocol};
 use openhlsw::rcon::{GoldSrcRcon, RconClient, RconError};
 
 pub type ServerId = u64;
@@ -25,6 +26,8 @@ pub enum Event {
     Info {
         id: ServerId,
         result: Result<(Box<ServerInfo>, QueryMeta, SocketAddr), String>,
+        /// Protocol found by auto detection (servers added without a game).
+        detected: Option<Protocol>,
     },
     Players {
         id: ServerId,
@@ -119,23 +122,53 @@ pub enum QueryKind {
     Rules,
 }
 
-/// Runs one A2S query on a short-lived thread. `challenge` is the last challenge the
+/// The server a query goes to and how it is asked.
+pub struct QueryTarget {
+    pub id: ServerId,
+    pub address: ServerAddress,
+    pub protocol: Protocol,
+    /// HLSW key of the chosen game ("" = none); picks the usual query port.
+    pub game: &'static str,
+    /// No game chosen and the protocol not known yet: Valve A2S, GameSpy 2 and GameSpy 1
+    /// are tried in turn.
+    pub detect: bool,
+}
+
+/// Time for the other protocols: they may try several query ports.
+const OTHER_TIMEOUT: Duration = Duration::from_millis(2500);
+
+/// Runs one query on a short-lived thread. `challenge` is the last A2S challenge the
 /// server accepted; reusing it saves a round trip (srcds rate-limits queries per IP).
 pub fn spawn_query(
     notifier: &Notifier,
-    id: ServerId,
-    address: ServerAddress,
+    target: QueryTarget,
     kind: QueryKind,
     challenge: Option<[u8; 4]>,
 ) {
     let n = notifier.clone();
+    let QueryTarget {
+        id,
+        address,
+        protocol,
+        game,
+        detect,
+    } = target;
     thread::spawn(move || {
+        if detect && matches!(kind, QueryKind::Info) {
+            n.send(detect_protocol(id, &address, challenge));
+            return;
+        }
+        if !matches!(protocol, Protocol::A2s | Protocol::GameSpy2) {
+            n.send(other_protocol(id, &address, protocol, game, kind));
+            return;
+        }
         let addr = address.query_address().map_err(|e| format!("DNS: {e}"));
         // ip:port:queryport servers speak GameSpy 2, everything else Valve A2S.
-        let gamespy = address.query_port.is_some();
+        let gamespy = protocol == Protocol::GameSpy2;
         let event = match kind {
             QueryKind::Info => Event::Info {
                 id,
+                detected: None,
                 result: addr.and_then(|a| {
                     let r = if gamespy {
                         gamespy2::query_info(a, QUERY_TIMEOUT)
@@ -171,6 +204,102 @@ pub fn spawn_query(
         };
         n.send(event);
     });
+}
+
+/// Auto detection for servers added without a game: Valve A2S, GameSpy 2 (on the query
+/// port, or the game port) and GameSpy 1 (game port + 1, + 10, the game port). With a query
+/// port in the address GameSpy 2 goes first.
+fn detect_protocol(id: ServerId, address: &ServerAddress, challenge: Option<[u8; 4]>) -> Event {
+    let addr = match address.query_address() {
+        Ok(a) => a,
+        Err(e) => {
+            return Event::Info {
+                id,
+                result: Err(format!("DNS: {e}")),
+                detected: None,
+            };
+        }
+    };
+    let order = if address.query_port.is_some() {
+        [Protocol::GameSpy2, Protocol::A2s, Protocol::GameSpy1]
+    } else {
+        [Protocol::A2s, Protocol::GameSpy2, Protocol::GameSpy1]
+    };
+    let mut last = String::from("Timeout");
+    for protocol in order {
+        let result = match protocol {
+            Protocol::A2s => a2s::query_info_with(addr, QUERY_TIMEOUT, challenge)
+                .map(|(info, meta)| (Box::new(info), meta, addr))
+                .map_err(|e| e.to_string()),
+            Protocol::GameSpy2 => gamespy2::query_info(addr, QUERY_TIMEOUT)
+                .map(|(info, meta)| (Box::new(info), meta, addr))
+                .map_err(|e| e.to_string()),
+            _ => match other_protocol(id, address, protocol, "", QueryKind::Info) {
+                Event::Info { result, .. } => result,
+                _ => continue,
+            },
+        };
+        match result {
+            Ok(found) => {
+                return Event::Info {
+                    id,
+                    result: Ok(found),
+                    detected: Some(protocol),
+                };
+            }
+            Err(e) => {
+                // The first protocol's error is the most telling (A2S timeouts, DNS …).
+                if protocol == order[0] {
+                    last = e;
+                }
+            }
+        }
+    }
+    Event::Info {
+        id,
+        result: Err(last),
+        detected: None,
+    }
+}
+
+/// Quake 3, GameSpy 1, Unreal 2, Doom 3, TeamSpeak … (see `openhlsw::query`). One query
+/// answers info, players and rules; the library keeps it briefly for the other two.
+fn other_protocol(
+    id: ServerId,
+    address: &ServerAddress,
+    protocol: Protocol,
+    game: &str,
+    kind: QueryKind,
+) -> Event {
+    let target = query::Target {
+        host: address.host.clone(),
+        port: address.port,
+        query_port: address.query_port,
+        game: game.to_string(),
+    };
+    let result = query::query(protocol, &target, OTHER_TIMEOUT).map_err(|e| e.to_string());
+    match kind {
+        QueryKind::Info => Event::Info {
+            id,
+            detected: None,
+            result: result.and_then(|(status, meta)| {
+                let game_addr = (address.host.as_str(), address.port)
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut a| a.next())
+                    .ok_or_else(|| format!("DNS: {} not found", address.host))?;
+                Ok((Box::new(status.info), meta, game_addr))
+            }),
+        },
+        QueryKind::Players => Event::Players {
+            id,
+            result: result.map(|(status, meta)| (status.players, meta)),
+        },
+        QueryKind::Rules => Event::Rules {
+            id,
+            result: result.map(|(status, meta)| (status.rules, meta)),
+        },
+    }
 }
 
 /// Looks up the location of up to 100 server IPs (ip-api.com batch request).

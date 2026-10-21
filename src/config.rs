@@ -54,6 +54,10 @@ pub struct SavedList {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SavedServer {
     pub address: String,
+    /// HLSW key of the game chosen when the server was added (decides the query
+    /// protocol); missing = detected automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game: Option<String>,
     /// Only present when "Save" is checked. Stored in plain text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rcon_password: Option<String>,

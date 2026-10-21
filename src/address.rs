@@ -5,7 +5,7 @@ pub const DEFAULT_PORT: u16 = 27015;
 
 /// "host:port" as entered by the user. Accepts IPv4, hostnames, `[IPv6]:port`
 /// and `steam://connect/...` links. The port defaults to 27015.
-/// `host:port:queryport` is a GameSpy 2 server (e.g. Deer Hunter 2005) whose query
+/// `host:port:queryport` is a server (e.g. GameSpy 2) whose query
 /// port differs from the game port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerAddress {

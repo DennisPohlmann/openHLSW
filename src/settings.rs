@@ -12,23 +12,28 @@ use serde::{Deserialize, Serialize};
 use crate::app::{EditMenu, fit, group_box, list_frame, plain_header, styled_table, tab_strip};
 use crate::theme::{Palette, TextSize, Theme, UiFont};
 use crate::typeahead::TypeAhead;
+use openhlsw::query::Protocol;
 
-/// A game from HLSW's "My Games" list. Games with a Steam `app_id` are Source or GoldSrc
-/// (Half-Life 1) games whose servers openHLSW can query today; the others are listed for their
-/// executable path and get server support later.
+/// A game from HLSW's "My Games" list (its executable and start parameters for Connect).
+/// Games with a Steam `app_id` are Source or GoldSrc (Half-Life 1) games; the protocol of
+/// the others comes from HLSW's game list ([`crate::games`]).
 pub struct GameDef {
     pub name: &'static str,
     pub app_id: Option<u32>,
 }
 
 impl GameDef {
-    pub fn supported(&self) -> bool {
-        self.app_id.is_some() || GAMESPY2_GAMES.contains(&self.name)
+    /// How servers of the game are queried (Steam games: Valve A2S).
+    pub fn query_name(&self) -> &'static str {
+        if self.app_id.is_some() {
+            return Protocol::A2s.name();
+        }
+        crate::games::GAMES
+            .iter()
+            .find(|g| g.name == self.name)
+            .map_or(Protocol::A2s.name(), |g| g.protocol.name())
     }
 }
-
-/// Games queried with GameSpy 2 (entered as `ip:port:queryport`).
-pub const GAMESPY2_GAMES: &[&str] = &["Deer Hunter 2005"];
 
 pub const GAMES: &[GameDef] = &[
     GameDef {
@@ -68,6 +73,14 @@ pub const GAMES: &[GameDef] = &[
         app_id: None,
     },
     GameDef {
+        name: "Battlefield 4",
+        app_id: None,
+    },
+    GameDef {
+        name: "Battlefield Hardline",
+        app_id: None,
+    },
+    GameDef {
         name: "Battlefield Vietnam",
         app_id: None,
     },
@@ -96,6 +109,10 @@ pub const GAMES: &[GameDef] = &[
         app_id: None,
     },
     GameDef {
+        name: "Call of Duty: Modern Warfare 2",
+        app_id: None,
+    },
+    GameDef {
         name: "Call of Duty: United Offensive",
         app_id: None,
     },
@@ -112,11 +129,19 @@ pub const GAMES: &[GameDef] = &[
         app_id: Some(730),
     },
     GameDef {
+        name: "Counter-Strike 2D",
+        app_id: None,
+    },
+    GameDef {
         name: "Counter-Strike: Source",
         app_id: Some(240),
     },
     GameDef {
         name: "Crysis",
+        app_id: None,
+    },
+    GameDef {
+        name: "Crysis 2",
         app_id: None,
     },
     GameDef {
@@ -130,10 +155,6 @@ pub const GAMES: &[GameDef] = &[
     GameDef {
         name: "Day of Infamy",
         app_id: Some(447820),
-    },
-    GameDef {
-        name: "Deer Hunter 2005",
-        app_id: None,
     },
     GameDef {
         name: "Devastation",
@@ -200,6 +221,10 @@ pub const GAMES: &[GameDef] = &[
         app_id: None,
     },
     GameDef {
+        name: "Hidden & Dangerous 2",
+        app_id: None,
+    },
+    GameDef {
         name: "Insurgency",
         app_id: Some(222880),
     },
@@ -216,7 +241,15 @@ pub const GAMES: &[GameDef] = &[
         app_id: None,
     },
     GameDef {
+        name: "Just Cause 2: Multiplayer",
+        app_id: None,
+    },
+    GameDef {
         name: "Killing Floor",
+        app_id: None,
+    },
+    GameDef {
+        name: "Kingpin: Life of Crime",
         app_id: None,
     },
     GameDef {
@@ -230,6 +263,14 @@ pub const GAMES: &[GameDef] = &[
     GameDef {
         name: "Left 4 Dead 2",
         app_id: Some(550),
+    },
+    GameDef {
+        name: "Lost Heaven Multiplayer (Mafia)",
+        app_id: None,
+    },
+    GameDef {
+        name: "Mafia 2 Multiplayer",
+        app_id: None,
     },
     GameDef {
         name: "Medal of Honor Allied Assault",
@@ -248,6 +289,14 @@ pub const GAMES: &[GameDef] = &[
         app_id: None,
     },
     GameDef {
+        name: "Minecraft",
+        app_id: None,
+    },
+    GameDef {
+        name: "Minecraft: Bedrock Edition",
+        app_id: None,
+    },
+    GameDef {
         name: "Neverwinter Nights",
         app_id: None,
     },
@@ -262,6 +311,10 @@ pub const GAMES: &[GameDef] = &[
     GameDef {
         name: "Nuclear Dawn",
         app_id: Some(17710),
+    },
+    GameDef {
+        name: "OpenTTD",
+        app_id: None,
     },
     GameDef {
         name: "Operation Flashpoint",
@@ -289,6 +342,10 @@ pub const GAMES: &[GameDef] = &[
     },
     GameDef {
         name: "Project IGI2: Covert Strike",
+        app_id: None,
+    },
+    GameDef {
+        name: "Project Reality: BF2",
         app_id: None,
     },
     GameDef {
@@ -344,11 +401,19 @@ pub const GAMES: &[GameDef] = &[
         app_id: None,
     },
     GameDef {
+        name: "Soldat",
+        app_id: None,
+    },
+    GameDef {
         name: "Soldier of Fortune 2",
         app_id: None,
     },
     GameDef {
         name: "Star Wars: Battlefront",
+        app_id: None,
+    },
+    GameDef {
+        name: "StarMade",
         app_id: None,
     },
     GameDef {
@@ -373,6 +438,18 @@ pub const GAMES: &[GameDef] = &[
     },
     GameDef {
         name: "TeamSpeak 3",
+        app_id: None,
+    },
+    GameDef {
+        name: "Teeworlds",
+        app_id: None,
+    },
+    GameDef {
+        name: "Terraria (TShock)",
+        app_id: None,
+    },
+    GameDef {
+        name: "Tibia (Open Tibia)",
         app_id: None,
     },
     GameDef {
@@ -910,7 +987,7 @@ impl SettingsDialog {
                 styled_table(ui, "my_games")
                     .sense(Sense::click())
                     .column(Column::initial(230.0).at_least(120.0).clip(true))
-                    .column(Column::initial(80.0))
+                    .column(Column::initial(105.0))
                     .column(Column::initial(180.0).at_least(60.0).clip(true))
                     .column(Column::remainder().clip(true))
                     .header(18.0, |mut h| {
@@ -939,12 +1016,7 @@ impl SettingsDialog {
                                 ui.add(Label::new(game.name).selectable(false));
                             });
                             row.col(|ui| {
-                                let t = if game.supported() {
-                                    RichText::new(tr!("Yes")).color(p.green)
-                                } else {
-                                    RichText::new(tr!("not yet")).color(p.weak_text)
-                                };
-                                ui.add(Label::new(t).selectable(false));
+                                ui.add(Label::new(game.query_name()).selectable(false));
                             });
                             let mut double_clicked = None;
                             for (is_params, map, hint) in [
