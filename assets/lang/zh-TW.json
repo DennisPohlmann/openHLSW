@@ -166,6 +166,7 @@
  "Edit filter...": "編輯篩選...",
  "Enable Admin Notification": "啟用管理員通知",
  "Enables the console": "啟用主控台",
+ "Enter the address of the server (IP:port or host:port)": "請輸入伺服器位址（IP:連接埠 或 主機名稱:連接埠）",
  "Event": "事件",
  "Execute applications": "執行程式",
  "Exit": "結束",

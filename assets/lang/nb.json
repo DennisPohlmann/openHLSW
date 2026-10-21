@@ -161,6 +161,7 @@
  "Edit filter...": "Rediger filter...",
  "Enable Admin Notification": "Slå på adminvarsling",
  "Enables the console": "Aktiverer konsollen",
+ "Enter the address of the server (IP:port or host:port)": "Skriv inn serverens adresse (IP:port eller vert:port)",
  "Event": "Hendelse",
  "Execute applications": "Kjør programmer",
  "Exit": "Avslutt",

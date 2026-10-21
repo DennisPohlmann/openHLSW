@@ -131,9 +131,10 @@ impl ServerFilter {
         if self.hide_timeout && s.offline {
             return false;
         }
-        // Servers without any info yet are only judged by state; the rest needs data.
+        // Servers without any info yet (e.g. just added) stay visible until they answer;
+        // everything else needs their data.
         if !s.has_info {
-            return !self.needs_info();
+            return true;
         }
         if self.max_ping > 0 && s.ping.is_some_and(|p| p > self.max_ping) {
             return false;
@@ -174,25 +175,7 @@ impl ServerFilter {
         true
     }
 
-    fn needs_info(&self) -> bool {
-        self.max_ping > 0
-            || self.password != PasswordFilter::Any
-            || !self.game.trim().is_empty()
-            || !self.map.trim().is_empty()
-            || !self.country.trim().is_empty()
-            || !self.addons.trim().is_empty()
-            || [
-                self.players,
-                self.slots,
-                self.free_slots,
-                self.time_limit,
-                self.frag_limit,
-                self.round_limit,
-                self.team_score,
-            ]
-            .iter()
-            .any(Range::is_set)
-    }
+
 }
 
 #[cfg(test)]

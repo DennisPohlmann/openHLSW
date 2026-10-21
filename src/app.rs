@@ -1191,6 +1191,8 @@ enum Dialog {
     ChangeRule(ServerId, String, String),
     /// Yes/No question before an action.
     Confirm(Confirm),
+    /// A message with OK (title, text), like HLSW's message boxes.
+    Message(String, String),
 }
 
 /// Questions HLSW asks before doing something.
@@ -1277,6 +1279,8 @@ pub struct OpenHlswApp {
     /// Program icon for the About window (loaded when it is first opened).
     about_icon: Option<egui::TextureHandle>,
     toolbar_icons: Option<crate::toolbar_icons::ToolbarIcons>,
+    /// Scroll the server list to the selected server in the next frame (after Add).
+    scroll_to_selected: bool,
     show_license: bool,
     editing_comment: Option<(ServerId, String)>,
     /// "Connecting..." window: server we wait on for a free slot, since when.
@@ -1462,6 +1466,7 @@ impl OpenHlswApp {
             show_about: false,
             about_icon: None,
             toolbar_icons: crate::toolbar_icons::ToolbarIcons::load(&cc.egui_ctx),
+            scroll_to_selected: false,
             show_license: false,
             editing_comment: None,
             waiting: None,
@@ -2439,10 +2444,15 @@ impl OpenHlswApp {
             Action::Add => {
                 let input = self.address_input.trim().to_string();
                 if input.is_empty() {
+                    self.status_message =
+                        tr!("Enter the address of the server (IP:port or host:port)").into();
                     return;
                 }
+                // Problems are shown in a message box (the status bar is easy to miss).
                 let Some(mut address) = ServerAddress::parse(&input) else {
-                    self.status_message = tr!("Invalid address: {input}", input = input);
+                    let text = tr!("Invalid address: {input}", input = input);
+                    self.status_message = text.clone();
+                    self.dialog = Some(Dialog::Message(tr!("Add").into(), text));
                     return;
                 };
                 let gamespy = self
@@ -2460,13 +2470,16 @@ impl OpenHlswApp {
                 }
                 if gamespy && address.query_port.is_none() {
                     // GameSpy 2 answers on a separate query port.
-                    self.status_message = tr!(
+                    let text = tr!(
                         "GameSpy 2 servers need the query port: ip:gameport:queryport (e.g. {host}:{port}:34567)",
                         host = address.host,
                         port = address.port
                     );
+                    self.status_message = text.clone();
+                    self.dialog = Some(Dialog::Message(tr!("Add").into(), text));
                     return;
                 }
+                // Each server list has its own servers: the same server can be in several lists.
                 if let Some(existing) = self.servers.iter().find(|s| s.address == address) {
                     let id = existing.id;
                     self.status_message =
@@ -2481,6 +2494,8 @@ impl OpenHlswApp {
                     self.apply(Action::Select(id), ctx);
                     self.save_config();
                 }
+                // Show the (new or existing) server: scroll the list to it.
+                self.scroll_to_selected = true;
                 self.address_input.clear();
             }
             Action::Refresh(id) => self.refresh(id, true),
@@ -3388,6 +3403,7 @@ impl eframe::App for OpenHlswApp {
                             selected: self.selected,
                             connect_on_double_click: self.settings.connect_on_double_click,
                             keep_order_on_hover: self.settings.keep_order_on_hover,
+                            scroll_to_selected: std::mem::take(&mut self.scroll_to_selected),
                         };
                         server_table(
                             ui,
@@ -4065,27 +4081,25 @@ impl OpenHlswApp {
                 ),
                 _ => add_game_hint(self.add_game),
             };
-            let input = ui
-                .add(
-                    TextEdit::singleline(&mut self.address_input)
-                        .align(egui::Align2::LEFT_CENTER)
-                        .hint_text(hint)
-                        // Leave room for the (translated) "Add" button.
-                        .desired_width(
-                            ui.available_width()
-                                - text_width(ui, tr!("Add"))
-                                - 2.0 * ui.spacing().button_padding.x
-                                - ui.spacing().item_spacing.x
-                                - 2.0,
-                        ),
-                )
-                .with_edit_menu();
-            if input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                actions.push(Action::Add);
-            }
-            if ui.button(tr!("Add")).clicked() {
-                actions.push(Action::Add);
-            }
+            // The "Add" button gets its place first (at the right edge), the address field the
+            // rest: the field can never cover the button, whatever the font or scaling.
+            let address_input = &mut self.address_input;
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button(tr!("Add")).clicked() {
+                    actions.push(Action::Add);
+                }
+                let input = ui
+                    .add(
+                        TextEdit::singleline(address_input)
+                            .align(egui::Align2::LEFT_CENTER)
+                            .hint_text(hint)
+                            .desired_width(ui.available_width()),
+                    )
+                    .with_edit_menu();
+                if input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    actions.push(Action::Add);
+                }
+            });
         });
 
         // Toolbar: buttons · Password · Search
@@ -5006,6 +5020,7 @@ impl OpenHlswApp {
             Dialog::Confirm(Confirm::DeleteServer(_)) => tr!("Delete"),
             Dialog::Confirm(Confirm::ChangeLevel(..)) => tr!("Change Level"),
             Dialog::Confirm(Confirm::ConnectNoPassword(_)) => tr!("Password"),
+            Dialog::Message(title, _) => title.as_str(),
         };
         let confirm_text = match &dialog {
             Dialog::Confirm(Confirm::DeleteServer(id)) => {
@@ -5225,6 +5240,14 @@ impl OpenHlswApp {
                             close = true;
                         }
                         close |= cancel;
+                    }
+                    Dialog::Message(_, text) => {
+                        ui.label(text.as_str());
+                        ui.add_space(6.0);
+                        let ok = ui
+                            .add(Button::new(tr!("OK")).min_size(egui::vec2(75.0, 22.0)))
+                            .clicked();
+                        close |= ok || ui.input(|i| i.key_pressed(Key::Enter));
                     }
                     Dialog::ConfirmDeleteList => {
                         ui.label(tr!(
@@ -6649,6 +6672,8 @@ struct ListOptions<'a> {
     selected: Option<ServerId>,
     connect_on_double_click: bool,
     keep_order_on_hover: bool,
+    /// Scroll to the selected server (after Add).
+    scroll_to_selected: bool,
 }
 
 fn server_table(
@@ -6760,6 +6785,10 @@ fn server_table(
         };
         actions.push(Action::Select(servers[order[new]].id));
         table = table.scroll_to_row(new, None);
+    } else if opts.scroll_to_selected
+        && let Some(row) = order.iter().position(|&i| Some(servers[i].id) == selected)
+    {
+        table = table.scroll_to_row(row, Some(Align::Center));
     }
     for (i, (_, _, width)) in columns.iter().enumerate() {
         let column = if i + 1 == columns.len() {

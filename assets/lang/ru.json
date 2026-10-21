@@ -166,6 +166,7 @@
  "Edit filter...": "Изменить фильтр...",
  "Enable Admin Notification": "Включить уведомления администратора",
  "Enables the console": "Включает консоль",
+ "Enter the address of the server (IP:port or host:port)": "Введите адрес сервера (IP:порт или хост:порт)",
  "Event": "Событие",
  "Execute applications": "Запускать приложения",
  "Exit": "Выход",

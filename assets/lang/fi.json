@@ -165,6 +165,7 @@
  "Edit filter...": "Muokkaa suodatinta...",
  "Enable Admin Notification": "Ota ylläpitäjän ilmoitukset käyttöön",
  "Enables the console": "Ottaa konsolin käyttöön",
+ "Enter the address of the server (IP:port or host:port)": "Anna palvelimen osoite (IP:portti tai isäntä:portti)",
  "Event": "Tapahtuma",
  "Execute applications": "Suorita sovelluksia",
  "Exit": "Lopeta",

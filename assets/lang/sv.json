@@ -162,6 +162,7 @@
  "Edit filter...": "Redigera filter...",
  "Enable Admin Notification": "Aktivera adminavisering",
  "Enables the console": "Aktiverar konsolen",
+ "Enter the address of the server (IP:port or host:port)": "Ange serverns adress (IP:port eller värd:port)",
  "Event": "Händelse",
  "Execute applications": "Kör program",
  "Exit": "Avsluta",

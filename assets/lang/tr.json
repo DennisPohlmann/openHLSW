@@ -166,6 +166,7 @@
  "Edit filter...": "Filtreyi düzenle...",
  "Enable Admin Notification": "Yönetici bildirimini etkinleştir",
  "Enables the console": "Konsolu etkinleştirir",
+ "Enter the address of the server (IP:port or host:port)": "Sunucunun adresini girin (IP:port veya ana bilgisayar:port)",
  "Event": "Olay",
  "Execute applications": "Uygulamaları çalıştır",
  "Exit": "Çıkış",

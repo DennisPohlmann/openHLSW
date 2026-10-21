@@ -160,6 +160,7 @@
  "Edit filter...": "Filter bearbeiten...",
  "Enable Admin Notification": "Admin-Benachrichtigung aktivieren",
  "Enables the console": "Aktiviert die Konsole",
+ "Enter the address of the server (IP:port or host:port)": "Gib die Adresse des Servers ein (IP:Port oder Host:Port)",
  "Event": "Ereignis",
  "Execute applications": "Programme ausführen",
  "Exit": "Beenden",

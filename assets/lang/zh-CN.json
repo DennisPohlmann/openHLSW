@@ -166,6 +166,7 @@
  "Edit filter...": "编辑筛选...",
  "Enable Admin Notification": "启用管理员通知",
  "Enables the console": "启用控制台",
+ "Enter the address of the server (IP:port or host:port)": "请输入服务器地址（IP:端口 或 主机名:端口）",
  "Event": "事件",
  "Execute applications": "运行程序",
  "Exit": "退出",

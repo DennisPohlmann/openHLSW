@@ -165,6 +165,7 @@
  "Edit filter...": "Szűrő szerkesztése...",
  "Enable Admin Notification": "Admin-értesítés engedélyezése",
  "Enables the console": "Bekapcsolja a konzolt",
+ "Enter the address of the server (IP:port or host:port)": "Add meg a szerver címét (IP:port vagy gépnév:port)",
  "Event": "Esemény",
  "Execute applications": "Alkalmazások futtatása",
  "Exit": "Kilépés",

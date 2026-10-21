@@ -158,6 +158,7 @@
  "Edit filter...": "Modifier le filtre...",
  "Enable Admin Notification": "Activer les notifications admin",
  "Enables the console": "Active la console",
+ "Enter the address of the server (IP:port or host:port)": "Saisissez l'adresse du serveur (IP:port ou hôte:port)",
  "Event": "Événement",
  "Execute applications": "Exécuter des applications",
  "Exit": "Quitter",
