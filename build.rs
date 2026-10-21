@@ -1,6 +1,6 @@
 //! Build script:
-//! * packs the game icons in `assets/games/*.ico` into one texture atlas (32x32 cells,
-//!   sharp at larger text sizes and on HiDPI screens),
+//! * packs the game icons in `assets/games/*.ico` into two texture atlases: 16x16 cells for
+//!   normal screens and 32x32 cells for high-DPI screens,
 //! * prepares the window icon from `assets/openhlsw.ico`,
 //! * embeds `assets/openhlsw.ico` as the .exe icon on Windows.
 
@@ -10,6 +10,9 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 const CELL: u32 = 32;
+/// Game icons are shown at 16x16 screen pixels; this atlas holds them at exactly that size
+/// (the icons' own 16x16 pictures where they have one).
+const SMALL: u32 = 16;
 const COLUMNS: u32 = 16;
 
 fn main() {
@@ -17,46 +20,53 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/openhlsw.ico");
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
 
-    // --- game icon atlas -----------------------------------------------------
-    let mut icons: Vec<(String, Vec<u8>)> = Vec::new();
+    // --- game icon atlases (16 px for normal screens, 32 px for high-DPI ones) --------
     let mut paths: Vec<PathBuf> = fs::read_dir("assets/games")
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
         .unwrap_or_default();
     paths.sort();
-    for path in paths {
-        if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_lowercase)
-            .as_deref()
-            != Some("ico")
-        {
-            continue;
-        }
+    let paths: Vec<PathBuf> = paths
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_lowercase)
+                .as_deref()
+                == Some("ico")
+        })
+        .collect();
+    let mut names: Vec<String> = Vec::new();
+    let mut cells: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for path in &paths {
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or_default();
         let name = stem.strip_prefix("GameType_").unwrap_or(stem).to_string();
-        match load_game_icon(&path, CELL) {
-            Some(rgba) => icons.push((name, rgba)),
-            None => println!("cargo:warning=could not decode {}", path.display()),
+        match (load_game_icon(path, CELL), load_game_icon(path, SMALL)) {
+            (Some(large), Some(small)) => {
+                names.push(name);
+                cells.push((small, large));
+            }
+            _ => println!("cargo:warning=could not decode {}", path.display()),
         }
     }
-    let rows = (icons.len() as u32).div_ceil(COLUMNS).max(1);
-    let (w, h) = (CELL * COLUMNS, CELL * rows);
-    let mut atlas = vec![0u8; (w * h * 4) as usize];
-    for (i, (_, rgba)) in icons.iter().enumerate() {
-        let (cx, cy) = ((i as u32 % COLUMNS) * CELL, (i as u32 / COLUMNS) * CELL);
-        for y in 0..CELL {
-            let src = (y * CELL * 4) as usize;
-            let dst = (((cy + y) * w + cx) * 4) as usize;
-            atlas[dst..dst + (CELL * 4) as usize]
-                .copy_from_slice(&rgba[src..src + (CELL * 4) as usize]);
+    for (file, size) in [("game_icons16.png", SMALL), ("game_icons.png", CELL)] {
+        let rows = (cells.len() as u32).div_ceil(COLUMNS).max(1);
+        let (w, h) = (size * COLUMNS, size * rows);
+        let mut atlas = vec![0u8; (w * h * 4) as usize];
+        for (i, (small, large)) in cells.iter().enumerate() {
+            let rgba = if size == SMALL { small } else { large };
+            let (cx, cy) = ((i as u32 % COLUMNS) * size, (i as u32 / COLUMNS) * size);
+            for y in 0..size {
+                let src = (y * size * 4) as usize;
+                let dst = (((cy + y) * w + cx) * 4) as usize;
+                atlas[dst..dst + (size * 4) as usize]
+                    .copy_from_slice(&rgba[src..src + (size * 4) as usize]);
+            }
         }
+        write_png(&out.join(file), w, h, &atlas);
     }
-    write_png(&out.join("game_icons.png"), w, h, &atlas);
-    let names: Vec<&str> = icons.iter().map(|(n, _)| n.as_str()).collect();
     fs::write(out.join("game_icons.txt"), names.join(",")).expect("write icon index");
 
     // --- window icon (64x64 RGBA) -------------------------------------------

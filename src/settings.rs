@@ -1010,7 +1010,7 @@ impl SettingsDialog {
                                     icons.show(
                                         ui,
                                         crate::game_icons::icon_for_game(game.name),
-                                        14.0,
+                                        16.0,
                                     );
                                 }
                                 ui.add(Label::new(game.name).selectable(false));

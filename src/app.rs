@@ -6939,7 +6939,7 @@ fn server_table(
                         Col::Address => (s.address.to_string(), 0.0),
                         Col::Name => (
                             info.map(|i| i.name.clone()).unwrap_or_default(),
-                            14.0 + spacing + KEY_SLOT + spacing,
+                            16.0 + spacing + KEY_SLOT + spacing,
                         ),
                         Col::Game => (s.game_short(), 0.0),
                         Col::Map => (info.map(|i| i.map.clone()).unwrap_or_default(), 0.0),
@@ -7074,14 +7074,14 @@ fn server_table(
                                 }
                                 if let (Some(icons), Some(g)) = (opts.game_icons, s.listed_game()) {
                                     // Quake 3, Unreal, TeamSpeak …: the icon of the chosen game.
-                                    icons.show(ui, g.icon, 14.0);
+                                    icons.show(ui, g.icon, 16.0);
                                 } else if let (Some(icons), Some(i)) = (opts.game_icons, info) {
                                     let icon = if i.gamespy {
                                         game_icons::icon_for_gamespy(&i.folder)
                                     } else {
                                         game_icons::icon_for_server(i.real_app_id(), &i.folder)
                                     };
-                                    icons.show(ui, icon, 14.0);
+                                    icons.show(ui, icon, 16.0);
                                 }
                                 // Room for a key on every row; the key shows on servers that
                                 // need a password to join, like HLSW.

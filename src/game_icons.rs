@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use eframe::egui::{self, Color32, Rect, Sense, TextureHandle, Ui};
 
 const ATLAS_PNG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/game_icons.png"));
+const ATLAS16_PNG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/game_icons16.png"));
 const ATLAS_NAMES: &str = include_str!(concat!(env!("OUT_DIR"), "/game_icons.txt"));
 const COLUMNS: usize = 16;
 
@@ -12,20 +13,28 @@ const COLUMNS: usize = 16;
 pub const APP_ICON_RGBA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app_icon.rgba"));
 
 pub struct GameIcons {
-    texture: TextureHandle,
+    /// 16 px cells (normal screens) and 32 px cells (high-DPI screens).
+    small: TextureHandle,
+    large: TextureHandle,
     index: HashMap<&'static str, usize>,
-    atlas_size: [usize; 2],
+    rows: usize,
+}
+
+fn load_atlas(ctx: &egui::Context, name: &str, png_bytes: &[u8]) -> Option<TextureHandle> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let size = [info.width as usize, info.height as usize];
+    let image = egui::ColorImage::from_rgba_unmultiplied(size, &buf[..info.buffer_size()]);
+    Some(ctx.load_texture(name, image, egui::TextureOptions::LINEAR))
 }
 
 impl GameIcons {
     pub fn load(ctx: &egui::Context) -> Option<Self> {
-        let decoder = png::Decoder::new(std::io::Cursor::new(ATLAS_PNG));
-        let mut reader = decoder.read_info().ok()?;
-        let mut buf = vec![0; reader.output_buffer_size()?];
-        let info = reader.next_frame(&mut buf).ok()?;
-        let size = [info.width as usize, info.height as usize];
-        let image = egui::ColorImage::from_rgba_unmultiplied(size, &buf[..info.buffer_size()]);
-        let texture = ctx.load_texture("game-icons", image, egui::TextureOptions::LINEAR);
+        let small = load_atlas(ctx, "game-icons-16", ATLAS16_PNG)?;
+        let large = load_atlas(ctx, "game-icons-32", ATLAS_PNG)?;
+        let rows = small.size()[1] / 16;
         let index = ATLAS_NAMES
             .split(',')
             .filter(|n| !n.is_empty())
@@ -33,29 +42,38 @@ impl GameIcons {
             .map(|(i, n)| (n, i))
             .collect();
         Some(Self {
-            texture,
+            small,
+            large,
             index,
-            atlas_size: size,
+            rows: rows.max(1),
         })
     }
 
-    /// Draws the icon (or reserves the space if there is none).
+    /// Draws the icon (or reserves the space if there is none): 16x16 screen pixels on
+    /// whole pixels, so it is sharp and never cut off. `size` is the most it may take
+    /// (in points); in a row lower than that the icon is scaled down to fit completely.
     pub fn show(&self, ui: &mut Ui, key: &str, size: f32) -> egui::Response {
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), Sense::hover());
+        let ppp = ui.pixels_per_point();
+        // 16 points (16 screen pixels at 100 %), at most `size` and the row height.
+        let limit = size.min(ui.available_height().max(8.0)).min(16.0) * ppp;
+        let px = limit.floor().max(1.0);
+        let side = px / ppp;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), Sense::hover());
         if let Some(&i) = self.index.get(key) {
             let (col, row) = (i % COLUMNS, i / COLUMNS);
-            let (aw, ah) = (self.atlas_size[0] as f32, self.atlas_size[1] as f32);
-            // Square cells, COLUMNS per row (the cell size is set by build.rs).
-            let cell = self.atlas_size[0] / COLUMNS;
-            let uv = Rect::from_min_max(
-                egui::pos2((col * cell) as f32 / aw, (row * cell) as f32 / ah),
-                egui::pos2(
-                    ((col + 1) * cell) as f32 / aw,
-                    ((row + 1) * cell) as f32 / ah,
-                ),
+            let texture = if px > 16.0 { &self.large } else { &self.small };
+            let (cols, rows) = (COLUMNS as f32, self.rows as f32);
+            let uv = Rect::from_min_size(
+                egui::pos2(col as f32 / cols, row as f32 / rows),
+                egui::vec2(1.0 / cols, 1.0 / rows),
             );
-            ui.painter()
-                .image(self.texture.id(), rect, uv, Color32::WHITE);
+            // On whole screen pixels: 1:1 copies of the 16 px pictures.
+            let min = egui::pos2(
+                (rect.min.x * ppp).round() / ppp,
+                (rect.center().y * ppp - px / 2.0).round() / ppp,
+            );
+            let target = Rect::from_min_size(min, egui::vec2(side, side));
+            ui.painter().image(texture.id(), target, uv, Color32::WHITE);
         }
         response
     }
