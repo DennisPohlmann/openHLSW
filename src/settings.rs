@@ -521,6 +521,9 @@ pub struct Settings {
     pub game_params: BTreeMap<String, String>,
     /// Player name passed to the game on Connect (`+name`), View → Player Name.
     pub player_name: String,
+    /// Player names used before (the Player name dropdown, newest first).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub player_names: Vec<String>,
     /// Server list filter (View → Filter, "Edit filter...").
     pub filter: crate::filter::ServerFilter,
     /// Chat messages starting with "@" play the notification sound and are shown in the
@@ -671,6 +674,7 @@ impl Default for Settings {
             game_paths: BTreeMap::new(),
             game_params: BTreeMap::new(),
             player_name: String::new(),
+            player_names: Vec::new(),
             filter: crate::filter::ServerFilter::default(),
             admin_notification: false,
             iddb_auto_add: true,

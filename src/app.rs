@@ -3853,6 +3853,93 @@ impl OpenHlswApp {
         ui.spacing_mut().item_spacing.x = gap;
     }
 
+    /// HLSW's "Playername:" box: an editable dropdown of the names used before and a ✕
+    /// that deletes the current name from it.
+    fn player_name_box(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
+        ui.label(tr!("Player name:"));
+        let item_spacing = ui.spacing().item_spacing;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let edit = ui
+            .add(
+                TextEdit::singleline(&mut self.settings.player_name)
+                    .align(egui::Align2::LEFT_CENTER)
+                    .hint_text(tr!("from the game"))
+                    .desired_width(120.0),
+            )
+            .with_edit_menu()
+            .on_hover_text(tr!("Passed to the game on Connect (+name)"));
+        // The arrow sits right on the text field, like a Windows combo box.
+        let height = edit.rect.height();
+        let (rect, arrow) = ui.allocate_exact_size(egui::vec2(16.0, height), Sense::click());
+        let visuals = ui.style().interact(&arrow);
+        ui.painter().rect(
+            rect,
+            0.0,
+            if arrow.hovered() { visuals.bg_fill } else { p.list_bg },
+            Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color),
+            egui::StrokeKind::Inside,
+        );
+        let c = rect.center();
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![
+                c + egui::vec2(-3.5, -1.5),
+                c + egui::vec2(3.5, -1.5),
+                c + egui::vec2(0.0, 2.0),
+            ],
+            p.text,
+            Stroke::NONE,
+        ));
+        ui.spacing_mut().item_spacing = item_spacing;
+        ui.add_space(3.0);
+
+        let mut picked = None;
+        let names = &self.settings.player_names;
+        // Right-aligned to the arrow and as wide as the box: the list opens under the field.
+        egui::Popup::menu(&arrow)
+            .width(edit.rect.width() + rect.width())
+            .align(egui::RectAlign::BOTTOM_END)
+            .gap(0.0)
+            .show(|ui| {
+                ui.set_min_width(edit.rect.width() + rect.width() - 8.0);
+                if names.is_empty() {
+                    ui.label(RichText::new(tr!("(empty)")).color(ui.visuals().weak_text_color()));
+                }
+                for name in names {
+                    if ui
+                        .selectable_label(*name == self.settings.player_name, name)
+                        .clicked()
+                    {
+                        picked = Some(name.clone());
+                    }
+                }
+            });
+        let mut changed = false;
+        if let Some(name) = picked {
+            self.settings.player_name = name;
+            changed = true;
+        }
+        if edit.lost_focus() || changed {
+            remember_player_name(&mut self.settings);
+            actions.push(Action::SaveConfig);
+        }
+        let delete = match &self.toolbar_icons {
+            Some(icons) => icons.button(
+                ui,
+                crate::toolbar_icons::ToolIcon::Delete,
+                true,
+                false,
+                tr!("Delete"),
+            ),
+            None => ui.add(Button::new("✕").frame_when_inactive(false)),
+        };
+        if delete.clicked() {
+            let name = self.settings.player_name.trim().to_string();
+            self.settings.player_names.retain(|n| *n != name);
+            self.settings.player_name.clear();
+            actions.push(Action::SaveConfig);
+        }
+    }
+
     fn toolbar(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
         // Right-aligned labels of the first two rows, as wide as the longer (translated) one.
         let label_w = text_width(ui, tr!("Server list:"))
@@ -4042,19 +4129,7 @@ impl OpenHlswApp {
                 toolbar_separator(ui, p);
             }
             if view.player_name {
-                ui.label(tr!("Player name:"));
-                let r = ui
-                    .add(
-                        TextEdit::singleline(&mut self.settings.player_name)
-                            .align(egui::Align2::LEFT_CENTER)
-                            .hint_text(tr!("from the game"))
-                            .desired_width(110.0),
-                    )
-                    .with_edit_menu()
-                    .on_hover_text(tr!("Passed to the game on Connect (+name)"));
-                if r.lost_focus() {
-                    actions.push(Action::SaveConfig);
-                }
+                self.player_name_box(ui, p, actions);
                 toolbar_separator(ui, p);
             }
             if view.filter {
@@ -6241,6 +6316,17 @@ pub(crate) fn group_box(
     );
     ui.painter().rect_filled(bg, 0.0, p.window);
     ui.painter().galley(pos, galley, p.text);
+}
+
+/// Puts the current player name first in the list of names used before (at most 20).
+fn remember_player_name(settings: &mut Settings) {
+    let name = settings.player_name.trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    settings.player_names.retain(|n| *n != name);
+    settings.player_names.insert(0, name);
+    settings.player_names.truncate(20);
 }
 
 pub(crate) fn toolbar_separator(ui: &mut Ui, p: &Palette) {
