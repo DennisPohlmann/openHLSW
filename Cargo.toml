@@ -10,7 +10,7 @@ description = "Game server browser and RCON admin tool (HLSW remake for Source, 
 ab_glyph = "0.2.32"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 dirs = "7"
-dns-lookup = "2"
+dns-lookup = "4"
 eframe = { version = "0.37", default-features = false, features = ["glow", "wayland", "x11", "persistence", "clipboard", "links"] }
 egui_extras = { version = "0.37", features = ["serde"] }
 fontdb = { version = "0.24", default-features = false, features = ["fs", "fontconfig"] }
