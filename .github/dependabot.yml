@@ -1,0 +1,44 @@
+# .github/dependabot.yml - openHLSW
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    cooldown:
+      default-days: 5
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: fix
+      include: scope
+    groups:
+      crates:
+        update-types: [minor, patch]
+        exclude-patterns: ["egui*", "eframe", "epaint", "emath", "ecolor"]
+    # egui's painting crates are patched copies in vendor/ (see vendor/README.md): every
+    # egui update means copying and patching them again by hand, so it stays manual.
+    ignore:
+      - dependency-name: "egui*"
+      - dependency-name: eframe
+      - dependency-name: epaint
+      - dependency-name: emath
+      - dependency-name: ecolor
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    cooldown:
+      default-days: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]

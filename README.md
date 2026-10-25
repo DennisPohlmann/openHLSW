@@ -125,9 +125,13 @@ Linux needs the OpenGL, X11 and Wayland development packages, e.g. on Debian / U
 `sudo apt install libxkbcommon-dev libgl1-mesa-dev libwayland-dev`; FreeBSD
 `pkg install pkgconf libX11 libxkbcommon`.
 
-**Packages**: pushing a version tag (`git tag -s v0.2.0 && git push --tags`) makes
-`.github/workflows/build.yml` build all packages of the download table and publish a GitHub
-release with that version's section of `CHANGELOG.md`. Packaging files are in `packaging/`
+**Packages and releases**: `.github/workflows/build.yml` checks and builds all packages of
+the download table on every push to `main` and every pull request (as workflow artifacts).
+Releases are made by [semantic-release](https://semantic-release.gitbook.io/) from the
+[Conventional Commits](https://www.conventionalcommits.org/) since the last tag: a `feat`
+(minor), `fix` / `perf` (patch) or breaking change (major) on `main` sets the version in
+`Cargo.toml` and `Cargo.lock`, writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
+release with all packages. Never tag by hand. Packaging files are in `packaging/`
 (Linux desktop entry and Flatpak, WiX installer, macOS `Info.plist`).
 
 **Command line**:
@@ -165,7 +169,7 @@ src/
 vendor/      egui's painting crates with sub-pixel text, see vendor/README.md
 assets/      icons, flags, translations (assets/lang/*.json)
 packaging/   packages and installer
-tools/       test server
+tools/       test server, version script for releases
 ```
 
 **Translations**: the English text in the code is the key (`tr!("Refresh")`,

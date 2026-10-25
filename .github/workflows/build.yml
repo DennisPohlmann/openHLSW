@@ -1,18 +1,27 @@
-# Builds and packages openHLSW when a version tag "v*" is pushed
-# (git tag v0.1.0 && git push --tags) and publishes a GitHub release with all packages:
+name: build
+
+# Every push to main checks (clippy, tests) and builds all packages as workflow artifacts:
 #   Linux   x86_64, aarch64: .tar.gz, .deb, .rpm, .flatpak
 #   Linux   riscv64:         .tar.gz, .deb, .rpm
 #   Windows x64, x86, arm64: .msi, -portable.zip
 #   macOS   universal:       .dmg, .zip (Apple silicon + Intel)
 #   FreeBSD x86_64:          .tar.gz
-name: build
-
+# semantic-release then reads the Conventional Commits since the last tag:
+# for a feat, fix or breaking change it sets the version in Cargo.toml and
+# Cargo.lock, writes CHANGELOG.md, commits that as "chore(release): vX.Y.Z
+# [skip ci]", tags vX.Y.Z and creates the GitHub release; the packages are
+# then built from that tag and added to the release. A manual run builds
+# without publishing. A pull request (e.g. from Dependabot) runs the same
+# checks and builds without publishing.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,9 +39,46 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
+  release:
+    name: semantic-release
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # all tags and commits since the last release
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: semantic-release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_UPDATE_NOTIFIER: "false"
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: >-
+          npx --yes
+          -p semantic-release@25.0.9
+          -p @semantic-release/changelog@7.0.0
+          -p @semantic-release/exec@7.1.0
+          -p @semantic-release/git@11.0.1
+          -p conventional-changelog-conventionalcommits@9.3.1
+          semantic-release
+
+  # The package jobs run after the release job (or without it on a pull request or a
+  # manual run) and build the new tag if there was a release, otherwise the commit.
   linux:
     name: linux ${{ matrix.arch }}
-    needs: check
+    needs: [check, release]
+    if: ${{ !cancelled() && needs.check.result == 'success' && needs.release.result != 'failure' }}
     runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
@@ -46,6 +92,8 @@ jobs:
             target: riscv64gc-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.version != '' && format('v{0}', needs.release.outputs.version) || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -94,7 +142,8 @@ jobs:
 
   flatpak:
     name: flatpak ${{ matrix.arch }}
-    needs: linux
+    needs: [release, linux]
+    if: ${{ !cancelled() && needs.linux.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
@@ -109,6 +158,8 @@ jobs:
             runner: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.version != '' && format('v{0}', needs.release.outputs.version) || github.sha }}
       - uses: actions/download-artifact@v8
         with:
           name: openhlsw-linux-${{ matrix.arch }}
@@ -151,7 +202,8 @@ jobs:
 
   windows:
     name: windows ${{ matrix.arch }}
-    needs: check
+    needs: [check, release]
+    if: ${{ !cancelled() && needs.check.result == 'success' && needs.release.result != 'failure' }}
     runs-on: windows-2025
     strategy:
       fail-fast: false
@@ -168,6 +220,8 @@ jobs:
             wix_arch: arm64
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.version != '' && format('v{0}', needs.release.outputs.version) || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -237,10 +291,13 @@ jobs:
 
   macos:
     name: macos universal
-    needs: check
+    needs: [check, release]
+    if: ${{ !cancelled() && needs.check.result == 'success' && needs.release.result != 'failure' }}
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.version != '' && format('v{0}', needs.release.outputs.version) || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
@@ -314,10 +371,13 @@ jobs:
 
   freebsd:
     name: freebsd x86_64
-    needs: check
+    needs: [check, release]
+    if: ${{ !cancelled() && needs.check.result == 'success' && needs.release.result != 'failure' }}
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.version != '' && format('v{0}', needs.release.outputs.version) || github.sha }}
 
       - name: Version
         id: version
@@ -356,34 +416,22 @@ jobs:
           name: openhlsw-freebsd-x86_64
           path: dist/*.tar.gz
 
-  release:
-    name: GitHub release
-    needs: [linux, flatpak, windows, macos, freebsd]
+  upload:
+    name: add the packages to the release
+    needs: [release, linux, flatpak, windows, macos, freebsd]
+    if: ${{ !cancelled() && needs.release.outputs.version != '' }}
     runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    env:
+      RELEASE: ${{ needs.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - run: ls -l dist
-      - name: Release notes (only this version's CHANGELOG.md section)
-        shell: bash
-        run: |
-          tag="${GITHUB_REF_NAME}"
-          awk -v head="## [${tag}]" '
-            index($0, head) == 1 { found = 1; next }
-            found && /^## \[/ { exit }
-            found { print }
-          ' CHANGELOG.md | sed -e '/./,$!d' > release-notes.md
-          if [ ! -s release-notes.md ]; then
-            echo "openHLSW ${tag}" > release-notes.md
-          fi
-          printf '\nFull history: [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md)\n' \
-            "${GITHUB_REPOSITORY}" "${tag}" >> release-notes.md
-          cat release-notes.md
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: dist/*
-          body_path: release-notes.md
-          generate_release_notes: false
+      - name: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v$RELEASE" dist/* --repo "$GITHUB_REPOSITORY"
