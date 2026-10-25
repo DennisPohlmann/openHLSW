@@ -10,7 +10,8 @@ name: build
 # for a feat, fix or breaking change it sets the version in Cargo.toml and
 # Cargo.lock, writes CHANGELOG.md, commits that as "chore(release): vX.Y.Z
 # [skip ci]", tags vX.Y.Z and creates the GitHub release; the packages are
-# then built from that tag and added to the release. A manual run builds
+# then built from that tag and added to the release together with a
+# SHA256SUMS file. A manual run builds
 # without publishing. A pull request (e.g. from Dependabot) runs the same
 # checks and builds without publishing.
 on:
@@ -430,6 +431,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # SHA256SUMS lists the SHA-256 checksum of every package of the release;
+      # check a download with: sha256sum --check --ignore-missing SHA256SUMS
+      - name: checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
       - run: ls -l dist
       - name: upload
         env:

@@ -40,6 +40,8 @@ Ready-made packages are on the [releases page](https://github.com/DennisPohlmann
 - **macOS**: drag openHLSW to Applications. The app is only ad-hoc signed: on the first
   start, right-click → Open (or `xattr -dr com.apple.quarantine /Applications/openHLSW.app`).
 - **FreeBSD**: unpack the `.tar.gz` and start `openhlsw`.
+- **Checksums**: every release has a `SHA256SUMS` file with the SHA-256 checksum of each
+  package; check a download with `sha256sum --check --ignore-missing SHA256SUMS`.
 
 **Languages**: English, German, French, Spanish (Argentina), Portuguese (Portugal), Dutch,
 Danish, Swedish, Norwegian, Finnish, Polish, Czech, Slovak, Hungarian, Turkish, Russian,
@@ -131,7 +133,7 @@ Releases are made by [semantic-release](https://semantic-release.gitbook.io/) fr
 [Conventional Commits](https://www.conventionalcommits.org/) since the last tag: a `feat`
 (minor), `fix` / `perf` (patch) or breaking change (major) on `main` sets the version in
 `Cargo.toml` and `Cargo.lock`, writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
-release with all packages. Never tag by hand. Packaging files are in `packaging/`
+release with all packages and their `SHA256SUMS`. Never tag by hand. Packaging files are in `packaging/`
 (Linux desktop entry and Flatpak, WiX installer, macOS `Info.plist`).
 
 **Command line**:
