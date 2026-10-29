@@ -101,7 +101,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   are remembered.
 - Settings like HLSW: My Games, Startup, Connecting, Rcon, Connections, Sounds, Misc.
 - Sharp text: ClearType-like sub-pixel text on Windows, Linux and macOS (automatically off
-  on high-resolution screens), any installed font (shown in its own look), text size 12–16 px.
+  on high-resolution screens), any installed font (shown in its own look), text size 10–16 px
+  (12 px by default).
   openHLSW brings no fonts of its own.
 - Typing in an open dropdown jumps to the matching entry ("de" → Deutsch).
 
