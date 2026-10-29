@@ -57,6 +57,11 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   games): Auto detect finds Valve, GameSpy 1 and GameSpy 2 servers; for the other games
   choose the game, the usual port and query port are filled in.
 - Import Steam favorites, search the LAN, Multi Server Insert, filter, find (Ctrl+F / F3).
+- Export one server list (chosen in a dropdown) or all as JSON or CSV with the fields you choose (game,
+  comment, parameters, RCON options; the RCON password only when ticked, it is off by
+  default). Import JSON, CSV (semicolon separated, first row names the columns, `address`
+  required, empty values as `""`) or a text list; the import wizard shows the format and
+  lets you pick the fields, the target list and whether existing servers are updated.
 - Columns like HLSW: flag, name with game icon (and a key for servers with a password), game,
   map, players, ping (current + average), version, location and provider, add-ons (MM:S,
   SourceMod, AMXX, …), anti-cheat, limits, comment. Double-click a header to fit a column, right-click to show / hide columns.
@@ -176,6 +181,7 @@ src/
   filter.rs, iddb.rs, discover.rs            filter, Global ID Database, Steam favorites / LAN
   geo.rs, trace.rs, stats.rs                 location, Trace Route, traffic counters
   i18n.rs, config.rs                         languages, settings file
+  server_io.rs                               server list export / import (JSON, CSV, text)
   bin/openhlsw-cli.rs                        command line tool
 vendor/      egui's painting crates with sub-pixel text, see vendor/README.md
 assets/      icons, flags, translations (assets/lang/*.json)

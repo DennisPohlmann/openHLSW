@@ -39,6 +39,7 @@ use openhlsw::query::Protocol;
 use crate::geo::{self, GeoInfo};
 use crate::iddb::{self, IdDb, IdEntry, IdKind};
 use crate::native_window::NativeWindow;
+use crate::server_io::{self, Field};
 use crate::settings::{
     DialogResult, OnConnect, Settings, SettingsDialog, SettingsTab, SoundEvent, StartupSelection,
 };
@@ -809,7 +810,9 @@ enum Action {
     OpenList(String),
     DeleteList,
     RenameList(String),
-    ImportList,
+    /// Server list → Import: choose the file (the wizard opens again with it).
+    PickImportFile,
+    ImportServers(Box<ImportFile>),
     /// Server list: add the servers of Steam's favorites / history.
     ImportSteamFavorites,
     /// File → Advanced.
@@ -817,7 +820,7 @@ enum Action {
     ResetAllPings,
     /// Server list: broadcast for servers in the LAN.
     LanSearch,
-    ExportList,
+    ExportServers(ExportDraft),
     MultiInsert(String),
     MoveToList(ServerId, String),
     CopyToList(ServerId, String),
@@ -1285,6 +1288,55 @@ enum Dialog {
     Confirm(Confirm),
     /// A message with OK (title, text), like HLSW's message boxes.
     Message(String, String),
+    /// Server list → Export: what to write.
+    ExportServers(ExportDraft),
+    /// Server list → Import: the format guide, then what to take from the chosen file.
+    ImportServers(Box<ImportDraft>),
+}
+
+#[derive(Clone)]
+struct ExportDraft {
+    /// Name of the server list to export; `None` = all lists.
+    list: Option<String>,
+    csv: bool,
+    fields: Vec<(Field, bool)>,
+}
+
+impl Default for ExportDraft {
+    fn default() -> Self {
+        Self {
+            list: None,
+            csv: false,
+            fields: Field::ALL
+                .into_iter()
+                .map(|f| (f, f.exported_by_default()))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct ImportDraft {
+    /// Why the last chosen file could not be read.
+    error: Option<String>,
+    /// The chosen and read file.
+    file: Option<ImportFile>,
+}
+
+#[derive(Clone)]
+struct ImportFile {
+    path: String,
+    data: server_io::Imported,
+    /// The fields the file has, ticked = imported.
+    fields: Vec<(Field, bool)>,
+    /// Put servers into the server lists the file names instead of the current one.
+    as_lists: bool,
+    /// Servers already in the list get the imported values.
+    overwrite: bool,
+}
+
+fn chosen(fields: &[(Field, bool)]) -> Vec<Field> {
+    fields.iter().filter(|(_, on)| *on).map(|(f, _)| *f).collect()
 }
 
 /// Questions HLSW asks before doing something.
@@ -1635,6 +1687,44 @@ impl OpenHlswApp {
             added += 1;
         }
         added
+    }
+
+    /// Import with "Update servers already in the list": servers of the current list get the
+    /// values the import has (empty ones are left alone). Returns how many were updated.
+    fn update_servers(&mut self, saved: &[SavedServer]) -> usize {
+        let mut updated = 0;
+        for saved in saved {
+            let Some(address) = ServerAddress::parse(&saved.address) else {
+                continue;
+            };
+            let Some(s) = self.servers.iter_mut().find(|s| s.address == address) else {
+                continue;
+            };
+            if let Some(game) = saved.game.as_deref().and_then(games::by_key) {
+                s.game = Some(game);
+            }
+            if !saved.comment.is_empty() {
+                s.comment.clone_from(&saved.comment);
+            }
+            if !saved.params.is_empty() {
+                s.params.clone_from(&saved.params);
+            }
+            if let Some(pw) = &saved.rcon_password {
+                s.rcon_password.clone_from(pw);
+                s.save_password = true;
+                s.rcon_status = RconStatus::Unknown;
+                s.use_typed_rcon_password();
+            }
+            let interval = s.status_interval;
+            (s.hide_password, s.auto_update_status, s.status_interval) =
+                rcon_options(saved, s.hide_password, s.auto_update_status);
+            if saved.status_interval.is_none() {
+                // rcon_options gives the default for a missing interval: keep the server's.
+                s.status_interval = interval;
+            }
+            updated += 1;
+        }
+        updated
     }
 
     fn saved_server(s: &Server) -> SavedServer {
@@ -2974,82 +3064,164 @@ impl OpenHlswApp {
                 self.lan_search = Some(rx);
                 self.status_message = tr!("Searching the LAN for servers…").into();
             }
-            Action::ImportList => {
-                let Some(path) = rfd::FileDialog::new()
+            Action::PickImportFile => {
+                let mut draft = ImportDraft::default();
+                if let Some(path) = rfd::FileDialog::new()
                     .set_title(tr!("Import server list"))
-                    .add_filter(tr!("Server list"), &["txt", "json", "cfg"])
+                    .add_filter(tr!("Server list"), &["json", "csv", "txt", "cfg"])
                     .add_filter(tr!("All files"), &["*"])
                     .pick_file()
-                else {
-                    return;
-                };
-                match std::fs::read_to_string(&path) {
-                    Ok(text) => {
-                        let saved = parse_server_list_file(&text);
-                        let added = self.add_saved_servers(&saved, false);
-                        self.status_message = tr!(
-                            "Imported {added} of {count} servers from {path}",
-                            added = added,
-                            count = saved.len(),
-                            path = path.display()
-                        );
-                        self.last_list_refresh = None;
-                        self.save_config();
-                    }
-                    Err(e) => {
-                        self.status_message =
-                            tr!("Could not read {path}: {e}", path = path.display(), e = e)
+                {
+                    let csv = path
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
+                    match read_import_file(&path).and_then(|text| server_io::import(&text, csv))
+                    {
+                        Ok(data) => {
+                            draft.file = Some(ImportFile {
+                                path: path.display().to_string(),
+                                fields: data.fields.iter().map(|f| (*f, true)).collect(),
+                                as_lists: false,
+                                overwrite: false,
+                                data,
+                            })
+                        }
+                        Err(e) => {
+                            draft.error = Some(tr!(
+                                "Could not read {path}: {e}",
+                                path = path.display(),
+                                e = e
+                            ))
+                        }
                     }
                 }
+                self.dialog = Some(Dialog::ImportServers(Box::new(draft)));
             }
-            Action::ExportList => {
-                let Some(path) = rfd::FileDialog::new()
-                    .set_title(tr!("Export server list"))
-                    .set_file_name(format!("{}.txt", self.list_name))
-                    .add_filter(tr!("Text (one address per line)"), &["txt"])
-                    .add_filter(tr!("openHLSW JSON"), &["json"])
-                    .save_file()
-                else {
-                    return;
-                };
-                let is_json = path
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("json"));
-                let content = if is_json {
-                    let list = SavedList {
-                        name: self.list_name.clone(),
-                        servers: self
+            Action::ImportServers(file) => {
+                let fields = chosen(&file.fields);
+                let (mut added, mut updated) = (0, 0);
+                for (name, servers) in file.data.filtered(&fields) {
+                    let target = name.filter(|n| file.as_lists && *n != self.list_name);
+                    let (a, u) = match target {
+                        Some(name) => {
+                            let pos = match self.other_lists.iter().position(|l| l.name == name) {
+                                Some(pos) => pos,
+                                None => {
+                                    self.other_lists.push(SavedList {
+                                        name,
+                                        servers: Vec::new(),
+                                    });
+                                    self.other_lists.len() - 1
+                                }
+                            };
+                            server_io::merge_into(
+                                &mut self.other_lists[pos].servers,
+                                &servers,
+                                file.overwrite,
+                            )
+                        }
+                        None => {
+                            let u = if file.overwrite {
+                                self.update_servers(&servers)
+                            } else {
+                                0
+                            };
+                            (self.add_saved_servers(&servers, false), u)
+                        }
+                    };
+                    added += a;
+                    updated += u;
+                }
+                let mut text = tr!(
+                    "{added} servers added, {updated} updated.",
+                    added = added,
+                    updated = updated
+                );
+                let skipped = file.data.server_count().saturating_sub(added + updated);
+                if skipped > 0 {
+                    text += "\n";
+                    text += &tr!(
+                        "{n} servers were already in the list and left unchanged.",
+                        n = skipped
+                    );
+                }
+                if !file.data.skipped.is_empty() {
+                    text += "\n";
+                    text += &tr!(
+                        "{n} entries of the file could not be read.",
+                        n = file.data.skipped.len()
+                    );
+                }
+                self.dialog = Some(Dialog::Message(tr!("Import").into(), text));
+                self.last_list_refresh = None;
+                self.save_config();
+            }
+            Action::ExportServers(draft) => {
+                let fields = chosen(&draft.fields);
+                let mut lists = vec![SavedList {
+                    name: self.list_name.clone(),
+                    servers: self.servers.iter().map(Self::saved_server).collect(),
+                }];
+                {
+                    // Entries of an old config take the old global RCON options.
+                    let (hide, auto) = rcon_fallback(
+                        true,
+                        self.legacy_hide_password,
+                        self.legacy_auto_update_status,
+                    );
+                    lists.extend(self.other_lists.iter().map(|l| SavedList {
+                        name: l.name.clone(),
+                        servers: l
                             .servers
                             .iter()
-                            .map(|s| SavedServer {
-                                rcon_password: None,
-                                ..Self::saved_server(s)
+                            .map(|s| {
+                                let (h, a, i) = rcon_options(s, hide, auto);
+                                SavedServer {
+                                    hide_rcon_password: Some(h),
+                                    auto_update_status: Some(a),
+                                    status_interval: Some(i),
+                                    ..s.clone()
+                                }
                             })
                             .collect(),
-                    };
-                    serde_json::to_string_pretty(&list).unwrap_or_default()
+                    }));
+                }
+                if let Some(name) = &draft.list {
+                    lists.retain(|l| l.name == *name);
+                }
+                let (ext, filter) = if draft.csv {
+                    ("csv", tr!("CSV (semicolon separated)"))
                 } else {
-                    self.servers
-                        .iter()
-                        .map(|s| {
-                            if s.comment.is_empty() {
-                                s.address.to_string()
-                            } else {
-                                format!("{} {}", s.address, s.comment)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                        + "\n"
+                    ("json", tr!("openHLSW JSON"))
                 };
-                self.status_message = match std::fs::write(&path, content) {
-                    Ok(()) => tr!(
-                        "Exported {count} servers to {path}",
-                        count = self.servers.len(),
-                        path = path.display()
-                    ),
-                    Err(e) => tr!("Could not write {path}: {e}", path = path.display(), e = e),
+                let name = draft.list.clone().unwrap_or_else(|| "openHLSW".into());
+                let Some(path) = rfd::FileDialog::new()
+                    .set_title(tr!("Export server list"))
+                    .set_file_name(format!("{name}.{ext}"))
+                    .add_filter(filter, &[ext])
+                    .save_file()
+                else {
+                    // Back to the wizard.
+                    self.dialog = Some(Dialog::ExportServers(draft));
+                    return;
                 };
+                let content = if draft.csv {
+                    server_io::export_csv(&lists, &fields)
+                } else {
+                    server_io::export_json(&lists, &fields)
+                };
+                let count: usize = lists.iter().map(|l| l.servers.len()).sum();
+                self.status_message =
+                    match write_export(&path, &content, fields.contains(&Field::RconPassword)) {
+                        Ok(()) => tr!(
+                            "Exported {count} servers to {path}",
+                            count = count,
+                            path = path.display()
+                        ),
+                        Err(e) => {
+                            tr!("Could not write {path}: {e}", path = path.display(), e = e)
+                        }
+                    };
             }
             Action::MultiInsert(text) => {
                 let saved = parse_server_list_file(&text);
@@ -3932,11 +4104,14 @@ impl OpenHlswApp {
                 }
                 ui.separator();
                 if ui.button(tr!("Import...")).clicked() {
-                    actions.push(Action::ImportList);
+                    actions.push(Action::OpenDialog(Dialog::ImportServers(Box::default())));
                     ui.close();
                 }
                 if ui.button(tr!("Export...")).clicked() {
-                    actions.push(Action::ExportList);
+                    actions.push(Action::OpenDialog(Dialog::ExportServers(ExportDraft {
+                        list: Some(self.list_name.clone()),
+                        ..Default::default()
+                    })));
                     ui.close();
                 }
                 ui.separator();
@@ -5355,6 +5530,8 @@ impl OpenHlswApp {
             Dialog::Confirm(Confirm::ChangeLevel(..)) => tr!("Change Level"),
             Dialog::Confirm(Confirm::ConnectNoPassword(_)) => tr!("Password"),
             Dialog::Message(title, _) => title.as_str(),
+            Dialog::ExportServers(_) => tr!("Export server list"),
+            Dialog::ImportServers(_) => tr!("Import server list"),
         };
         let confirm_text = match &dialog {
             Dialog::Confirm(Confirm::DeleteServer(id)) => {
@@ -5379,13 +5556,29 @@ impl OpenHlswApp {
             _ => String::new(),
         };
         let list_name = self.list_name.clone();
+        // Server lists for the export wizard: name and number of servers.
+        let export_lists: Vec<(String, usize)> = self
+            .list_names()
+            .into_iter()
+            .map(|name| {
+                let count = if name == self.list_name {
+                    self.servers.len()
+                } else {
+                    self.other_lists
+                        .iter()
+                        .find(|l| l.name == name)
+                        .map_or(0, |l| l.servers.len())
+                };
+                (name, count)
+            })
+            .collect();
         let connect_log = &self.connect_log;
         NativeWindow::new(("menu_dialog", title), title)
             .open(&mut open)
             .collapsible(false)
             .resizable(matches!(
                 dialog,
-                Dialog::MultiInsert(_) | Dialog::ConnectLog
+                Dialog::MultiInsert(_) | Dialog::ConnectLog | Dialog::ImportServers(_)
             ))
             .default_width(380.0)
             // Message boxes draw their own white area and button band, edge to edge.
@@ -5594,6 +5787,29 @@ impl OpenHlswApp {
                             close = true;
                         }
                         close |= cancel;
+                    }
+                    Dialog::ExportServers(draft) => {
+                        let (export, cancel) =
+                            export_wizard(ui, draft, &export_lists);
+                        if export {
+                            actions.push(Action::ExportServers(draft.clone()));
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::ImportServers(draft) => {
+                        match import_wizard(ui, draft, &list_name) {
+                            ImportStep::Stay => {}
+                            ImportStep::PickFile => {
+                                actions.push(Action::PickImportFile);
+                                close = true;
+                            }
+                            ImportStep::Import(file) => {
+                                actions.push(Action::ImportServers(file));
+                                close = true;
+                            }
+                            ImportStep::Cancel => close = true,
+                        }
                     }
                     Dialog::ConnectLog => {
                         ScrollArea::vertical()
@@ -10064,49 +10280,250 @@ fn mask_password(text: &str, password: Option<&str>) -> String {
     out
 }
 
-/// Server list file / pasted text: openHLSW JSON export, or one address per line
-/// (`host:port [comment]`; `#` / `//` lines are ignored; commas and semicolons separate too).
-fn parse_server_list_file(text: &str) -> Vec<SavedServer> {
-    if let Ok(list) = serde_json::from_str::<SavedList>(text) {
-        return list.servers;
-    }
-    if let Ok(servers) = serde_json::from_str::<Vec<SavedServer>>(text) {
-        return servers;
-    }
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
-            continue;
+const WIZARD_BUTTON: egui::Vec2 = egui::vec2(90.0, 22.0);
+
+/// Server list → Export: which servers, format and fields. Returns (export, cancel).
+fn export_wizard(
+    ui: &mut Ui,
+    draft: &mut ExportDraft,
+    lists: &[(String, usize)],
+) -> (bool, bool) {
+    ui.strong(tr!("Server list"));
+    let all = tr!("All server lists ({count})", count = lists.len());
+    let label = |list: &Option<String>| match list {
+        Some(name) => {
+            let count = lists.iter().find(|(n, _)| n == name).map_or(0, |(_, c)| *c);
+            tr!("{name} ({count} servers)", name = name, count = count)
         }
-        // "a:1, b:2" or "a:1 comment"
-        if line.contains([',', ';']) {
-            for part in line.split([',', ';']) {
-                if let Some(addr) = ServerAddress::parse(part.trim()) {
-                    out.push(SavedServer {
-                        address: addr.to_string(),
-                        rcon_password: None,
-                        comment: String::new(),
-                        last_connected: None,
-                        info: None,
-                        last_seen: None,
-                        ..Default::default()
-                    });
-                }
+        None => all.clone(),
+    };
+    egui::ComboBox::from_id_salt("export_list")
+        .width(300.0)
+        .selected_text(label(&draft.list))
+        .show_ui(ui, |ui| {
+            for (name, _) in lists {
+                let value = Some(name.clone());
+                let text = label(&value);
+                ui.selectable_value(&mut draft.list, value, text);
             }
-            continue;
-        }
-        let (first, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
-        if let Some(addr) = ServerAddress::parse(first) {
-            out.push(SavedServer {
-                address: addr.to_string(),
-                rcon_password: None,
-                comment: rest.trim().to_string(),
-                ..Default::default()
+            if lists.len() > 1 {
+                ui.selectable_value(&mut draft.list, None, all.clone());
+            }
+        });
+    ui.add_space(6.0);
+    ui.strong(tr!("Format"));
+    ui.radio_value(&mut draft.csv, false, "JSON");
+    ui.radio_value(&mut draft.csv, true, tr!("CSV (semicolon separated)"));
+    ui.add_space(6.0);
+    ui.strong(tr!("Fields"));
+    ui.add_enabled(false, egui::Checkbox::new(&mut true, tr!("Address")));
+    for (field, on) in &mut draft.fields {
+        ui.checkbox(on, field.label());
+        if *field == Field::RconPassword && *on {
+            ui.indent("rcon_password_hint", |ui| {
+                ui.colored_label(
+                    Color32::from_rgb(220, 120, 40),
+                    tr!("The passwords are written to the file in plain text. Only servers with a saved password have one."),
+                );
             });
         }
     }
-    out
+    ui.add_space(8.0);
+    let mut r = (false, false);
+    ui.horizontal(|ui| {
+        r.0 = ui
+            .add(Button::new(tr!("Export...")).min_size(WIZARD_BUTTON))
+            .clicked();
+        r.1 = ui
+            .add(Button::new(tr!("Cancel")).min_size(WIZARD_BUTTON))
+            .clicked();
+    });
+    r
+}
+
+enum ImportStep {
+    Stay,
+    PickFile,
+    Import(Box<ImportFile>),
+    Cancel,
+}
+
+/// Server list → Import: the format guide and file choice, then what to take from the file.
+fn import_wizard(ui: &mut Ui, draft: &mut ImportDraft, list_name: &str) -> ImportStep {
+    let mut step = ImportStep::Stay;
+    let Some(file) = &mut draft.file else {
+        ui.label(tr!(
+            "Adds servers from an openHLSW export (JSON), a CSV file or a text list. After choosing the file you can pick what to take over."
+        ));
+        ui.add_space(6.0);
+        ui.strong("CSV");
+        ui.label(tr!(
+            "Separator: semicolon (;). The first row names the columns. Values may be in double quotes, an empty value is written as \"\", a quote inside a value is doubled."
+        ));
+        ui.label(tr!(
+            "Columns: address (required), list, game, comment, params, rcon_password, hide_rcon_password, auto_update_status, status_interval. Order does not matter, unknown columns are ignored."
+        ));
+        ui.label(tr!(
+            "hide_rcon_password, auto_update_status: true or false (also 1 or 0). status_interval: seconds (5 to 600). list: name of the server list."
+        ));
+        ui.add_space(2.0);
+        ui.label(tr!("Example:"));
+        let mut example = String::from(
+            "\"list\";\"address\";\"comment\";\"rcon_password\";\"auto_update_status\"\n\
+             \"Clan\";\"203.0.113.10:27015\";\"Public server\";\"\";\"true\"\n\
+             \"Clan\";\"example.org:27016\";\"\";\"\";\"false\"",
+        );
+        ui.add(
+            TextEdit::multiline(&mut example)
+                .font(egui::TextStyle::Monospace)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY)
+                .interactive(false),
+        );
+        ui.add_space(6.0);
+        ui.strong("JSON");
+        ui.label(tr!(
+            "Files from Server list → Export. The keys are the same as the CSV columns."
+        ));
+        ui.add_space(6.0);
+        ui.strong(tr!("Text"));
+        ui.label(tr!("One address per line, optionally followed by a comment."));
+        if let Some(e) = &draft.error {
+            ui.add_space(6.0);
+            ui.colored_label(Color32::from_rgb(220, 60, 60), e);
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui
+                .add(Button::new(tr!("Choose file...")).min_size(WIZARD_BUTTON))
+                .clicked()
+            {
+                step = ImportStep::PickFile;
+            }
+            if ui
+                .add(Button::new(tr!("Cancel")).min_size(WIZARD_BUTTON))
+                .clicked()
+            {
+                step = ImportStep::Cancel;
+            }
+        });
+        return step;
+    };
+    let data = &file.data;
+    ui.label(tr!("File: {path}", path = file.path));
+    ui.label(tr!(
+        "Format: {format}, {count} servers in {lists} server lists",
+        format = data.format.name(),
+        count = data.server_count(),
+        lists = data.lists.len()
+    ));
+    if !data.skipped.is_empty() {
+        egui::CollapsingHeader::new(tr!(
+            "{n} entries could not be read",
+            n = data.skipped.len()
+        ))
+        .show(ui, |ui| {
+            ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                for reason in &data.skipped {
+                    ui.label(reason);
+                }
+            });
+        });
+    }
+    ui.add_space(6.0);
+    ui.strong(tr!("Fields"));
+    ui.add_enabled(false, egui::Checkbox::new(&mut true, tr!("Address")));
+    for (field, on) in &mut file.fields {
+        ui.checkbox(on, field.label());
+    }
+    ui.add_space(6.0);
+    ui.strong(tr!("Import into"));
+    ui.radio_value(
+        &mut file.as_lists,
+        false,
+        tr!("Current server list ({name})", name = list_name),
+    );
+    ui.add_enabled_ui(data.has_list_names(), |ui| {
+        ui.radio_value(
+            &mut file.as_lists,
+            true,
+            tr!("The server lists named in the file (new ones are created)"),
+        )
+        .on_disabled_hover_text(tr!("The file names no server lists"));
+    });
+    ui.add_space(6.0);
+    ui.checkbox(
+        &mut file.overwrite,
+        tr!("Update servers that are already in the list"),
+    )
+    .on_hover_text(tr!(
+        "Servers already in the list get the chosen values from the file. Otherwise they are left as they are."
+    ));
+    ui.add_space(8.0);
+    let mut back = false;
+    ui.horizontal(|ui| {
+        if ui
+            .add(Button::new(tr!("Import")).min_size(WIZARD_BUTTON))
+            .clicked()
+        {
+            step = ImportStep::Import(Box::new(file.clone()));
+        }
+        if ui
+            .add(Button::new(tr!("Back")).min_size(WIZARD_BUTTON))
+            .clicked()
+        {
+            back = true;
+        }
+        if ui
+            .add(Button::new(tr!("Cancel")).min_size(WIZARD_BUTTON))
+            .clicked()
+        {
+            step = ImportStep::Cancel;
+        }
+    });
+    if back {
+        draft.file = None;
+    }
+    step
+}
+
+/// Pasted text (Multi Server Insert): one address per line (`host:port [comment]`; `#` /
+/// `//` lines are ignored; commas and semicolons separate too), or an openHLSW export.
+fn parse_server_list_file(text: &str) -> Vec<SavedServer> {
+    server_io::import(text, false)
+        .map(|i| i.lists.into_iter().flat_map(|(_, s)| s).collect())
+        .unwrap_or_default()
+}
+
+/// Reads a file to import, refusing anything far too big for a server list.
+fn read_import_file(path: &std::path::Path) -> Result<String, String> {
+    const MAX: u64 = 16 * 1024 * 1024;
+    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > MAX {
+        return Err(tr!("The file is too big ({size} MB).", size = size / (1024 * 1024)));
+    }
+    std::fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+/// Writes an export; with RCON passwords in it only readable by the user (Unix).
+fn write_export(path: &std::path::Path, content: &str, secret: bool) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if secret {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    // `mode` only applies to a new file; an overwritten one keeps its permissions.
+    #[cfg(unix)]
+    if secret {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = secret;
+    std::io::Write::write_all(&mut file, content.as_bytes())
 }
 
 fn merge_maps(maps: &mut Vec<String>, new: Vec<String>) {

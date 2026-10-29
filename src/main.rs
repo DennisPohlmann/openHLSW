@@ -26,6 +26,7 @@ mod geo;
 mod i18n;
 mod iddb;
 mod native_window;
+mod server_io;
 mod settings;
 mod theme;
 mod toolbar_icons;
