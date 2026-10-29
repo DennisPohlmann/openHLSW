@@ -91,6 +91,10 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   waiting for a free slot.
 - Trace Route window with ping graph per hop; Global Player ID Database (`banned.cfg`
   import / export).
+- Console and Chat in a big window of their own (toolbar button or the window button next
+  to the console input): console above, chat below, the divider can be dragged (console
+  20–90 %); input, history, find and switches are the same as in the tabs. Size and divider
+  are remembered.
 - Settings like HLSW: My Games, Startup, Connecting, Rcon, Connections, Sounds, Misc.
 - Sharp text: ClearType-like sub-pixel text on Windows, Linux and macOS (automatically off
   on high-resolution screens), any installed font (shown in its own look), text size 12–16 px.

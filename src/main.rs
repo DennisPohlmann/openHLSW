@@ -68,7 +68,7 @@ fn main() -> eframe::Result {
             // Taskbar / Alt+Tab icon from the icon embedded in the .exe.
             #[cfg(windows)]
             win_icon::apply(cc);
-            Ok(Box::new(app::OpenHlswApp::new(cc)))
+            Ok(Box::new(app::AppHandle::new(app::OpenHlswApp::new(cc))))
         }),
     )
 }

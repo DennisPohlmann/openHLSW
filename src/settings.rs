@@ -709,6 +709,10 @@ pub struct ViewOptions {
     pub toolbar: bool,
     pub status_bar: bool,
     pub ping_graph: bool,
+    /// Big console window (button next to the console input): share of its height for
+    /// the console above the chat (0.2–0.9), and its size.
+    pub console_window_split: f32,
+    pub console_window_size: [f32; 2],
     /// Columns switched off in the header's right-click menu (column titles).
     pub hidden_server_columns: Vec<String>,
     /// Visible columns of the players list (titles, in any order).
@@ -731,6 +735,8 @@ impl Default for ViewOptions {
             toolbar: true,
             status_bar: true,
             ping_graph: true,
+            console_window_split: 0.75,
+            console_window_size: [1000.0, 720.0],
             hidden_server_columns: Vec::new(),
             player_columns: [
                 "Country",

@@ -11,7 +11,7 @@ use eframe::egui::{
 const STRIP_16: &[u8] = include_bytes!("../assets/toolbar/toolbar-16.png");
 const STRIP_32: &[u8] = include_bytes!("../assets/toolbar/toolbar-32.png");
 
-/// Icons in the order of the strips (file names 01_… to 10_…).
+/// Icons in the order of the strips (file names 01_… to 11_…).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
     Connect,
@@ -24,9 +24,10 @@ pub enum ToolIcon {
     ListProperties,
     ServerProperties,
     About,
+    ConsoleWindow,
 }
 
-const COUNT: usize = 10;
+const COUNT: usize = 11;
 
 struct Strip {
     texture: TextureHandle,

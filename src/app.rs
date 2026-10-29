@@ -838,6 +838,8 @@ enum Action {
     RconDisconnect(ServerId),
     SendConsole(ServerId),
     ClearConsole(ServerId),
+    /// Open or close the big console and chat window (toolbar).
+    ToggleConsoleWindow,
     SwitchTab(Tab),
     FetchBans(ServerId),
     /// Open the Global Player ID Database Editor, optionally on an ID.
@@ -1380,6 +1382,12 @@ pub struct OpenHlswApp {
     dialog: Option<Dialog>,
     /// The Trace Route window, while open.
     trace: Option<crate::trace::TraceRoute>,
+    /// Console and chat in a big window of their own (button next to the console input).
+    console_window: bool,
+    /// Its current size; goes into the settings when it is closed.
+    console_window_size: Option<egui::Vec2>,
+    /// The app itself, for the big console window (see [`AppHandle`]).
+    this: std::sync::Weak<std::sync::Mutex<OpenHlswApp>>,
     search_id: Option<egui::Id>,
     flags: Option<Flags>,
     game_icons: Option<GameIcons>,
@@ -1568,6 +1576,9 @@ impl OpenHlswApp {
             connect_log: config.connect_log.clone(),
             dialog: None,
             trace: None,
+            console_window: false,
+            console_window_size: None,
+            this: std::sync::Weak::new(),
             search_id: None,
             flags: Flags::load(&cc.egui_ctx),
             game_icons: GameIcons::load(&cc.egui_ctx),
@@ -3365,6 +3376,7 @@ impl OpenHlswApp {
                     s.console.clear();
                 }
             }
+            Action::ToggleConsoleWindow => self.console_window = !self.console_window,
             Action::SwitchTab(tab) => {
                 self.tab = tab;
                 // Load ban list / map list the first time the tab is opened.
@@ -3801,6 +3813,36 @@ impl OpenHlswApp {
     }
 }
 
+/// The app behind a lock, so that the big console window – a viewport that is redrawn on its
+/// own, see `console_window` – can draw from the same state as the main window.
+pub struct AppHandle(std::sync::Arc<std::sync::Mutex<OpenHlswApp>>);
+
+impl AppHandle {
+    pub fn new(app: OpenHlswApp) -> Self {
+        let app = std::sync::Arc::new(std::sync::Mutex::new(app));
+        lock_app(&app).this = std::sync::Arc::downgrade(&app);
+        Self(app)
+    }
+}
+
+fn lock_app(app: &std::sync::Mutex<OpenHlswApp>) -> std::sync::MutexGuard<'_, OpenHlswApp> {
+    app.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl eframe::App for AppHandle {
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        lock_app(&self.0).on_exit(gl);
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        lock_app(&self.0).logic(ctx, frame);
+    }
+
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        lock_app(&self.0).ui(ui, frame);
+    }
+}
+
 impl eframe::App for OpenHlswApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if self.iddb_dirty {
@@ -3810,14 +3852,25 @@ impl eframe::App for OpenHlswApp {
         self.port_mapper.shutdown(Duration::from_secs(3));
     }
 
+    /// Also runs while the main window is hidden or covered (no `ui` then).
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.process_events();
+        self.tick(ctx);
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         theme::snap_text_sizes(ui.ctx());
         theme::update_text_smoothing(ui.ctx(), self.settings.text_smoothing, &self.settings.font);
-        self.process_events();
-        self.tick(&ui.ctx().clone());
         // While minimized the window has (almost) no size: laying out the panels now would
         // shrink them and that size would be remembered. Draw nothing until it is restored.
         if ui.ctx().input(|i| i.viewport().minimized) == Some(true) {
+            // The big console window stays open meanwhile.
+            let ctx = ui.ctx().clone();
+            let mut actions = Vec::new();
+            self.console_window(&ctx, &mut actions);
+            for action in actions {
+                self.apply(action, &ctx);
+            }
             return;
         }
 
@@ -4309,6 +4362,24 @@ impl OpenHlswApp {
             if icons.button(ui, icon, true, on, tip).clicked() {
                 actions.push(Action::ToggleView(icon));
             }
+        }
+        // Console and chat of the selected server in the big window (closes it again).
+        let big = self.console_window;
+        if icons
+            .button(
+                ui,
+                ToolIcon::ConsoleWindow,
+                has || big,
+                big,
+                if big {
+                    tr!("Back to the main window")
+                } else {
+                    tr!("Console and chat in a big window")
+                },
+            )
+            .clicked()
+        {
+            actions.push(Action::ToggleConsoleWindow);
         }
         toolbar_separator(ui, p);
         if icons
@@ -4939,6 +5010,9 @@ impl OpenHlswApp {
                 let rcon = self.servers[idx].supports_rcon();
                 let resp = ui.add_enabled_ui(rcon, |ui| match self.tab {
                     Tab::RconConfig => self.rcon_config_tab(ui, p, idx, actions),
+                    Tab::Console | Tab::Chat if self.console_window => {
+                        self.console_window_note(ui)
+                    }
                     Tab::Console => self.console_tab(ui, p, idx, actions),
                     Tab::Chat => self.chat_tab(ui, p, idx, actions),
                     Tab::BanList => self.ban_tab(ui, p, idx, actions),
@@ -5232,6 +5306,7 @@ impl OpenHlswApp {
         let history_pos = &mut self.history_pos;
         let input_id = &mut self.console_input_id;
         let autoscroll = &mut self.console_autoscroll;
+        let big_window = &mut self.console_window;
         egui::Panel::bottom("console_input")
             .frame(Frame::new().inner_margin(Margin {
                 top: 4,
@@ -5240,7 +5315,7 @@ impl OpenHlswApp {
             .show_separator_line(false)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let width = (ui.available_width() - 210.0).max(100.0);
+                    let width = (ui.available_width() - 230.0).max(100.0);
                     let resp = ui
                         .add(
                             TextEdit::singleline(input)
@@ -5334,6 +5409,15 @@ impl OpenHlswApp {
                         .clicked()
                     {
                         actions.push(Action::ClearConsole(id));
+                    }
+                    let r = toggle_button(ui, p, "", *big_window).on_hover_text(if *big_window {
+                        tr!("Back to the main window")
+                    } else {
+                        tr!("Console and chat in a big window")
+                    });
+                    window_icon(ui, p, r.rect);
+                    if r.clicked() {
+                        *big_window = !*big_window;
                     }
                 });
             });
@@ -5543,6 +5627,182 @@ impl OpenHlswApp {
         if close {
             self.trace = None;
         }
+    }
+
+    /// Console and chat of the selected server in a big window of their own: the console
+    /// above, the chat below, the divider between them can be dragged. Both share their
+    /// state (input, history, find, switches) with the Console and Chat tabs, which show a
+    /// note meanwhile.
+    fn console_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        if !self.console_window {
+            // Closed (×, window button or the note's button): remember its size.
+            if let Some(size) = self.console_window_size.take() {
+                self.settings.view.console_window_size = [size.x.round(), size.y.round()];
+                actions.push(Action::SaveConfig);
+            }
+            return;
+        }
+        let idx = self.selected_index();
+        let title = match idx.and_then(|i| self.servers[i].info.as_ref()) {
+            Some(info) if !info.name.is_empty() => {
+                format!("openHLSW {} – {}", tr!("Console"), info.name)
+            }
+            _ => format!("openHLSW {}", tr!("Console")),
+        };
+        // The start size only: it must not follow the window while it is resized, or egui
+        // sends the (one frame old) size back to the window every frame.
+        let [w, h] = self.settings.view.console_window_size;
+        let id = egui::ViewportId::from_hash_of("console_window");
+        let builder = egui::ViewportBuilder::default()
+            .with_title(title)
+            .with_inner_size([w.clamp(500.0, 8000.0), h.clamp(300.0, 8000.0)])
+            .with_min_inner_size([500.0, 300.0]);
+        if ctx.embed_viewports() {
+            // No windows of our own (some Linux setups): drawn inside the main window.
+            ctx.show_viewport_immediate(id, builder, |ui, _class| self.console_window_ui(ui));
+            return;
+        }
+        // A deferred viewport, redrawn on its own. An immediate one is drawn while the main
+        // window draws, and that stops on Wayland as soon as the main window is covered
+        // (e.g. by this window maximized): the compositor sends it no more frame callbacks,
+        // so this window froze too.
+        let app = self.this.clone();
+        ctx.show_viewport_deferred(id, builder, move |ui, _class| {
+            let Some(app) = app.upgrade() else { return };
+            // Never blocks: the main window is not drawn at the same time.
+            if let Ok(mut app) = app.try_lock() {
+                app.console_window_ui(ui);
+            } else {
+                ui.ctx().request_repaint();
+            }
+        });
+    }
+
+    /// Contents of the big console window, drawn in its own viewport.
+    fn console_window_ui(&mut self, ui: &mut Ui) {
+        // RCON answers and log lines also arrive while the main window is covered.
+        self.process_events();
+        let ctx = ui.ctx().clone();
+        let selected = self.selected;
+        if ui.input(|i| i.viewport().close_requested()) {
+            self.console_window = false;
+        }
+        // Window size in points (`inner_rect` is unknown on Wayland); not while maximized,
+        // the next start opens it at its normal size.
+        let (size, maximized) =
+            ui.input(|i| (i.viewport_rect().size(), i.viewport().maximized == Some(true)));
+        if !maximized && size.x >= 1.0 && size.y >= 1.0 {
+            self.console_window_size = Some(size);
+        }
+        let p = self.settings.theme.palette();
+        let idx = self.selected_index();
+        let mut actions = Vec::new();
+        egui::CentralPanel::default()
+            .frame(Frame::new().fill(p.window).inner_margin(Margin::same(6)))
+            .show(ui, |ui| {
+                ui.push_id("console_window", |ui| {
+                    self.console_window_view(ui, &p, idx, &mut actions)
+                })
+            });
+        for action in actions {
+            self.apply(action, &ctx);
+        }
+        if !self.console_window && !ctx.embed_viewports() {
+            // Hide it right away: the main window removes it in its next frame, which only
+            // comes once this window no longer covers it (on Wayland a covered window is not
+            // redrawn). Wayland cannot hide a window, only minimize it.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        // The main window shows that state too (note, toolbar button, selection).
+        if !self.console_window || self.selected != selected {
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+        }
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
+    fn console_window_view(
+        &mut self,
+        ui: &mut Ui,
+        p: &Palette,
+        idx: Option<usize>,
+        actions: &mut Vec<Action>,
+    ) {
+        let Some(idx) = idx else {
+            ui.add_enabled_ui(false, |ui| ui.label(tr!("Select a server in the list first.")));
+            return;
+        };
+        if !self.servers[idx].supports_rcon() {
+            ui.add_enabled_ui(false, |ui| ui.label(tr!("RCON is not supported for this game")));
+            return;
+        }
+        // The find shortcuts of the main window, for this window.
+        ui.input_mut(|i| {
+            use egui::{KeyboardShortcut, Modifiers};
+            if i.consume_shortcut(&KeyboardShortcut::new(
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                Key::F,
+            )) {
+                self.console_find.get_or_insert_with(Default::default).focus = true;
+            }
+            if i.key_pressed(Key::F3)
+                && let Some(f) = &mut self.console_find
+            {
+                f.pos += 1;
+                f.scroll = true;
+            }
+        });
+
+        let rect = ui.available_rect_before_wrap();
+        let (_, divider, _) = split_console_window(rect, self.settings.view.console_window_split);
+        let drag = ui.interact(divider, ui.make_persistent_id("divider"), Sense::drag());
+        if let Some(pos) = drag.interact_pointer_pos().filter(|_| drag.dragged()) {
+            self.settings.view.console_window_split = split_from_pointer(rect, pos.y);
+        }
+        if drag.drag_stopped() {
+            actions.push(Action::SaveConfig);
+        }
+        let drag = drag.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+        let (console_rect, divider, chat_rect) =
+            split_console_window(rect, self.settings.view.console_window_split);
+        if drag.hovered() || drag.dragged() {
+            ui.painter().hline(
+                rect.x_range(),
+                divider.center().y,
+                Stroke::new(2.0, p.button_hover_border),
+            );
+        }
+
+        let frame = Frame::new()
+            .fill(p.window)
+            .stroke(Stroke::new(1.0, p.list_border))
+            .inner_margin(6);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(console_rect), |ui| {
+            egui::CentralPanel::default()
+                .frame(frame)
+                .show(ui, |ui| self.console_tab(ui, p, idx, actions));
+        });
+        ui.scope_builder(egui::UiBuilder::new().max_rect(chat_rect), |ui| {
+            egui::CentralPanel::default()
+                .frame(frame)
+                .show(ui, |ui| self.chat_tab(ui, p, idx, actions));
+        });
+        ui.allocate_rect(rect, Sense::hover());
+    }
+
+    /// Console and Chat tab while they are shown in the big window.
+    fn console_window_note(&mut self, ui: &mut Ui) {
+        ui.add_space(4.0);
+        ui.label(tr!("Console and chat are open in their own window."));
+        ui.add_space(4.0);
+        if ui
+            .add(Button::new(tr!("Back to the main window")).min_size(egui::vec2(80.0, 18.0)))
+            .clicked()
+        {
+            self.console_window = false;
+        }
+        // Keep the panel height stable when switching tabs.
+        ui.allocate_space(ui.available_size());
     }
 
     /// The small windows opened from the menus.
@@ -6762,6 +7022,7 @@ impl OpenHlswApp {
         self.find_window(ctx, actions);
         self.menu_dialog(ctx, actions);
         self.trace_window(ctx);
+        self.console_window(ctx, actions);
         let upnp_status = self.port_mapping_status();
         if let Some(dialog) = &mut self.settings_dialog {
             dialog.upnp_status = upnp_status;
@@ -10268,6 +10529,53 @@ fn toggle_button(ui: &mut Ui, p: &Palette, label: &str, on: bool) -> egui::Respo
     response
 }
 
+/// Height of the draggable divider between console and chat in the big console window.
+const CONSOLE_WINDOW_GAP: f32 = 7.0;
+
+/// Console share of the big console window, 20–90 %; a hand-edited config.json may hold
+/// anything.
+fn clamp_console_split(split: f32) -> f32 {
+    if split.is_finite() {
+        split.clamp(0.2, 0.9)
+    } else {
+        0.75
+    }
+}
+
+/// Console, divider and chat area of the big console window. Never negative or upside
+/// down, however small the window gets.
+fn split_console_window(rect: egui::Rect, split: f32) -> (egui::Rect, egui::Rect, egui::Rect) {
+    let height = rect.height().max(0.0);
+    let gap = CONSOLE_WINDOW_GAP.min(height);
+    let top = rect.top() + ((height - gap) * clamp_console_split(split)).round();
+    let x = rect.x_range();
+    let console = egui::Rect::from_x_y_ranges(x, rect.top()..=top);
+    let divider = egui::Rect::from_x_y_ranges(x, top..=top + gap);
+    let chat = egui::Rect::from_x_y_ranges(x, top + gap..=(rect.top() + height).max(top + gap));
+    (console, divider, chat)
+}
+
+/// Console share for the divider dragged to height `y`.
+fn split_from_pointer(rect: egui::Rect, y: f32) -> f32 {
+    let room = rect.height() - CONSOLE_WINDOW_GAP;
+    if room < 1.0 {
+        return 0.75;
+    }
+    clamp_console_split((y - CONSOLE_WINDOW_GAP / 2.0 - rect.top()) / room)
+}
+
+/// Window symbol on the big console window switch.
+fn window_icon(ui: &Ui, p: &Palette, rect: egui::Rect) {
+    let r = egui::Rect::from_center_size(rect.center(), egui::vec2(9.0, 8.0));
+    let painter = ui.painter();
+    painter.rect_stroke(r, 0.0, Stroke::new(1.0, p.text), StrokeKind::Inside);
+    painter.rect_filled(
+        egui::Rect::from_min_size(r.min, egui::vec2(r.width(), 2.5)),
+        0.0,
+        p.text,
+    );
+}
+
 /// "C" switch: srcds log line in readable form, e.g.
 /// `10/18/2026 - 20:29:31: "Bob<2><STEAM_1:0:1><CT>" say "hi"` → `Bob: hi`.
 fn translate_log(line: &str) -> String {
@@ -11255,5 +11563,29 @@ mod tests {
         let (text, cands) = autocomplete("mp_w", &[]);
         assert_eq!(text, None); // mp_warmup_end / mp_winlimit share only "mp_w"
         assert!(cands.len() >= 2);
+    }
+
+    #[test]
+    fn console_window_split_stays_sane() {
+        let rect = |h: f32| egui::Rect::from_min_size(egui::pos2(6.0, 6.0), egui::vec2(500.0, h));
+        for h in [0.0, 1.0, 5.0, 7.0, 8.0, 50.0, 300.0, 4000.0, -20.0] {
+            for split in [0.0, 0.2, 0.75, 0.9, 1.0, -3.0, 50.0, f32::NAN, f32::INFINITY] {
+                let (console, divider, chat) = split_console_window(rect(h), split);
+                for r in [console, divider, chat] {
+                    assert!(r.min.y.is_finite() && r.max.y.is_finite(), "h {h} split {split}");
+                    assert!(r.height() >= 0.0, "h {h} split {split}: {r:?}");
+                }
+                assert_eq!(console.max.y, divider.min.y);
+                assert_eq!(divider.max.y, chat.min.y);
+            }
+        }
+        // 3/4 console by default, the divider in between.
+        let (console, divider, chat) = split_console_window(rect(407.0), 0.75);
+        assert_eq!((console.height(), divider.height(), chat.height()), (300.0, 7.0, 100.0));
+        // Dragging is limited to 20–90 %, also beyond the window edges.
+        assert_eq!(split_from_pointer(rect(407.0), -1000.0), 0.2);
+        assert_eq!(split_from_pointer(rect(407.0), 1000.0), 0.9);
+        assert_eq!(split_from_pointer(rect(3.0), 2.0), 0.75);
+        assert_eq!(clamp_console_split(f32::NAN), 0.75);
     }
 }
