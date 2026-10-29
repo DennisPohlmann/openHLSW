@@ -358,10 +358,12 @@ fn elements<'a>(xml: &'a str, name: &str) -> Vec<&'a str> {
         }
         let content = &rest[(end + 1).min(rest.len())..];
         let close = format!("</{tag_name}>");
-        if let Some(close_at) = content.find(&close) {
-            found.push(&content[..close_at]);
-            rest = &content[close_at + close.len()..];
-        }
+        // No closing tag further on: later elements of this name cannot have one either.
+        let Some(close_at) = content.find(&close) else {
+            break;
+        };
+        found.push(&content[..close_at]);
+        rest = &content[close_at + close.len()..];
     }
     found
 }
@@ -516,6 +518,8 @@ mod tests {
         assert_eq!(elements(fault, "errorCode"), vec!["718"]);
         let ok = "<u:GetExternalIPAddressResponse xmlns:u=\"x\"><NewExternalIPAddress>203.0.113.7</NewExternalIPAddress></u:GetExternalIPAddressResponse>";
         assert_eq!(elements(ok, "NewExternalIPAddress"), vec!["203.0.113.7"]);
+        // Unclosed elements end the search instead of rescanning the rest each time.
+        assert!(elements(&"<a>".repeat(50_000), "a").is_empty());
         assert_eq!(escape("a<b>&\"c\""), "a&lt;b&gt;&amp;&quot;c&quot;");
         assert_eq!(unescape("a&amp;lt;"), "a&lt;");
     }
