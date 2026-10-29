@@ -323,9 +323,11 @@ pub fn spawn_geo_lookup(notifier: &Notifier, ips: Vec<IpAddr>) {
 // Server log receiver
 // --------------------------------------------------------------------------
 
-/// Binds the UDP log port and forwards every received log line.
-pub fn spawn_log_listener(notifier: &Notifier, port: u16) -> std::io::Result<()> {
+/// Binds the UDP log port (0: a free port chosen by the OS) and forwards every received
+/// log line. Returns the bound port.
+pub fn spawn_log_listener(notifier: &Notifier, port: u16) -> std::io::Result<u16> {
     let socket = UdpSocket::bind(("0.0.0.0", port))?;
+    let port = socket.local_addr()?.port();
     let n = notifier.clone();
     thread::Builder::new()
         .name("log-listener".into())
@@ -341,7 +343,7 @@ pub fn spawn_log_listener(notifier: &Notifier, port: u16) -> std::io::Result<()>
                 }
             }
         })?;
-    Ok(())
+    Ok(port)
 }
 
 // --------------------------------------------------------------------------

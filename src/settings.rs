@@ -623,6 +623,8 @@ pub struct Settings {
     pub log_on_map_change: bool,
     pub kick_all_on_map_change: bool,
     // Connections
+    /// Receive server logs on `log_port`; otherwise on a free port chosen at start.
+    pub fixed_log_port: bool,
     pub log_port: u16,
     /// Forward the log port in the router with UPnP while openHLSW listens on it.
     pub upnp: bool,
@@ -778,6 +780,7 @@ impl Default for Settings {
             autocomplete: true,
             log_on_map_change: true,
             kick_all_on_map_change: false,
+            fixed_log_port: false,
             log_port: 27500,
             upnp: true,
             public_ip: String::new(),
@@ -1321,7 +1324,8 @@ impl SettingsDialog {
             tr!("Connection Settings"),
             ui.available_width() - 20.0,
             |ui| {
-                ui.horizontal(|ui| {
+                ui.checkbox(&mut d.fixed_log_port, tr!("Fixed UDP port"));
+                ui.add_enabled_ui(d.fixed_log_port, |ui| ui.horizontal(|ui| {
                 ui.label(tr!("UDP Port:"));
                 ui.add(DragValue::new(&mut d.log_port).range(1024..=65535));
                 if ui.add(Button::new(tr!("Port test")).min_size(egui::vec2(110.0, 20.0))).clicked() {
@@ -1333,8 +1337,9 @@ impl SettingsDialog {
                         Err(e) => tr!("UDP port {log_port}: {e}", log_port = d.log_port, e = e),
                     });
                 }
-            });
+            }));
                 ui.label(tr!("Port the server log is received on (Get Log). Must be forwarded for Get Log (Internet)."));
+                ui.label(tr!("Without a fixed port openHLSW listens on a free port chosen at start."));
                 if let Some(msg) = port_test.as_ref() {
                     ui.label(RichText::new(msg).color(p.link));
                 }

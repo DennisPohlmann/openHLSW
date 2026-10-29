@@ -1983,24 +1983,36 @@ impl OpenHlswApp {
         self.geo.get(&ip).map(Some)
     }
 
+    /// Starts the log listener: on the fixed port from the settings, otherwise on a free
+    /// port chosen by the OS (kept until the program ends).
     fn ensure_log_listener(&mut self) -> Result<u16, String> {
+        let wanted = self.settings.fixed_log_port.then_some(self.settings.log_port);
         if let Some(Ok(port)) = &self.log_listener
-            && *port == self.settings.log_port
+            && wanted.is_none_or(|w| w == *port)
         {
             return Ok(*port);
         }
-        let result = worker::spawn_log_listener(&self.notifier, self.settings.log_port)
-            .map(|_| self.settings.log_port)
-            .map_err(|e| {
-                tr!(
+        let result = worker::spawn_log_listener(&self.notifier, wanted.unwrap_or(0)).map_err(|e| {
+            match wanted {
+                Some(log_port) => tr!(
                     "Cannot listen on UDP port {log_port}: {e}",
-                    log_port = self.settings.log_port,
+                    log_port = log_port,
                     e = e
-                )
-            });
+                ),
+                None => tr!("Cannot open a UDP port for server logs: {e}", e = e),
+            }
+        });
         self.log_listener = Some(result.clone());
         self.update_port_mapping();
         result
+    }
+
+    /// The port the log listener runs on, if it runs.
+    fn log_port(&self) -> Option<u16> {
+        match &self.log_listener {
+            Some(Ok(port)) => Some(*port),
+            _ => None,
+        }
     }
 
     /// Forwards the log port in the router while the listener runs and UPnP is on.
@@ -2058,7 +2070,7 @@ impl OpenHlswApp {
                 tr!(
                     "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.",
                     e = e,
-                    port = self.settings.log_port
+                    port = self.log_port().unwrap_or(self.settings.log_port)
                 )
             }
             Some(Err(e)) => tr!(
@@ -2499,6 +2511,7 @@ impl OpenHlswApp {
                     detected,
                 } => {
                     let public_ip = self.public_ip();
+                    let log_port = self.log_port();
                     let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
                         continue;
                     };
@@ -2520,10 +2533,11 @@ impl OpenHlswApp {
                             if map_changed
                                 && self.settings.log_on_map_change
                                 && let Some((_, internet)) = s.log_target
+                                && let Some(port) = log_port
                             {
                                 s.rcon.send(RconRequest::StartLog {
                                     internet,
-                                    port: self.settings.log_port,
+                                    port,
                                     public_ip,
                                 });
                             }
@@ -3625,13 +3639,15 @@ impl OpenHlswApp {
                 self.play(SoundEvent::SendingMessage);
             }
             Action::StartLog { id, internet } => {
-                if let Err(e) = self.ensure_log_listener() {
-                    self.status_message = e;
-                    return;
-                }
+                let port = match self.ensure_log_listener() {
+                    Ok(port) => port,
+                    Err(e) => {
+                        self.status_message = e;
+                        return;
+                    }
+                };
                 // Asks the router again if the last forwarding failed (e.g. UPnP was off).
                 self.update_port_mapping();
-                let port = self.settings.log_port;
                 let public_ip = self.public_ip();
                 if let Some(s) = self.server_mut(id) {
                     s.log_target = Some((SocketAddr::from(([0, 0, 0, 0], port)), internet));
@@ -3788,7 +3804,8 @@ impl OpenHlswApp {
                 if new.language != self.settings.language {
                     crate::i18n::set_language(new.language);
                 }
-                let port_changed = new.log_port != self.settings.log_port;
+                let port_changed = new.fixed_log_port != self.settings.fixed_log_port
+                    || new.fixed_log_port && new.log_port != self.settings.log_port;
                 let upnp_changed = new.upnp != self.settings.upnp;
                 self.settings = new;
                 if let Some(dialog) = &mut self.settings_dialog {

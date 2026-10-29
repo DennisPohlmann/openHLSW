@@ -126,8 +126,11 @@ services are gone), Metamod plugin management.
   itself (servers ban addresses after a few failed logins).
 - **Location** of servers and players comes from ip-api.com (cached, local addresses are not
   looked up); it can be switched off in Settings → Misc.
-- **Server log / chat**: "Get Log" sends `logaddress_add` and `log on`. The UDP port (default
-  27500, Settings → Connections) must be reachable – for Internet forwarded in your router.
+- **Server log / chat**: "Get Log" sends `logaddress_add` and `log on`. The UDP port must be
+  reachable – for Internet forwarded in your router. By default openHLSW listens on a free
+  port chosen at start; Settings → Connections → Fixed UDP port sets one (e.g. 27500). With
+  a firewall on this computer (ufw, firewalld, Windows Firewall rules for a port) use a fixed
+  port and allow it there.
   openHLSW does that by itself with UPnP while it receives logs (and removes the forwarding
   on exit); it can be switched off in Settings → Connections. It needs UPnP enabled in the
   router (FRITZ!Box: "Permit independent port sharing") and a public IPv4 address – with
