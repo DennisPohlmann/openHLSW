@@ -23,6 +23,12 @@ sys-locale = "0.3"
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
 
+# Wayland: compositors without server-side decorations (GNOME) need the app to draw the
+# title bar. winit's default frame shows no title; the Adwaita frame shows title and
+# version and follows the system's light/dark style. Elsewhere the system frame is used.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }
+
 [profile.release]
 opt-level = 3
 lto = "thin"
