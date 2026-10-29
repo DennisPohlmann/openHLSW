@@ -4560,14 +4560,7 @@ impl OpenHlswApp {
                     }
                     find.finish(ui);
                 });
-            let hint = match self.selected.and_then(|id| self.server(id)) {
-                Some(s) if self.address_input.is_empty() => format!(
-                    "{} {}",
-                    s.address,
-                    s.info.as_ref().map(|i| i.name.as_str()).unwrap_or_default()
-                ),
-                _ => add_game_hint(self.add_game),
-            };
+            let hint = add_game_hint(self.add_game);
             // The "Add" button gets its place first (at the right edge), the address field the
             // rest: the field can never cover the button, whatever the font or scaling.
             let address_input = &mut self.address_input;
