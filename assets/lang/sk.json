@@ -566,8 +566,6 @@
  "{count} entries": "Záznamov: {count}",
  "{count} found in all servers of the list": "Nájdených {count} na všetkých serveroch zoznamu",
  "{count} maps": "Máp: {count}",
- "{count} servers": "Serverov: {count}",
  "{server}: {name} wrote: {text}": "{server}: {name} napísal: {text}",
- "{shown} of {count} servers": "{shown} z {count} serverov",
  "{total} total": "Spolu {total}"
 }

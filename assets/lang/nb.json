@@ -556,9 +556,7 @@
  "{count} entries": "{count} oppføringer",
  "{count} found in all servers of the list": "{count} funnet på alle servere i listen",
  "{count} maps": "{count} brett",
- "{count} servers": "{count} servere",
  "{online}/{count} online": "{online}/{count} tilkoblet",
  "{server}: {name} wrote: {text}": "{server}: {name} skrev: {text}",
- "{shown} of {count} servers": "{shown} av {count} servere",
  "{total} total": "{total} totalt"
 }

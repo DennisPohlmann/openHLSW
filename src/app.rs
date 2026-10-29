@@ -2,8 +2,7 @@
 //!
 //! ```text
 //! ┌ menu ─────────────────────────────────────────────────────────┐
-//! │ Server list: [Custom server list]                  N servers  │
-//! │ IP/Port: [Half-Life 2] [address                             ] │
+//! │ Server list: [List (N)] [Half-Life 2] [address        ] [Add] │
 //! │ toolbar · Password · Search                                   │
 //! ├ server list ──────────────────────────────────────────────────┤
 //! ├ server info ───────┬ players ─────────────────────────────────┤
@@ -4451,33 +4450,80 @@ impl OpenHlswApp {
     }
 
     fn toolbar(&mut self, ui: &mut Ui, p: &Palette, actions: &mut Vec<Action>) {
-        // Right-aligned labels of the first two rows, as wide as the longer (translated) one.
-        let label_w = text_width(ui, tr!("Server list:"))
-            .max(text_width(ui, tr!("IP/Port:")))
-            .max(52.0)
-            + 2.0;
-        let label = |ui: &mut Ui, text: &str| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(label_w, 18.0),
-                Layout::right_to_left(Align::Center),
-                |ui| {
-                    ui.label(text);
-                },
-            );
-        };
-
-        // Server list: [Custom server list ▼]                         N servers
+        // Server list: [Favorites (12) ▼] [Half-Life 2 ▼] [address .............] [Add]
         ui.horizontal(|ui| {
-            label(ui, tr!("Server list:"));
-            let width = (ui.available_width() - 100.0).max(150.0);
-            let names = self.list_names();
+            ui.label(tr!("Server list:"));
+            // The list names with their server counts; the current list shows "shown/all"
+            // while the filter or the search hides servers.
+            let filtered = self.settings.filter.enabled || !self.search.trim().is_empty();
+            let count_of = |name: &str| {
+                if name == self.list_name {
+                    if filtered {
+                        format!("{name} ({}/{})", self.list_order.len(), self.servers.len())
+                    } else {
+                        format!("{name} ({})", self.servers.len())
+                    }
+                } else {
+                    let n = self
+                        .other_lists
+                        .iter()
+                        .find(|l| l.name == name)
+                        .map_or(0, |l| l.servers.len());
+                    format!("{name} ({n})")
+                }
+            };
+            let lists: Vec<(String, String)> = self
+                .list_names()
+                .into_iter()
+                .map(|name| {
+                    let text = count_of(&name);
+                    (name, text)
+                })
+                .collect();
+            // Both dropdowns as wide as their longest entry (plus the arrow, and the icon
+            // for the games), within bounds; on a narrow window they shrink so the address
+            // field keeps at least `MIN_FIELD`.
+            const MIN_FIELD: f32 = 140.0;
+            let combo_extra = ui.spacing().icon_width + ui.spacing().button_padding.x * 2.0 + 8.0;
+            let list_want = lists
+                .iter()
+                .map(|(_, text)| text_width(ui, text))
+                .fold(0.0, f32::max)
+                + combo_extra;
+            let game_want = std::iter::once(text_width(ui, tr!("Auto detect")))
+                .chain(games::GAMES.iter().map(|g| text_width(ui, g.name) + 20.0))
+                .fold(0.0, f32::max)
+                + combo_extra;
+            // The server list grows with long names, up to half of the row.
+            let mut list_w = list_want.clamp(100.0, (ui.available_width() / 2.0).max(100.0));
+            let mut game_w = game_want.clamp(120.0, 240.0);
+            let item = ui.spacing().item_spacing.x;
+            // The icon of the chosen game (none for "Auto detect": no gap after the list).
+            let icon_w = if self.game_icons.is_some() && self.add_game.is_some() {
+                16.0 + item
+            } else {
+                0.0
+            };
+            let room = ui.available_width()
+                - text_width(ui, tr!("Add"))
+                - ui.spacing().button_padding.x * 2.0
+                - icon_w
+                - 4.0 * item
+                - MIN_FIELD;
+            if list_w + game_w > room {
+                let scale = (room / (list_w + game_w)).max(0.0);
+                list_w = (list_w * scale).max(80.0);
+                game_w = (game_w * scale).max(80.0);
+            }
+            let selected_list = count_of(&self.list_name);
             egui::ComboBox::from_id_salt("server_list_source")
-                .selected_text(self.list_name.clone())
-                .width(width)
+                .selected_text(selected_list)
+                .width(list_w)
                 .show_ui(ui, |ui| {
+                    ui.set_min_width(list_w);
                     let mut find = TypeAhead::begin(ui);
-                    for name in names {
-                        let r = ui.selectable_label(name == self.list_name, &name);
+                    for (name, text) in lists {
+                        let r = ui.selectable_label(name == self.list_name, &text);
                         find.item(&r, &name);
                         if r.clicked() && name != self.list_name {
                             actions.push(Action::OpenList(name));
@@ -4485,33 +4531,18 @@ impl OpenHlswApp {
                     }
                     find.finish(ui);
                 });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if self.settings.filter.enabled || !self.search.trim().is_empty() {
-                    ui.label(tr!(
-                        "{shown} of {count} servers",
-                        shown = self.list_order.len(),
-                        count = self.servers.len()
-                    ));
-                } else {
-                    ui.label(tr!("{count} servers", count = self.servers.len()));
-                }
-            });
-        });
-
-        // IP/Port: [Half-Life 2 ▼] [address ...................]
-        ui.horizontal(|ui| {
-            label(ui, tr!("IP/Port:"));
-            if let Some(icons) = &self.game_icons {
-                icons.show(ui, self.add_game.map_or("", |g| g.icon), 16.0);
+            if let (Some(icons), Some(g)) = (&self.game_icons, self.add_game) {
+                icons.show(ui, g.icon, 16.0);
             }
             let selected_text = self.add_game.map_or(tr!("Auto detect"), |g| g.name);
             let add_game = &mut self.add_game;
             let game_icons = self.game_icons.as_ref();
             egui::ComboBox::from_id_salt("game_type")
                 .selected_text(selected_text)
-                .width(180.0)
+                .width(game_w)
                 .height(420.0)
                 .show_ui(ui, |ui| {
+                    ui.set_min_width(game_w);
                     // Like HLSW: automatic detection first, then the games that cannot be
                     // detected, then all games.
                     let mut find = TypeAhead::begin(ui);

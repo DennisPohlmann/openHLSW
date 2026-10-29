@@ -574,9 +574,7 @@
  "{count} entries": "{count} kayıt",
  "{count} found in all servers of the list": "Listedeki tüm sunucularda {count} sonuç bulundu",
  "{count} maps": "{count} harita",
- "{count} servers": "{count} sunucu",
  "{online}/{count} online": "{online}/{count} çevrimiçi",
  "{server}: {name} wrote: {text}": "{server}: {name} yazdı: {text}",
- "{shown} of {count} servers": "{count} sunucudan {shown} tanesi",
  "{total} total": "toplam {total}"
 }

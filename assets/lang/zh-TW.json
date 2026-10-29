@@ -584,11 +584,9 @@
  "{count} entries": "{count} 個項目",
  "{count} found in all servers of the list": "在清單的所有伺服器中找到 {count} 個",
  "{count} maps": "{count} 張地圖",
- "{count} servers": "{count} 部伺服器",
  "{name} (port {port})": "{name}（埠 {port}）",
  "{online}/{count} online": "{online}/{count} 在線",
  "{server}: {name} wrote: {text}": "{server}：{name} 寫道：{text}",
- "{shown} of {count} servers": "{shown}/{count} 個伺服器",
  "{total} total": "共 {total} 個",
  "Ø Ping": "Ø 延遲"
 }

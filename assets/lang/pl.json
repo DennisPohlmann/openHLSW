@@ -571,8 +571,6 @@
  "{count} entries": "Wpisy: {count}",
  "{count} found in all servers of the list": "Znaleziono {count} na wszystkich serwerach listy",
  "{count} maps": "Map: {count}",
- "{count} servers": "Serwery: {count}",
  "{server}: {name} wrote: {text}": "{server}: {name} napisał: {text}",
- "{shown} of {count} servers": "{shown} z {count} serwerów",
  "{total} total": "Łącznie: {total}"
 }

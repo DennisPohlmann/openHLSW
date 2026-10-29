@@ -109,8 +109,8 @@ services are gone), Metamod plugin management.
   raise the interval or lower the query limit then.
 - **Other games**: Valve, GameSpy 1 and GameSpy 2 / 3 servers are detected automatically;
   GameSpy servers with an own query port are entered as `IP:gameport:queryport`. For all
-  other games choose the game in the IP/Port list before adding: its usual port and query
-  port are filled in. These servers have no RCON; Battlefield 2 / 2142 are joined directly on
+  other games choose the game in the game list next to the address field before adding: its
+  usual port and query port are filled in. These servers have no RCON; Battlefield 2 / 2142 are joined directly on
   Connect.
 - **RCON password**: the server is only asked with it when you click Test (or press Enter)
   or send a command, never while typing; after "Bad password" openHLSW does not try again by

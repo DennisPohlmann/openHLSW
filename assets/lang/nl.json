@@ -551,6 +551,5 @@
  "{count} found in all servers of the list": "{count} gevonden in alle servers van de lijst",
  "{name} (port {port})": "{name} (poort {port})",
  "{server}: {name} wrote: {text}": "{server}: {name} schreef: {text}",
- "{shown} of {count} servers": "{shown} van {count} servers",
  "{total} total": "{total} totaal"
 }

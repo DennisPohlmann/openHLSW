@@ -557,9 +557,7 @@
  "{count} entries": "{count} entrées",
  "{count} found in all servers of the list": "{count} trouvés dans tous les serveurs de la liste",
  "{count} maps": "{count} cartes",
- "{count} servers": "{count} serveurs",
  "{online}/{count} online": "{online}/{count} en ligne",
  "{server}: {name} wrote: {text}": "{server} : {name} a écrit : {text}",
- "{shown} of {count} servers": "{shown} sur {count} serveurs",
  "{total} total": "{total} au total"
 }

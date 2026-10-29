@@ -575,10 +575,8 @@
  "{count} entries": "{count} bejegyzés",
  "{count} found in all servers of the list": "{count} találat a lista összes szerverén",
  "{count} maps": "{count} pálya",
- "{count} servers": "{count} szerver",
  "{name} (port {port})": "{name} ({port} port)",
  "{online}/{count} online": "{online}/{count} elérhető",
  "{server}: {name} wrote: {text}": "{server}: {name} írta: {text}",
- "{shown} of {count} servers": "{shown} / {count} szerver",
  "{total} total": "Összesen {total}"
 }

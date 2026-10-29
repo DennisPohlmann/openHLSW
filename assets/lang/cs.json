@@ -568,8 +568,6 @@
  "{count} entries": "Záznamů: {count}",
  "{count} found in all servers of the list": "Nalezeno {count} na všech serverech seznamu",
  "{count} maps": "Map: {count}",
- "{count} servers": "Serverů: {count}",
  "{server}: {name} wrote: {text}": "{server}: {name} napsal: {text}",
- "{shown} of {count} servers": "{shown} z {count} serverů",
  "{total} total": "Celkem {total}"
 }

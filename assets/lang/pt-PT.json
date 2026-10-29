@@ -569,9 +569,7 @@
  "{count} entries": "{count} entradas",
  "{count} found in all servers of the list": "{count} encontrados em todos os servidores da lista",
  "{count} maps": "{count} mapas",
- "{count} servers": "{count} servidores",
  "{name} (port {port})": "{name} (porta {port})",
  "{server}: {name} wrote: {text}": "{server}: {name} escreveu: {text}",
- "{shown} of {count} servers": "{shown} de {count} servidores",
  "{total} total": "{total} no total"
 }

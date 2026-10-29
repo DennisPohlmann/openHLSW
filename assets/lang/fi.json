@@ -580,10 +580,8 @@
  "{count} entries": "{count} merkintää",
  "{count} found in all servers of the list": "{count} löytyi listan kaikilta palvelimilta",
  "{count} maps": "{count} karttaa",
- "{count} servers": "{count} palvelinta",
  "{name} (port {port})": "{name} (portti {port})",
  "{online}/{count} online": "{online}/{count} paikalla",
  "{server}: {name} wrote: {text}": "{server}: {name} kirjoitti: {text}",
- "{shown} of {count} servers": "{shown}/{count} palvelinta",
  "{total} total": "{total} yhteensä"
 }

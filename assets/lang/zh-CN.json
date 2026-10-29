@@ -584,11 +584,9 @@
  "{count} entries": "{count} 个条目",
  "{count} found in all servers of the list": "在列表的所有服务器中找到 {count} 个",
  "{count} maps": "{count} 张地图",
- "{count} servers": "{count} 个服务器",
  "{name} (port {port})": "{name}（端口 {port}）",
  "{online}/{count} online": "{online}/{count} 在线",
  "{server}: {name} wrote: {text}": "{server}：{name} 写道：{text}",
- "{shown} of {count} servers": "{shown}/{count} 个服务器",
  "{total} total": "共 {total} 个",
  "Ø Ping": "Ø 延迟"
 }

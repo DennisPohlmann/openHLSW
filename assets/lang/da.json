@@ -547,8 +547,6 @@
  "{count} entries": "{count} poster",
  "{count} found in all servers of the list": "{count} fundet på alle servere i listen",
  "{count} maps": "{count} baner",
- "{count} servers": "{count} servere",
  "{server}: {name} wrote: {text}": "{server}: {name} skrev: {text}",
- "{shown} of {count} servers": "{shown} af {count} servere",
  "{total} total": "{total} i alt"
 }

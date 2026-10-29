@@ -562,8 +562,6 @@
  "{count} entries": "{count} poster",
  "{count} found in all servers of the list": "{count} hittade på alla servrar i listan",
  "{count} maps": "{count} banor",
- "{count} servers": "{count} servrar",
  "{server}: {name} wrote: {text}": "{server}: {name} skrev: {text}",
- "{shown} of {count} servers": "{shown} av {count} servrar",
  "{total} total": "{total} totalt"
 }

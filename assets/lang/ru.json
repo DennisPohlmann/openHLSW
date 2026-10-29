@@ -584,11 +584,9 @@
  "{count} entries": "Записей: {count}",
  "{count} found in all servers of the list": "Найдено {count} на всех серверах списка",
  "{count} maps": "Карт: {count}",
- "{count} servers": "Серверов: {count}",
  "{name} (port {port})": "{name} (порт {port})",
  "{online}/{count} online": "{online}/{count} в сети",
  "{server}: {name} wrote: {text}": "{server}: {name} пишет: {text}",
- "{shown} of {count} servers": "{shown} из {count} серверов",
  "{total} total": "Всего: {total}",
  "Ø Ping": "Ø Пинг"
 }

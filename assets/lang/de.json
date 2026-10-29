@@ -590,9 +590,7 @@
  "{count} entries": "{count} Einträge",
  "{count} found in all servers of the list": "{count} gefunden in allen Servern der Liste",
  "{count} maps": "{count} Maps",
- "{count} servers": "{count} Server",
  "{name} (port {port})": "{name} (Port {port})",
  "{server}: {name} wrote: {text}": "{server}: {name} schrieb: {text}",
- "{shown} of {count} servers": "{shown} von {count} Servern",
  "{total} total": "{total} gesamt"
 }
