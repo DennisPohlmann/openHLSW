@@ -5176,14 +5176,8 @@ impl OpenHlswApp {
         let (completed, candidates) = autocomplete(&self.console_input, &self.history);
         if let Some(text) = completed {
             self.console_input = text;
-            if let Some(input_id) = self.console_input_id
-                && let Some(mut state) = egui::TextEdit::load_state(ctx, input_id)
-            {
-                let end = egui::text::CCursor::new(self.console_input.chars().count());
-                state
-                    .cursor
-                    .set_char_range(Some(egui::text::CCursorRange::one(end)));
-                state.store(ctx, input_id);
+            if let Some(input_id) = self.console_input_id {
+                cursor_to_end(ctx, input_id, &self.console_input);
             }
         }
         if candidates.len() > 1 {
@@ -5359,6 +5353,8 @@ impl OpenHlswApp {
                         for cmd in history.iter().rev().take(30) {
                             if ui.button(RichText::new(cmd).monospace()).clicked() {
                                 *input = cmd.clone();
+                                cursor_to_end(ui.ctx(), resp.id, input);
+                                resp.request_focus();
                                 ui.close();
                             }
                         }
@@ -5383,6 +5379,12 @@ impl OpenHlswApp {
                                     input.clear();
                                 }
                             }
+                        }
+                        // The TextEdit above has already moved the caret for the arrow key
+                        // (Up: to the start); overwrite that with the end of the recalled
+                        // command, which the TextEdit picks up from its state next frame.
+                        if up || down {
+                            cursor_to_end(ui.ctx(), resp.id, input);
                         }
                     }
                     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
@@ -11289,6 +11291,16 @@ const CONSOLE_COMMANDS: &[&str] = &[
     "writeid",
     "writeip",
 ];
+
+/// Puts the caret of the TextEdit `id` at the end of `text` (after replacing its content).
+fn cursor_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    let end = egui::text::CCursor::new(text.chars().count());
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::one(end)));
+    state.store(ctx, id);
+}
 
 /// Completes the command word to the longest common prefix of all matches.
 /// Returns the new text (if it changed) and the candidates.
