@@ -59,6 +59,22 @@ impl GameIcons {
         let px = limit.floor().max(1.0);
         let side = px / ppp;
         let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), Sense::hover());
+        self.paint(ui, key, rect);
+        response
+    }
+
+    /// Size of the space [`Self::paint`] needs for a 16 px icon (whole screen pixels).
+    pub fn slot(ui: &Ui) -> egui::Vec2 {
+        let ppp = ui.pixels_per_point();
+        egui::Vec2::splat((16.0 * ppp).floor().max(1.0) / ppp)
+    }
+
+    /// Draws the icon into `rect` (e.g. a [`Self::slot`] inside a button), at its left edge
+    /// and vertically centered, as large as the rect's height allows (at most 16 px).
+    pub fn paint(&self, ui: &Ui, key: &str, rect: Rect) {
+        let ppp = ui.pixels_per_point();
+        let px = (rect.height().min(16.0) * ppp).round().max(1.0);
+        let side = px / ppp;
         if let Some(&i) = self.index.get(key) {
             let (col, row) = (i % COLUMNS, i / COLUMNS);
             let texture = if px > 16.0 { &self.large } else { &self.small };
@@ -75,7 +91,6 @@ impl GameIcons {
             let target = Rect::from_min_size(min, egui::vec2(side, side));
             ui.painter().image(texture.id(), target, uv, Color32::WHITE);
         }
-        response
     }
 }
 

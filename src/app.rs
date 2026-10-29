@@ -42,7 +42,7 @@ use crate::server_io::{self, Field};
 use crate::settings::{
     DialogResult, OnConnect, Settings, SettingsDialog, SettingsTab, SoundEvent, StartupSelection,
 };
-use crate::theme::{self, Palette, Theme};
+use crate::theme::{self, Palette, RowsContextMenu, Theme};
 use crate::worker::{
     self, Event, Notifier, PortMapper, PortMapping, QueryKind, RconEvent, RconHandle, RconRequest,
     RconStatus, RconTag, ServerId,
@@ -4034,7 +4034,7 @@ impl OpenHlswApp {
             .into_iter()
             .filter(|n| *n != self.list_name)
             .collect();
-        egui::MenuBar::new().ui(ui, |ui| {
+        crate::theme::menu_bar().ui(ui, |ui| {
             ui.menu_button(tr!("File"), |ui| {
                 if ui
                     .button(tr!("Global Player ID Database Editor...\tCtrl+W"))
@@ -4516,7 +4516,7 @@ impl OpenHlswApp {
                 game_w = (game_w * scale).max(80.0);
             }
             let selected_list = count_of(&self.list_name);
-            egui::ComboBox::from_id_salt("server_list_source")
+            crate::theme::combo("server_list_source")
                 .selected_text(selected_list)
                 .width(list_w)
                 .show_ui(ui, |ui| {
@@ -4537,7 +4537,7 @@ impl OpenHlswApp {
             let selected_text = self.add_game.map_or(tr!("Auto detect"), |g| g.name);
             let add_game = &mut self.add_game;
             let game_icons = self.game_icons.as_ref();
-            egui::ComboBox::from_id_salt("game_type")
+            crate::theme::combo("game_type")
                 .selected_text(selected_text)
                 .width(game_w)
                 .height(420.0)
@@ -4546,34 +4546,40 @@ impl OpenHlswApp {
                     // Like HLSW: automatic detection first, then the games that cannot be
                     // detected, then all games.
                     let mut find = TypeAhead::begin(ui);
-                    let auto = ui
-                        .selectable_label(add_game.is_none(), tr!("Auto detect"))
-                        .on_hover_text(tr!(
-                            "Source, Half-Life 1 and CS2 servers are detected automatically"
-                        ));
+                    // Every row is one full-width button with a slot for the game icon, so
+                    // the highlight runs across the whole list and the names line up.
+                    let icon = egui::IdSalt::new("game_icon");
+                    let slot = GameIcons::slot(ui);
+                    let entry = |ui: &mut Ui, selected: bool, key: &str, name: &str| {
+                        let r = egui::Button::selectable(
+                            selected,
+                            (egui::Atom::custom(icon, slot), name),
+                        )
+                        .atom_ui(ui);
+                        if let (Some(icons), Some(rect)) = (game_icons, r.rect(icon)) {
+                            icons.paint(ui, key, rect);
+                        }
+                        r.response
+                    };
+                    let auto = entry(ui, add_game.is_none(), "", tr!("Auto detect")).on_hover_text(
+                        tr!("Source, Half-Life 1 and CS2 servers are detected automatically"),
+                    );
                     find.item(&auto, tr!("Auto detect"));
                     if auto.clicked() {
                         *add_game = None;
                         ui.close();
                     }
                     let mut row = |ui: &mut Ui, g: &'static games::Game| {
-                        ui.horizontal(|ui| {
-                            if let Some(icons) = game_icons {
-                                icons.show(ui, g.icon, 16.0);
-                            }
-                            let selected = add_game.is_some_and(|a| std::ptr::eq(a, g));
-                            let r = ui
-                                .add(egui::Button::selectable(selected, g.name))
-                                .on_hover_text(tr!(
-                                    "Server query: {protocol}",
-                                    protocol = g.protocol.name()
-                                ));
-                            find.item(&r, g.name);
-                            if r.clicked() {
-                                *add_game = Some(g);
-                                ui.close();
-                            }
-                        });
+                        let selected = add_game.is_some_and(|a| std::ptr::eq(a, g));
+                        let r = entry(ui, selected, g.icon, g.name).on_hover_text(tr!(
+                            "Server query: {protocol}",
+                            protocol = g.protocol.name()
+                        ));
+                        find.item(&r, g.name);
+                        if r.clicked() {
+                            *add_game = Some(g);
+                            ui.close();
+                        }
                     };
                     ui.label(
                         RichText::new(tr!("--- Not detectable games ---"))
@@ -6327,7 +6333,7 @@ impl OpenHlswApp {
                                     )
                                     .with_edit_menu();
                                     ui.label(tr!("Type:"));
-                                    egui::ComboBox::from_id_salt("iddb_kind")
+                                    crate::theme::combo("iddb_kind")
                                         .selected_text(crate::i18n::t(ed.kind.name()))
                                         .show_ui(ui, |ui| {
                                             let mut find = TypeAhead::begin(ui);
@@ -6583,7 +6589,7 @@ impl OpenHlswApp {
                             });
                             ui.end_row();
                             ui.label(tr!("Password"));
-                            egui::ComboBox::from_id_salt("filter_password")
+                            crate::theme::combo("filter_password")
                                 .selected_text(match f.password {
                                     PasswordFilter::Any => tr!("Any"),
                                     PasswordFilter::Without => tr!("Without password"),
@@ -7387,7 +7393,7 @@ fn server_table(
                     if auto {
                         autosize_request = Some(i);
                     }
-                    resp.context_menu(|ui| column_menu(ui, false, &menu_items, actions));
+                    resp.rows_context_menu(|ui| column_menu(ui, false, &menu_items, actions));
                 });
             }
         })
@@ -7535,7 +7541,8 @@ fn server_table(
                         actions.push(Action::Connect(s.id));
                     }
                 }
-                response.context_menu(|ui| server_context_menu(ui, s, opts.other_lists, actions));
+                response
+                    .rows_context_menu(|ui| server_context_menu(ui, s, opts.other_lists, actions));
             });
         });
     if let Some(i) = autosize_request {
@@ -8055,7 +8062,7 @@ struct InfoCopy {
 impl InfoCopy {
     fn menu(&mut self, response: &egui::Response, key: &str, value: &str) {
         let line = format!("{key}: {value}");
-        response.context_menu(|ui| {
+        response.rows_context_menu(|ui| {
             if ui.button(tr!("Copy Value")).clicked() {
                 self.text = Some(value.to_string());
                 ui.close();
@@ -9035,7 +9042,7 @@ fn players_table(
                     if auto {
                         autosize_request = Some(i);
                     }
-                    resp.context_menu(|ui| column_menu(ui, true, &menu_items, actions));
+                    resp.rows_context_menu(|ui| column_menu(ui, true, &menu_items, actions));
                 });
             }
             h.col(|ui| {
@@ -9051,7 +9058,7 @@ fn players_table(
                         );
                     }
                 });
-                resp.context_menu(|ui| column_menu(ui, true, &menu_items, actions));
+                resp.rows_context_menu(|ui| column_menu(ui, true, &menu_items, actions));
             });
         })
         .body(|body| {
@@ -9111,7 +9118,7 @@ fn players_table(
                 } else {
                     vec![r]
                 };
-                resp.context_menu(|ui| {
+                resp.rows_context_menu(|ui| {
                     player_context_menu(ui, data, server, &targets, &list, actions)
                 });
             });
@@ -9613,7 +9620,7 @@ fn rules_table(
                 } else {
                     vec![r]
                 };
-                resp.context_menu(|ui| rule_context_menu(ui, &targets, all, server, actions));
+                resp.rows_context_menu(|ui| rule_context_menu(ui, &targets, all, server, actions));
             });
         });
     if let Some((key, mods)) = clicked {
@@ -10197,7 +10204,7 @@ pub(crate) trait EditMenu {
 impl EditMenu for egui::Response {
     fn with_edit_menu(self) -> Self {
         let field = self.clone();
-        self.context_menu(|ui| {
+        self.rows_context_menu(|ui| {
             let ctx = ui.ctx().clone();
             let mut command = None;
             if ui.button(tr!("Cut\tCtrl+X")).clicked() {

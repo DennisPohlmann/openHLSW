@@ -10,7 +10,7 @@ use egui_extras::Column;
 use serde::{Deserialize, Serialize};
 
 use crate::app::{EditMenu, fit, group_box, list_frame, plain_header, styled_table, tab_strip};
-use crate::theme::{Palette, TextSize, Theme, UiFont};
+use crate::theme::{Palette, RowsContextMenu, TextSize, Theme, UiFont};
 use crate::typeahead::TypeAhead;
 use openhlsw::query::Protocol;
 
@@ -1060,7 +1060,7 @@ impl SettingsDialog {
                                     double_clicked = Some(is_params);
                                 }
                             }
-                            row.response().context_menu(|ui| {
+                            row.response().rows_context_menu(|ui| {
                                 ui.menu_button(tr!("Add parameter"), |ui| {
                                     let goldsrc =
                                         game.app_id.is_some_and(openhlsw::a2s::is_goldsrc_app);
@@ -1137,7 +1137,7 @@ impl SettingsDialog {
                         .spacing([8.0, 6.0])
                         .show(ui, |ui| {
                             ui.label(tr!("Server list:"));
-                            egui::ComboBox::from_id_salt("startup_list")
+                            crate::theme::combo("startup_list")
                                 .selected_text(tr!("Custom server list"))
                                 .width(260.0)
                                 .show_ui(ui, |ui| {
@@ -1148,7 +1148,7 @@ impl SettingsDialog {
                                 });
                             ui.end_row();
                             ui.label(tr!("IP/Port:"));
-                            egui::ComboBox::from_id_salt("startup_addr")
+                            crate::theme::combo("startup_addr")
                                 .selected_text(if d.startup_address.is_empty() {
                                     "-"
                                 } else {
@@ -1179,7 +1179,7 @@ impl SettingsDialog {
         let d = &mut self.draft;
         ui.horizontal(|ui| {
             ui.label(tr!("On Connection:"));
-            egui::ComboBox::from_id_salt("on_connect")
+            crate::theme::combo("on_connect")
                 .selected_text(d.on_connect.label())
                 .width(250.0)
                 .show_ui(ui, |ui| {
@@ -1474,7 +1474,7 @@ impl SettingsDialog {
                     l.native_name().to_string()
                 }
             };
-            egui::ComboBox::from_id_salt("language")
+            crate::theme::combo("language")
                 .selected_text(label(d.language))
                 .width(260.0)
                 .height(popup_height(ui))
@@ -1490,7 +1490,7 @@ impl SettingsDialog {
         });
 
         group_box(ui, p, tr!("Skin"), width, |ui| {
-            egui::ComboBox::from_id_salt("skin")
+            crate::theme::combo("skin")
                 .selected_text(d.theme.label())
                 .width(260.0)
                 .height(popup_height(ui))
@@ -1506,7 +1506,7 @@ impl SettingsDialog {
 
         group_box(ui, p, tr!("Font"), width, |ui| {
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("ui_font")
+                crate::theme::combo("ui_font")
                     .selected_text(d.font.label().to_owned())
                     .width(260.0)
                     .height(popup_height(ui))
@@ -1519,7 +1519,7 @@ impl SettingsDialog {
                     });
                 ui.add_space(12.0);
                 ui.label(tr!("Text size:"));
-                egui::ComboBox::from_id_salt("text_size")
+                crate::theme::combo("text_size")
                     .selected_text(d.text_size.label())
                     .width(70.0)
                     .show_ui(ui, |ui| {
@@ -1540,7 +1540,7 @@ impl SettingsDialog {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label(tr!("Text smoothing:"));
-                egui::ComboBox::from_id_salt("text_smoothing")
+                crate::theme::combo("text_smoothing")
                     .selected_text(d.text_smoothing.label())
                     .width(160.0)
                     .show_ui(ui, |ui| {

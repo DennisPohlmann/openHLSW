@@ -82,6 +82,8 @@ pub struct Palette {
     pub selection_bg: Color32,
     pub selection_text: Color32,
     pub hover_bg: Color32,
+    /// Row under the mouse or the keyboard focus in dropdowns and menus (white text).
+    pub popup_hover_bg: Color32,
     pub offline_bg: Color32,
     pub red: Color32,
     pub green: Color32,
@@ -121,6 +123,7 @@ impl Theme {
                 selection_bg: rgb(90, 90, 90),
                 selection_text: rgb(255, 255, 255),
                 hover_bg: rgb(229, 243, 255),
+                popup_hover_bg: rgb(0, 120, 215),
                 offline_bg: rgb(255, 222, 222),
                 red: rgb(224, 0, 0),
                 green: rgb(0, 160, 0),
@@ -150,6 +153,7 @@ impl Theme {
                 selection_bg: rgb(64, 96, 140),
                 selection_text: rgb(255, 255, 255),
                 hover_bg: rgb(48, 56, 66),
+                popup_hover_bg: rgb(64, 96, 140),
                 offline_bg: rgb(78, 36, 40),
                 red: rgb(255, 110, 110),
                 green: rgb(110, 214, 110),
@@ -175,6 +179,61 @@ impl Theme {
             Theme::Light => tr!("White (HLSW classic)"),
             Theme::Dark => tr!("Black"),
         }
+    }
+}
+
+/// Rows of dropdown lists and menus: the row under the mouse or the keyboard focus is
+/// highlighted in blue with white text, the current entry of a dropdown in light blue. The
+/// popups lay out top-down justified, so the highlight runs across the whole width.
+pub fn popup_rows(style: &mut egui::Style) {
+    let theme = if style.visuals.dark_mode {
+        Theme::Dark
+    } else {
+        Theme::Light
+    };
+    let p = theme.palette();
+    let v = &mut style.visuals;
+    // The text takes the color of the row state (white on the highlight).
+    v.override_text_color = None;
+    for w in [
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.bg_fill = p.popup_hover_bg;
+        w.weak_bg_fill = p.popup_hover_bg;
+        w.fg_stroke = Stroke::new(1.0, p.selection_text);
+    }
+    v.selection.bg_fill = p.button_active_bg;
+    v.selection.stroke = Stroke::new(1.0, p.text);
+}
+
+/// [`popup_rows`] for menus and context menus, on top of egui's menu style.
+pub fn menu_rows(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    popup_rows(style);
+}
+
+/// A dropdown whose list uses [`popup_rows`].
+pub fn combo(id_salt: impl egui::AsIdSalt) -> egui::ComboBox<'static> {
+    egui::ComboBox::from_id_salt(id_salt).popup_style(popup_rows.into())
+}
+
+/// The menu bar; its menus and submenus use [`menu_rows`].
+pub fn menu_bar() -> egui::MenuBar {
+    egui::MenuBar::new().config(egui::containers::menu::MenuConfig::new().style(menu_rows))
+}
+
+/// Context menus (right click) with [`menu_rows`]; submenus inherit the style.
+pub trait RowsContextMenu {
+    fn rows_context_menu(&self, add_contents: impl FnOnce(&mut egui::Ui));
+}
+
+impl RowsContextMenu for egui::Response {
+    fn rows_context_menu(&self, add_contents: impl FnOnce(&mut egui::Ui)) {
+        egui::Popup::context_menu(self)
+            .style(menu_rows)
+            .show(add_contents);
     }
 }
 
