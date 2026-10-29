@@ -1400,6 +1400,8 @@ pub struct OpenHlswApp {
     paused_for_game: bool,
     console_input_id: Option<egui::Id>,
     console_autoscroll: bool,
+    /// What the console showed at its end when it last scrolled there (see console_tab).
+    console_end_key: Option<u64>,
     /// Find bar of the Rcon console.
     console_find: Option<ConsoleFind>,
     address_input: String,
@@ -1589,6 +1591,7 @@ impl OpenHlswApp {
             paused_for_game: false,
             console_input_id: None,
             console_autoscroll: true,
+            console_end_key: None,
             console_find: None,
             address_input: String::new(),
             add_game: None,
@@ -5529,6 +5532,22 @@ impl OpenHlswApp {
             self.console_autoscroll = false;
         }
         let autoscroll = autoscroll && scroll_line.is_none();
+        // stick_to_bottom alone lets go of the end after a click into the text (the caret
+        // scrolls into view), the mouse wheel or the scroll bar, and only takes hold again
+        // exactly at the end. So with S on, a new line, switching S on, other switches or
+        // another server scroll to the end in any case.
+        let end_key = autoscroll.then(|| {
+            use std::hash::{Hash, Hasher};
+            let s = &self.servers[idx];
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (id, lines.len(), s.console.len()).hash(&mut h);
+            if let Some(l) = s.console.back() {
+                (l.time, &l.text).hash(&mut h);
+            }
+            h.finish()
+        });
+        let to_end = end_key.is_some() && end_key != self.console_end_key;
+        self.console_end_key = end_key;
         job.wrap.max_width = f32::INFINITY;
         let job = std::sync::Arc::new(job);
         egui::CentralPanel::default()
@@ -5583,6 +5602,16 @@ impl OpenHlswApp {
                                 }
                             }
                             ui.painter().set(bg_slot, egui::Shape::Vec(shapes));
+                            if to_end {
+                                // Only down: the horizontal range is the visible one.
+                                let y = output.galley_pos.y + output.galley.rect.bottom();
+                                let x = ui.clip_rect().x_range().shrink(1.0);
+                                ui.scroll_to_rect_animation(
+                                    egui::Rect::from_x_y_ranges(x, y..=y),
+                                    None,
+                                    egui::style::ScrollAnimation::none(),
+                                );
+                            }
                             if let Some(target) = scroll_line {
                                 let mut line = 0;
                                 for row in &output.galley.rows {
