@@ -110,6 +110,10 @@ services are gone), Metamod plugin management.
   looked up); it can be switched off in Settings → Misc.
 - **Server log / chat**: "Get Log" sends `logaddress_add` and `log on`. The UDP port (default
   27500, Settings → Connections) must be reachable – for Internet forwarded in your router.
+  openHLSW does that by itself with UPnP while it receives logs (and removes the forwarding
+  on exit); it can be switched off in Settings → Connections. It needs UPnP enabled in the
+  router (FRITZ!Box: "Permit independent port sharing") and a public IPv4 address – with
+  CGNAT / DS-Lite no forwarding helps. Without UPnP, forward the port by hand.
 - **Settings** are stored in `config.json` in `%APPDATA%\openHLSW` (Windows),
   `~/.config/openHLSW` (Linux, FreeBSD) or `~/Library/Application Support/openHLSW` (macOS).
   Saved RCON passwords are stored there as plain text.
@@ -158,6 +162,7 @@ cargo run   # then add 127.0.0.1:27015, RCON password "secret"
 ```
 src/
   address.rs, a2s.rs, gamespy2.rs, rcon.rs   addresses, Valve / GameSpy 2 queries, RCON
+  upnp.rs                                    port forwarding in the router (UPnP IGD)
   query/                                     the other query protocols (GameSpy 1, Quake,
                                              Unreal, TeamSpeak, Minecraft, SA-MP, …)
   worker.rs                                  background threads (queries, RCON, log listener)

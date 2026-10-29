@@ -1,5 +1,5 @@
 //! openHLSW protocol core: server addresses, Valve A2S, GameSpy 2 and the other query
-//! protocols of HLSW's game list (`query`), RCON.
+//! protocols of HLSW's game list (`query`), RCON, port forwarding in the router (`upnp`).
 //! Everything here is blocking std networking with timeouts; the GUI runs it on
 //! worker threads.
 
@@ -10,3 +10,4 @@ pub mod query;
 pub mod rcon;
 pub mod stats;
 pub mod steamid;
+pub mod upnp;
