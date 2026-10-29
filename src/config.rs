@@ -20,8 +20,10 @@ pub struct Config {
     /// "View Connect Log": newest last.
     pub connect_log: Vec<String>,
     pub selected: Option<String>,
+    /// "Hide" for servers without their own value (configs from before the RCON settings
+    /// were kept per server, new servers). Each server keeps its own in [`SavedServer`].
     pub hide_rcon_password: bool,
-    /// Periodically refresh players of the selected server.
+    /// "Auto Update Status" for servers without their own value, like `hide_rcon_password`.
     pub auto_update_status: bool,
     #[serde(flatten)]
     pub settings: Settings,
@@ -75,6 +77,15 @@ pub struct SavedServer {
     /// Last successful query (RFC 3339).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<String>,
+    /// Rcon Config → Hide; missing = [`Config::hide_rcon_password`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_rcon_password: Option<bool>,
+    /// Rcon Config → Auto Update Status; missing = [`Config::auto_update_status`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_update_status: Option<bool>,
+    /// Seconds between two automatic `status` commands; missing = the default (30 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_interval: Option<u32>,
 }
 
 pub fn path() -> Option<PathBuf> {

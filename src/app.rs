@@ -48,6 +48,12 @@ use crate::worker::{
     RconStatus, RconTag, ServerId,
 };
 
+/// Seconds between two automatic `status` commands (Auto Update Status), per server.
+const STATUS_INTERVAL_DEFAULT: u32 = 30;
+const STATUS_INTERVAL_RANGE: std::ops::RangeInclusive<u32> = 5..=600;
+/// After an RCON error (server down, connection refused) wait at least this long.
+const STATUS_RETRY_AFTER_ERROR: u32 = 60;
+
 /// Rules (cvars) change rarely; they are queried less often than info/players.
 const RULES_REFRESH: Duration = Duration::from_secs(10);
 /// A server that has not answered for this long is shown as offline (red line).
@@ -99,6 +105,12 @@ struct Server {
     /// used it. Typing alone never logs in (servers ban addresses after failed logins).
     rcon_login: String,
     save_password: bool,
+    /// Rcon Config → Hide: the password field shows dots.
+    hide_password: bool,
+    /// Rcon Config → Auto Update Status: players and `status` while the server is selected.
+    auto_update_status: bool,
+    /// Seconds between two automatic `status` commands ([`STATUS_INTERVAL_RANGE`]).
+    status_interval: u32,
     rcon_status: RconStatus,
     rcon: RconHandle,
     console: VecDeque<ConsoleLine>,
@@ -228,6 +240,9 @@ impl Server {
             rcon_password: String::new(),
             rcon_login: String::new(),
             save_password: false,
+            hide_password: true,
+            auto_update_status: true,
+            status_interval: STATUS_INTERVAL_DEFAULT,
             rcon_status: RconStatus::Unknown,
             rcon: RconHandle::spawn(notifier, id),
             console: VecDeque::new(),
@@ -1334,8 +1349,10 @@ pub struct OpenHlswApp {
     join_password: String,
     hide_join_password: bool,
     status_message: String,
-    auto_update_status: bool,
-    hide_password: bool,
+    /// Hide / Auto Update Status for servers without their own value (older configs, new
+    /// servers); each server keeps its own, see [`Server::hide_password`].
+    default_auto_update_status: bool,
+    default_hide_password: bool,
     last_list_refresh: Option<Instant>,
     traffic: Traffic,
     log_listener: Option<Result<u16, String>>,
@@ -1516,8 +1533,8 @@ impl OpenHlswApp {
             join_password: String::new(),
             hide_join_password: true,
             status_message: tr!("Ready").into(),
-            auto_update_status: config.auto_update_status,
-            hide_password: config.hide_rcon_password,
+            default_auto_update_status: config.auto_update_status,
+            default_hide_password: config.hide_rcon_password,
             last_list_refresh: None,
             log_listener: None,
             port_mapper,
@@ -1595,6 +1612,15 @@ impl OpenHlswApp {
                 .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
                 .map(|t| t.with_timezone(&chrono::Local));
             server.console_cache = self.settings.console_cache.max(1);
+            (
+                server.hide_password,
+                server.auto_update_status,
+                server.status_interval,
+            ) = rcon_options(
+                saved,
+                self.default_hide_password,
+                self.default_auto_update_status,
+            );
             if let Some(pw) = &saved.rcon_password {
                 server.rcon_password = pw.clone();
                 server.rcon_login = pw.clone();
@@ -1616,6 +1642,9 @@ impl OpenHlswApp {
             last_connected: s.last_connected.clone(),
             info: s.info.clone(),
             last_seen: s.last_seen.map(|t| t.to_rfc3339()),
+            hide_rcon_password: Some(s.hide_password),
+            auto_update_status: Some(s.auto_update_status),
+            status_interval: Some(s.status_interval),
         }
     }
 
@@ -1679,7 +1708,6 @@ impl OpenHlswApp {
     fn refresh(&mut self, id: ServerId, force_details: bool) {
         let notifier = self.notifier.clone();
         let selected = self.selected == Some(id);
-        let auto_details = self.auto_update_status;
         let base_rate = self.settings.max_queries_per_sec.max(0.1);
         let Some(s) = self.server_mut(id) else { return };
         // Never more than the server itself announces (HLDS often uses max_queries_sec 1 with a
@@ -1703,7 +1731,7 @@ impl OpenHlswApp {
         if force_details || rules_due {
             kinds.push((2, QueryKind::Rules));
         }
-        if force_details || (selected && auto_details) {
+        if force_details || (selected && s.auto_update_status) {
             kinds.push((1, QueryKind::Players));
         }
         kinds.sort_by_key(|&(slot, _)| s.sent[slot]);
@@ -1748,16 +1776,16 @@ impl OpenHlswApp {
         self.last_list_refresh = Some(Instant::now());
     }
 
-    /// "Auto Update Status": every 5 s RCON `status` for the selected server (Steam IDs,
-    /// IPs, ping) and make sure the server sends us its log (`logaddress_add`), so
-    /// the log shows up in the Console and Chat tabs.
+    /// "Auto Update Status" (per server): RCON `status` for the selected server every
+    /// `status_interval` seconds (default 30; Steam IDs, IPs, ping) and make sure the server
+    /// sends us its log (`logaddress_add`), so the log shows up in the Console and Chat tabs.
     /// Never retries after a bad password (srcds bans IPs after repeated failed logins).
     fn poll_player_status(&mut self, ctx: &egui::Context) {
-        if !self.auto_update_status {
-            return;
-        }
         let Some(id) = self.selected else { return };
         let Some(s) = self.server_mut(id) else { return };
+        if !s.auto_update_status {
+            return;
+        }
         // Only with a password that was used on purpose (Test, a command), never one that
         // is still being typed.
         if s.rcon_login.is_empty()
@@ -1768,14 +1796,12 @@ impl OpenHlswApp {
         {
             return;
         }
-        // After an error (server down, connection refused) wait longer before retrying.
-        let wait = if matches!(s.rcon_status, RconStatus::Error(_)) {
-            30
-        } else {
-            5
-        };
+        let wait = status_wait(
+            s.status_interval,
+            matches!(s.rcon_status, RconStatus::Error(_)),
+        );
         if s.last_status
-            .is_some_and(|t| t.elapsed() < Duration::from_secs(wait))
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(wait.into()))
         {
             return;
         }
@@ -2646,8 +2672,8 @@ impl OpenHlswApp {
         if due {
             if self.last_list_refresh.is_none() || self.settings.auto_refresh {
                 self.refresh_all(false);
-            } else if self.auto_update_status
-                && let Some(id) = self.selected
+            } else if let Some(id) = self.selected
+                && self.server(id).is_some_and(|s| s.auto_update_status)
             {
                 self.refresh(id, false);
                 self.last_list_refresh = Some(Instant::now());
@@ -2700,8 +2726,8 @@ impl OpenHlswApp {
                 .selected
                 .and_then(|id| self.server(id))
                 .map(|s| s.address.to_string()),
-            hide_rcon_password: self.hide_password,
-            auto_update_status: self.auto_update_status,
+            hide_rcon_password: self.default_hide_password,
+            auto_update_status: self.default_auto_update_status,
             settings: self.settings.clone(),
         };
         if let Err(e) = config::save(&config) {
@@ -2765,6 +2791,8 @@ impl OpenHlswApp {
                     self.status_message = tr!("Added {address}", address = address);
                     let mut server = Server::new(id, address, &self.notifier);
                     server.console_cache = self.settings.console_cache.max(1);
+                    server.hide_password = self.default_hide_password;
+                    server.auto_update_status = self.default_auto_update_status;
                     // The chosen game decides how the server is queried; A2S and GameSpy
                     // servers without a game are detected.
                     server.game = self
@@ -4711,8 +4739,6 @@ impl OpenHlswApp {
     }
 
     fn rcon_config_tab(&mut self, ui: &mut Ui, p: &Palette, idx: usize, actions: &mut Vec<Action>) {
-        let hide = &mut self.hide_password;
-        let auto_update = &mut self.auto_update_status;
         let s = &mut self.servers[idx];
         let id = s.id;
 
@@ -4722,7 +4748,7 @@ impl OpenHlswApp {
                     .num_columns(2)
                     .spacing([8.0, 5.0])
                     .show(ui, |ui| {
-                        let pw = password_field(ui, &mut s.rcon_password, *hide, 105.0)
+                        let pw = password_field(ui, &mut s.rcon_password, s.hide_password, 105.0)
                             .with_edit_menu();
                         // Typing only edits the password: the server is asked with it when
                         // Test (or Enter) is pressed, not on every key (failed RCON logins get
@@ -4751,7 +4777,7 @@ impl OpenHlswApp {
                         ui.end_row();
 
                         ui.horizontal(|ui| {
-                            if ui.checkbox(hide, tr!("Hide")).changed() {
+                            if ui.checkbox(&mut s.hide_password, tr!("Hide")).changed() {
                                 actions.push(Action::SaveConfig);
                             }
                             ui.add_space(14.0);
@@ -4812,7 +4838,7 @@ impl OpenHlswApp {
             ui.vertical(|ui| {
                 ui.add_space(10.0);
                 if ui
-                    .checkbox(auto_update, tr!("Auto Update Status"))
+                    .checkbox(&mut s.auto_update_status, tr!("Auto Update Status"))
                     .on_hover_text(
                         tr!("Regularly sends `status` (Steam IDs, IPs, ping) and sets up the server log (logaddress_add) for the Console and Chat tabs"),
                     )
@@ -4820,6 +4846,23 @@ impl OpenHlswApp {
                 {
                     actions.push(Action::SaveConfig);
                 }
+                ui.horizontal(|ui| {
+                    ui.add_space(22.0);
+                    ui.label(tr!("Interval:"));
+                    let interval = ui
+                        .add_enabled(
+                            s.auto_update_status,
+                            DragValue::new(&mut s.status_interval)
+                                .range(STATUS_INTERVAL_RANGE)
+                                .suffix(" s"),
+                        )
+                        .on_hover_text(tr!(
+                            "Seconds between two automatic `status` commands to this server (after an error at least 60 s)"
+                        ));
+                    if interval.changed() {
+                        actions.push(Action::SaveConfig);
+                    }
+                });
                 if ui
                     .checkbox(
                         &mut self.settings.admin_notification,
@@ -9545,6 +9588,29 @@ fn migrate_defaults(st: &mut Settings) {
     }
 }
 
+/// Hide, Auto Update Status and the status interval of a saved server; values it does not
+/// have (configs from before they were kept per server) come from the old global settings.
+fn rcon_options(saved: &SavedServer, hide_default: bool, auto_default: bool) -> (bool, bool, u32) {
+    (
+        saved.hide_rcon_password.unwrap_or(hide_default),
+        saved.auto_update_status.unwrap_or(auto_default),
+        saved
+            .status_interval
+            .unwrap_or(STATUS_INTERVAL_DEFAULT)
+            .clamp(*STATUS_INTERVAL_RANGE.start(), *STATUS_INTERVAL_RANGE.end()),
+    )
+}
+
+/// Seconds until the next automatic `status`: the server's interval, after an error at least
+/// [`STATUS_RETRY_AFTER_ERROR`].
+fn status_wait(interval: u32, error: bool) -> u32 {
+    if error {
+        interval.max(STATUS_RETRY_AFTER_ERROR)
+    } else {
+        interval
+    }
+}
+
 fn sanitize_interval(secs: f32, max_queries_per_sec: f32) -> f32 {
     let min = min_interval(max_queries_per_sec);
     if secs.is_finite() {
@@ -10456,6 +10522,34 @@ mod tests {
         assert_eq!(status_line(""), "");
         let long = "a".repeat(STATUS_MAX_CHARS + 5);
         assert_eq!(status_line(&long).chars().count(), STATUS_MAX_CHARS + 2);
+    }
+
+    #[test]
+    fn rcon_options_per_server() {
+        // Old config: no per-server values, the old global ones are taken.
+        let old: SavedServer = serde_json::from_str(r#"{"address":"203.0.113.10:27015"}"#).unwrap();
+        assert_eq!(rcon_options(&old, false, false), (false, false, 30));
+        assert_eq!(rcon_options(&old, true, true), (true, true, STATUS_INTERVAL_DEFAULT));
+
+        // Own values win; a hand-edited interval is clamped.
+        let own: SavedServer = serde_json::from_str(
+            r#"{"address":"203.0.113.10:27015","hide_rcon_password":false,"auto_update_status":true,"status_interval":1}"#,
+        )
+        .unwrap();
+        assert_eq!(rcon_options(&own, true, false), (false, true, 5));
+        let huge = SavedServer {
+            status_interval: Some(u32::MAX),
+            ..own
+        };
+        assert_eq!(rcon_options(&huge, true, false).2, 600);
+    }
+
+    #[test]
+    fn status_wait_defaults() {
+        assert_eq!(STATUS_INTERVAL_DEFAULT, 30);
+        assert_eq!(status_wait(30, false), 30);
+        assert_eq!(status_wait(30, true), 60);
+        assert_eq!(status_wait(120, true), 120);
     }
 
     #[test]
