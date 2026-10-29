@@ -118,6 +118,7 @@
  "Connections": "Соединения",
  "Console": "Консоль",
  "Copied server to {target}": "Сервер скопирован в {target}",
+ "Copied {lines} lines": "Скопировано строк: {lines}",
  "Copied {text}": "Скопировано: {text}",
  "Copy": "Копировать",
  "Copy\tCtrl+C": "Копировать\tCtrl+C",

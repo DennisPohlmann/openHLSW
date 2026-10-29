@@ -112,6 +112,7 @@
  "Connection Settings": "Verbindingsinstellingen",
  "Connections": "Verbindingen",
  "Copied server to {target}": "Server gekopieerd naar {target}",
+ "Copied {lines} lines": "{lines} regels gekopieerd",
  "Copied {text}": "{text} gekopieerd",
  "Copy": "Kopiëren",
  "Copy\tCtrl+C": "Kopiëren\tCtrl+C",

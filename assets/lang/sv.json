@@ -116,6 +116,7 @@
  "Connections": "Anslutningar",
  "Console": "Konsol",
  "Copied server to {target}": "Servern kopierad till {target}",
+ "Copied {lines} lines": "{lines} rader kopierade",
  "Copied {text}": "{text} kopierad",
  "Copy": "Kopiera",
  "Copy\tCtrl+C": "Kopiera\tCtrl+C",

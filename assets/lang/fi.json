@@ -117,6 +117,7 @@
  "Connections": "Yhteydet",
  "Console": "Konsoli",
  "Copied server to {target}": "Palvelin kopioitu luetteloon {target}",
+ "Copied {lines} lines": "{lines} riviä kopioitu",
  "Copied {text}": "{text} kopioitu",
  "Copy": "Kopioi",
  "Copy\tCtrl+C": "Kopioi\tCtrl+C",

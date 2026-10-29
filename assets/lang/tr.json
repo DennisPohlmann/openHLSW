@@ -118,6 +118,7 @@
  "Connections": "Bağlantılar",
  "Console": "Konsol",
  "Copied server to {target}": "Sunucu {target} listesine kopyalandı",
+ "Copied {lines} lines": "{lines} satır kopyalandı",
  "Copied {text}": "{text} kopyalandı",
  "Copy": "Kopyala",
  "Copy\tCtrl+C": "Kopyala\tCtrl+C",

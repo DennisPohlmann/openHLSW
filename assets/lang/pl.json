@@ -118,6 +118,7 @@
  "Connections": "Połączenia",
  "Console": "Konsola",
  "Copied server to {target}": "Skopiowano serwer do {target}",
+ "Copied {lines} lines": "Skopiowano wiersze: {lines}",
  "Copied {text}": "Skopiowano {text}",
  "Copy": "Kopiuj",
  "Copy\tCtrl+C": "Kopiuj\tCtrl+C",

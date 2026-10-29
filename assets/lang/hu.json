@@ -118,6 +118,7 @@
  "Connections": "Kapcsolatok",
  "Console": "Konzol",
  "Copied server to {target}": "Szerver másolva ide: {target}",
+ "Copied {lines} lines": "{lines} sor másolva",
  "Copied {text}": "{text} másolva",
  "Copy": "Másolás",
  "Copy\tCtrl+C": "Másolás\tCtrl+C",

@@ -118,6 +118,7 @@
  "Connections": "连接设置",
  "Console": "控制台",
  "Copied server to {target}": "服务器已复制到 {target}",
+ "Copied {lines} lines": "已复制 {lines} 行",
  "Copied {text}": "已复制 {text}",
  "Copy": "复制",
  "Copy\tCtrl+C": "复制\tCtrl+C",

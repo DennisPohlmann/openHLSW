@@ -117,6 +117,7 @@
  "Connections": "Připojení",
  "Console": "Konzole",
  "Copied server to {target}": "Server zkopírován do {target}",
+ "Copied {lines} lines": "Zkopírováno řádků: {lines}",
  "Copied {text}": "{text} zkopírováno",
  "Copy": "Kopírovat",
  "Copy\tCtrl+C": "Kopírovat\tCtrl+C",

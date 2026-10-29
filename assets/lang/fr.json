@@ -112,6 +112,7 @@
  "Connection Settings": "Paramètres de connexion",
  "Connections": "Connexions",
  "Copied server to {target}": "Serveur copié vers {target}",
+ "Copied {lines} lines": "{lines} lignes copiées",
  "Copied {text}": "{text} copié",
  "Copy": "Copier",
  "Copy\tCtrl+C": "Copier\tCtrl+C",

@@ -115,6 +115,7 @@
  "Connections": "Tilkoblinger",
  "Console": "Konsoll",
  "Copied server to {target}": "Serveren kopiert til {target}",
+ "Copied {lines} lines": "{lines} linjer kopiert",
  "Copied {text}": "{text} kopiert",
  "Copy": "Kopier",
  "Copy\tCtrl+C": "Kopier\tCtrl+C",

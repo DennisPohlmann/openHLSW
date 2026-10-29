@@ -2829,7 +2829,12 @@ impl OpenHlswApp {
                 }
             }
             Action::CopyText(text) => {
-                self.status_message = tr!("Copied {text}", text = text);
+                let lines = text.lines().count();
+                self.status_message = if lines > 1 {
+                    tr!("Copied {lines} lines", lines = lines)
+                } else {
+                    tr!("Copied {text}", text = text)
+                };
                 ctx.copy_text(text);
             }
             Action::OpenUrl(url) => {
@@ -4487,7 +4492,7 @@ impl OpenHlswApp {
 
     fn status_bar(&self, ui: &mut Ui, p: &Palette) {
         ui.horizontal(|ui| {
-            ui.label(&self.status_message);
+            ui.label(status_line(&self.status_message));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let (sent, recv) = self.traffic.rate;
                 ui.label(tr!(
@@ -10414,9 +10419,33 @@ fn autocomplete(input: &str, history: &[String]) -> (Option<String>, Vec<String>
     (completed, candidates)
 }
 
+/// Longest status bar message in characters; the rest is cut off with "…".
+const STATUS_MAX_CHARS: usize = 200;
+
+/// The status bar is one line high: the first non-empty line of `message`, with "…" when
+/// lines or characters were cut off (RCON replies, copied tables, …).
+fn status_line(message: &str) -> String {
+    let mut lines = message.lines().map(str::trim).filter(|l| !l.is_empty());
+    let first = lines.next().unwrap_or_default();
+    let mut line: String = first.chars().take(STATUS_MAX_CHARS).collect();
+    if lines.next().is_some() || first.chars().count() > STATUS_MAX_CHARS {
+        line.push_str(" …");
+    }
+    line
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_line_is_one_line() {
+        assert_eq!(status_line("Ready"), "Ready");
+        assert_eq!(status_line("\nName: x\nMap: y\n"), "Name: x …");
+        assert_eq!(status_line(""), "");
+        let long = "a".repeat(STATUS_MAX_CHARS + 5);
+        assert_eq!(status_line(&long).chars().count(), STATUS_MAX_CHARS + 2);
+    }
 
     #[test]
     fn selection_click_ctrl_shift_arrows() {
