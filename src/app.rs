@@ -2577,9 +2577,6 @@ impl OpenHlswApp {
                     };
                     match event {
                         RconEvent::Status(status) => {
-                            if status == RconStatus::Ok {
-                                s.last_status = None; // fetch player details right away
-                            }
                             s.rcon_status = status;
                         }
                         RconEvent::Output { tag, text } => match tag {
@@ -3353,6 +3350,10 @@ impl OpenHlswApp {
                 if let Some(s) = self.server_mut(id) {
                     s.use_typed_rcon_password();
                     s.rcon.send(RconRequest::Test);
+                    // Fetch the player details as soon as the login works. Not on every
+                    // login: a command that logs in itself (the periodic `status`) would
+                    // otherwise be followed by a second `status` right away.
+                    s.last_status = None;
                 }
             }
             Action::RconDisconnect(id) => {
