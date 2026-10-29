@@ -5447,6 +5447,7 @@ impl OpenHlswApp {
                 };
                 let mut text = match l.kind {
                     LineKind::Log if o.translate_log => translate_log(&l.text),
+                    LineKind::Log => strip_log_stamp(&l.text, l.time.naive_local()).to_string(),
                     LineKind::Note => format!("openHLSW NOTE: {}", l.text),
                     _ => l.text.clone(),
                 };
@@ -10637,6 +10638,27 @@ fn translate_log(line: &str) -> String {
     out
 }
 
+/// Splits a server log line into its date/time prefix and the rest:
+/// "[L ]MM/DD/YYYY - HH:MM:SS: rest". None if the line has no valid prefix.
+fn parse_log_stamp(line: &str) -> Option<(chrono::NaiveDateTime, &str)> {
+    let line = line.strip_prefix("L ").unwrap_or(line);
+    // The prefix has a fixed width: "10/29/2026 - 09:19:46" is 21 bytes, then ": ".
+    let stamp = line.get(..21)?;
+    let rest = line.get(21..)?.strip_prefix(": ")?;
+    let time = chrono::NaiveDateTime::parse_from_str(stamp, "%m/%d/%Y - %H:%M:%S").ok()?;
+    Some((time, rest))
+}
+
+/// Drops the date/time prefix of a log line when it says the same as the console's own
+/// time column (within a minute), so date and time show only once. A server clock in
+/// another time zone or far off keeps its prefix: that time is not shown anywhere else.
+fn strip_log_stamp(line: &str, received: chrono::NaiveDateTime) -> &str {
+    match parse_log_stamp(line) {
+        Some((time, rest)) if (time - received).num_seconds().abs() <= 60 => rest,
+        _ => line,
+    }
+}
+
 /// "*" switch: hide the rcon password in console lines.
 fn mask_password(text: &str, password: Option<&str>) -> String {
     let mut out = match password {
@@ -11573,6 +11595,35 @@ mod tests {
             mask_password("pw is geheim", Some("geheim")),
             "pw is ********"
         );
+    }
+
+    #[test]
+    fn log_stamp_parse_and_strip() {
+        let at = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+        let line = r#"10/29/2026 - 09:19:46: "Bob<2><STEAM_1:0:1><CT>" say "hi""#;
+        let rest = r#""Bob<2><STEAM_1:0:1><CT>" say "hi""#;
+        let stamp = at("2026-10-29 09:19:46");
+        assert_eq!(parse_log_stamp(line), Some((stamp, rest)));
+        assert_eq!(parse_log_stamp(&format!("L {line}")), Some((stamp, rest)));
+        // same time (give or take a minute): the prefix goes
+        assert_eq!(strip_log_stamp(line, at("2026-10-29 09:19:47")), rest);
+        assert_eq!(strip_log_stamp(line, at("2026-10-29 09:20:40")), rest);
+        // server clock in another time zone: the prefix stays
+        assert_eq!(strip_log_stamp(line, at("2026-10-29 15:19:46")), line);
+        // no prefix, broken prefix, "L ..." that is no prefix: unchanged
+        for other in [
+            "Server cvars start",
+            "13/29/2026 - 09:19:46: bad month",
+            "10/29/2026 - 9:19:46: short hour",
+            "10/29/2026 - 09:19:46 no colon",
+            "10/29/2026 - 09:19:46:",
+            "L ogging to file",
+            "L 10/29/2026",
+            "",
+        ] {
+            assert_eq!(parse_log_stamp(other), None, "{other}");
+            assert_eq!(strip_log_stamp(other, stamp), other);
+        }
     }
 
     #[test]
