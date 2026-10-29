@@ -51,6 +51,13 @@ pub enum Event {
     },
     /// Result of forwarding the log port in the router (UPnP), see [`PortMapper`].
     PortMap(Result<PortMapping, String>),
+    /// A server was asked for its log but nothing arrived: the firewall found on this
+    /// computer that may block `port`, if any.
+    NoLog {
+        id: ServerId,
+        port: u16,
+        firewall: Option<crate::firewall::Firewall>,
+    },
 }
 
 /// The log port forwarded in the router.
@@ -311,6 +318,15 @@ fn other_protocol(
             result: result.map(|(status, meta)| (status.rules, meta)),
         },
     }
+}
+
+/// Checks the local firewall for the log port after a server's log did not arrive.
+pub fn spawn_no_log_check(notifier: &Notifier, id: ServerId, port: u16) {
+    let n = notifier.clone();
+    thread::spawn(move || {
+        let firewall = crate::firewall::check(port);
+        n.send(Event::NoLog { id, port, firewall });
+    });
 }
 
 /// Looks up the location of up to 100 server IPs (ip-api.com batch request).

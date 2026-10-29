@@ -19,6 +19,7 @@ mod app;
 mod config;
 mod discover;
 mod filter;
+mod firewall;
 mod flags;
 mod game_icons;
 mod games;

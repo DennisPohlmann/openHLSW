@@ -130,7 +130,9 @@ services are gone), Metamod plugin management.
   reachable – for Internet forwarded in your router. By default openHLSW listens on a free
   port chosen at start; Settings → Connections → Fixed UDP port sets one (e.g. 27500). With
   a firewall on this computer (ufw, firewalld, Windows Firewall rules for a port) use a fixed
-  port and allow it there.
+  port and allow it there. If no log line arrives within 15 s after Get Log, openHLSW says
+  so in the console and the status bar, with the router forwarding state and, when it finds
+  ufw or firewalld on, the command that opens the port (no root needed for the check).
   openHLSW does that by itself with UPnP while it receives logs (and removes the forwarding
   on exit); it can be switched off in Settings → Connections. It needs UPnP enabled in the
   router (FRITZ!Box: "Permit independent port sharing") and a public IPv4 address – with
@@ -194,6 +196,7 @@ src/
   theme.rs, toolbar_icons.rs, typeahead.rs   look, fonts, toolbar icons, dropdown search
   games.rs, game_icons.rs, flags.rs          game list, icons, country flags
   filter.rs, iddb.rs, discover.rs            filter, Global ID Database, Steam favorites / LAN
+  firewall.rs                                local firewall check for the log port
   geo.rs, trace.rs, stats.rs                 location, Trace Route, traffic counters
   i18n.rs, config.rs                         languages, settings file
   server_io.rs                               server list export / import (JSON, CSV, text)

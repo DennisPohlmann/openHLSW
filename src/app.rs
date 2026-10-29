@@ -30,6 +30,7 @@ use openhlsw::steamid::SteamId;
 
 use crate::config::{self, Config, SavedList, SavedServer};
 use crate::discover;
+use crate::firewall;
 use crate::flags::Flags;
 use crate::game_icons::{self, GameIcons};
 use crate::typeahead::TypeAhead;
@@ -56,6 +57,8 @@ const STATUS_RETRY_AFTER_ERROR: u32 = 60;
 
 /// Rules (cvars) change rarely; they are queried less often than info/players.
 const RULES_REFRESH: Duration = Duration::from_secs(10);
+/// Time for the first log line after Get Log (`log on` and every RCON command are logged).
+const LOG_WAIT: Duration = Duration::from_secs(15);
 /// A server that has not answered for this long is shown as offline (red line).
 const OFFLINE_AFTER: Duration = Duration::from_secs(10);
 const CHAT_MAX_LINES: usize = 1000;
@@ -148,6 +151,8 @@ struct Server {
     chat: Vec<ChatLine>,
     /// Where the server currently sends its log, and whether it was the Internet variant.
     log_target: Option<(SocketAddr, bool)>,
+    /// Get Log succeeded at this time and no log line has arrived since.
+    log_waiting: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -269,6 +274,7 @@ impl Server {
             log_requested: None,
             chat: Vec::new(),
             log_target: None,
+            log_waiting: None,
         }
     }
 
@@ -2103,6 +2109,7 @@ impl OpenHlswApp {
         }
 
         let s = &mut self.servers[idx];
+        s.log_waiting = None;
         apply_log_stats(&mut s.log_players, &line);
         s.append_console(&format!("L {line}"));
         let mut sound = joined.then_some(SoundEvent::PlayerJoin);
@@ -2706,6 +2713,7 @@ impl OpenHlswApp {
                         RconEvent::LogStarted(Ok(target)) => {
                             let internet = s.log_target.map(|(_, i)| i).unwrap_or(false);
                             s.log_target = Some((target, internet));
+                            s.log_waiting = Some(Instant::now());
                             s.append_console(&tr!(
                                 "*** Server log is now sent to {target}",
                                 target = target
@@ -2735,6 +2743,7 @@ impl OpenHlswApp {
                         self.status_message = text;
                     }
                 }
+                Event::NoLog { id, port, firewall } => self.report_no_log(id, port, firewall),
                 Event::Geo(result) => match result {
                     Ok(list) => {
                         for (ip, info) in list {
@@ -2755,7 +2764,67 @@ impl OpenHlswApp {
         }
     }
 
+    /// A server's log has not arrived within [`LOG_WAIT`] after Get Log: check the local
+    /// firewall (off the UI thread), then explain what to do.
+    fn check_log_arrival(&mut self) {
+        let Some(port) = self.log_port() else { return };
+        for s in &mut self.servers {
+            if s.log_waiting.is_some_and(|t| t.elapsed() >= LOG_WAIT) {
+                s.log_waiting = None;
+                worker::spawn_no_log_check(&self.notifier, s.id, port);
+            }
+        }
+    }
+
+    fn report_no_log(&mut self, id: ServerId, port: u16, firewall: Option<firewall::Firewall>) {
+        let forwarded = matches!(&self.port_mapping, Some(Ok(m)) if m.port == port);
+        let Some(s) = self.server_mut(id) else { return };
+        // A line may have arrived while the firewall was checked.
+        if s.log_target.is_none() || s.log_waiting.is_some() {
+            return;
+        }
+        let internet = s.log_target.is_some_and(|(_, internet)| internet);
+        let mut text = tr!(
+            "No server log arrived on UDP port {port} within {secs} s.",
+            port = port,
+            secs = LOG_WAIT.as_secs()
+        );
+        if internet && !forwarded {
+            text.push(' ');
+            text.push_str(&tr!(
+                "Check that the router forwards UDP port {port} to this computer.",
+                port = port
+            ));
+        }
+        match firewall {
+            Some(firewall::Firewall::Ufw) => {
+                text.push(' ');
+                text.push_str(&tr!(
+                    "ufw is on and may block it: sudo ufw allow {port}/udp",
+                    port = port
+                ));
+            }
+            Some(firewall::Firewall::FirewalldClosed) => {
+                text.push(' ');
+                text.push_str(&tr!(
+                    "firewalld blocks it: sudo firewall-cmd --permanent --add-port={port}/udp && sudo firewall-cmd --reload",
+                    port = port
+                ));
+            }
+            None if cfg!(windows) => {
+                text.push(' ');
+                text.push_str(tr!(
+                    "Windows Firewall: allow openHLSW for incoming connections."
+                ));
+            }
+            None => {}
+        }
+        s.append_console(&format!("*** {text}"));
+        self.status_message = text;
+    }
+
     fn tick(&mut self, ctx: &egui::Context) {
+        self.check_log_arrival();
         if let Some(rx) = &self.lan_search
             && let Ok(result) = rx.try_recv()
         {
