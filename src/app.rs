@@ -1621,7 +1621,7 @@ impl OpenHlswApp {
             rules_filter: String::new(),
             tab: Tab::RconConfig,
             console_input: String::new(),
-            history: Vec::new(),
+            history: config::history_to_save(&config.console_history),
             history_pos: None,
             show_about: false,
             about_icon: None,
@@ -2830,6 +2830,7 @@ impl OpenHlswApp {
             list_name: self.list_name.clone(),
             other_lists: self.other_lists.clone(),
             connect_log: self.connect_log.clone(),
+            console_history: config::history_to_save(&self.history),
             selected: self
                 .selected
                 .and_then(|id| self.server(id))
@@ -3366,6 +3367,10 @@ impl OpenHlswApp {
                 }
                 if self.history.last() != Some(&command) {
                     self.history.push(command.clone());
+                    // Commands that may carry a secret stay in this session's history only.
+                    if !config::is_secret_command(&command) {
+                        self.save_config();
+                    }
                 }
                 self.history_pos = None;
                 self.console_input.clear();

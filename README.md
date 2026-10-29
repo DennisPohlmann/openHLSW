@@ -85,6 +85,10 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   button sends is shown with the server's answer, and so is the periodic `status` of Auto
   Update Status (switch A hides it).
 - Chat with Admin Notification, Ban List (with the Global ID Database), Change Level.
+- The console history keeps the last 200 commands across restarts; commands that may carry
+  a secret (`rcon_password`, `sv_password`, `login`, `sv_setsteamaccount`,
+  `rcon <password> ...`, anything containing "password", "passwd" or "token") stay in the
+  history of the running session only and are never saved.
 
 **More**
 - Connect with player name, start parameters per game and server, password prompt and
@@ -130,7 +134,8 @@ services are gone), Metamod plugin management.
   CGNAT / DS-Lite no forwarding helps. Without UPnP, forward the port by hand.
 - **Settings** are stored in `config.json` in `%APPDATA%\openHLSW` (Windows),
   `~/.config/openHLSW` (Linux, FreeBSD) or `~/Library/Application Support/openHLSW` (macOS).
-  Saved RCON passwords are stored there as plain text.
+  Saved RCON passwords are stored there as plain text, as is the console history (without
+  commands that may carry a secret).
 
 ## Building
 
