@@ -95,6 +95,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "Sohbet sunucu günlüğünden okunur. Almaya başlamak için Rcon Ayarları'nda \"Günlüğü al\"a tıkla.",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "@ ile başlayan sohbet mesajları bildirim sesini çalar ve durum çubuğunda gösterilir (sunucu günlüğü gerekir)",
  "Check that the router forwards UDP port {port} to this computer.": "Yönlendiricinin UDP portu {port} bu bilgisayara yönlendirdiğini kontrol edin.",
+ "Clear chat": "Sohbeti temizle",
  "Clear console": "Konsolu temizle",
  "Clear filter": "Filtreyi temizle",
  "Clear location and provider cache": "Konum ve sağlayıcı önbelleğini temizle",

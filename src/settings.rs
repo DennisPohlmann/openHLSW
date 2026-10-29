@@ -663,6 +663,8 @@ pub struct Settings {
     pub view: ViewOptions,
     /// Switches on the left of the console (C * F D E A).
     pub console: ConsoleOptions,
+    /// Switches of the chat (D).
+    pub chat: ChatOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -694,6 +696,13 @@ impl Default for ConsoleOptions {
             hide_automatic: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatOptions {
+    /// D: show the date next to the time.
+    pub show_date: bool,
 }
 
 /// What the View menu shows or hides.
@@ -808,6 +817,7 @@ impl Default for Settings {
             connect_on_double_click: true,
             view: ViewOptions::default(),
             console: ConsoleOptions::default(),
+            chat: ChatOptions::default(),
         }
     }
 }

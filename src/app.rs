@@ -215,7 +215,8 @@ struct LogPlayer {
 
 #[derive(Clone)]
 struct ChatLine {
-    time: String,
+    /// From the server log's own stamp (when it has one), else when it arrived.
+    time: chrono::NaiveDateTime,
     name: String,
     team: String,
     team_only: bool,
@@ -844,6 +845,7 @@ enum Action {
     RconDisconnect(ServerId),
     SendConsole(ServerId),
     ClearConsole(ServerId),
+    ClearChat(ServerId),
     /// Open or close the big console and chat window (toolbar).
     ToggleConsoleWindow,
     SwitchTab(Tab),
@@ -1406,6 +1408,9 @@ pub struct OpenHlswApp {
     paused_for_game: bool,
     console_input_id: Option<egui::Id>,
     console_autoscroll: bool,
+    /// "S" of the chat, and what it showed at its end when it last scrolled there.
+    chat_autoscroll: bool,
+    chat_end_key: Option<u64>,
     /// What the console showed at its end when it last scrolled there (see console_tab).
     console_end_key: Option<u64>,
     /// Find bar of the Rcon console.
@@ -1597,6 +1602,8 @@ impl OpenHlswApp {
             paused_for_game: false,
             console_input_id: None,
             console_autoscroll: true,
+            chat_autoscroll: true,
+            chat_end_key: None,
             console_end_key: None,
             console_find: None,
             address_input: String::new(),
@@ -3477,6 +3484,11 @@ impl OpenHlswApp {
                     s.console.clear();
                 }
             }
+            Action::ClearChat(id) => {
+                if let Some(s) = self.server_mut(id) {
+                    s.chat.clear();
+                }
+            }
             Action::ToggleConsoleWindow => self.console_window = !self.console_window,
             Action::SwitchTab(tab) => {
                 self.tab = tab;
@@ -3692,7 +3704,7 @@ impl OpenHlswApp {
                     // Show the message right away: the server log may not reach us (no Get
                     // Log, firewall, NAT). If it does, its echo only confirms this line.
                     s.chat.push(ChatLine {
-                        time: chrono::Local::now().format("%H:%M:%S").to_string(),
+                        time: chrono::Local::now().naive_local(),
                         name: "Console".into(),
                         team: String::new(),
                         team_only: false,
@@ -6274,7 +6286,26 @@ impl OpenHlswApp {
 
     fn chat_tab(&mut self, ui: &mut Ui, p: &Palette, idx: usize, actions: &mut Vec<Action>) {
         let id = self.servers[idx].id;
+        // Switches on the left, like the console's.
+        egui::Panel::left("chat_switches")
+            .frame(Frame::new())
+            .exact_size(20.0)
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let show_date = &mut self.settings.chat.show_date;
+                if toggle_button(ui, p, "D", *show_date)
+                    .on_hover_text(tr!("Show date"))
+                    .clicked()
+                {
+                    *show_date = !*show_date;
+                    actions.push(Action::SaveConfig);
+                }
+            });
+
         let input = &mut self.chat_input;
+        let autoscroll = &mut self.chat_autoscroll;
+        let big_window = &mut self.console_window;
         egui::Panel::bottom("chat_input")
             .frame(Frame::new().inner_margin(Margin {
                 top: 4,
@@ -6289,7 +6320,7 @@ impl OpenHlswApp {
                                 .align(egui::Align2::LEFT_CENTER)
                                 .id_salt("chat_input_field")
                                 .hint_text(tr!("Message to all players (rcon say)"))
-                                .desired_width((ui.available_width() - 60.0).max(100.0)),
+                                .desired_width((ui.available_width() - 130.0).max(100.0)),
                         )
                         .with_edit_menu();
                     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
@@ -6301,10 +6332,47 @@ impl OpenHlswApp {
                         actions.push(Action::Say(id));
                         resp.request_focus();
                     }
+                    if toggle_button(ui, p, "S", *autoscroll)
+                        .on_hover_text(tr!("Auto scroll"))
+                        .clicked()
+                    {
+                        *autoscroll = !*autoscroll;
+                    }
+                    if toggle_button(ui, p, "X", false)
+                        .on_hover_text(tr!("Clear chat"))
+                        .clicked()
+                    {
+                        actions.push(Action::ClearChat(id));
+                    }
+                    let r = toggle_button(ui, p, "", *big_window).on_hover_text(if *big_window {
+                        tr!("Back to the main window")
+                    } else {
+                        tr!("Console and chat in a big window")
+                    });
+                    window_icon(ui, p, r.rect);
+                    if r.clicked() {
+                        *big_window = !*big_window;
+                    }
                 });
             });
 
         let s = &self.servers[idx];
+        let show_date = self.settings.chat.show_date;
+        let autoscroll = self.chat_autoscroll;
+        // stick_to_bottom alone lets go of the end after scrolling up and only takes hold
+        // again exactly at the end. So with S on, a new line, switching S on or another
+        // server scroll to the end in any case (like the console).
+        let end_key = autoscroll.then(|| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (id, s.chat.len(), show_date).hash(&mut h);
+            if let Some(c) = s.chat.last() {
+                (c.time, &c.text).hash(&mut h);
+            }
+            h.finish()
+        });
+        let to_end = end_key.is_some() && end_key != self.chat_end_key;
+        self.chat_end_key = end_key;
         egui::CentralPanel::default().frame(Frame::new()).show(ui, |ui| {
             list_frame(ui, p, |ui| {
                 if s.log_target.is_none() && s.chat.is_empty() {
@@ -6318,11 +6386,16 @@ impl OpenHlswApp {
                     });
                     return;
                 }
-                styled_table(ui, "chat")
-                    .stick_to_bottom(true)
-                    .column(Column::initial(60.0).at_least(40.0))
+                // Own id with the date, so the time column starts wide enough for it.
+                let mut table = styled_table(ui, if show_date { "chat_dated" } else { "chat" })
+                    .stick_to_bottom(autoscroll)
+                    .column(Column::initial(if show_date { 125.0 } else { 60.0 }).at_least(40.0))
                     .column(Column::initial(160.0).at_least(60.0).clip(true))
-                    .column(Column::remainder().clip(true))
+                    .column(Column::remainder().clip(true));
+                if to_end && !s.chat.is_empty() {
+                    table = table.scroll_to_row(s.chat.len() - 1, Some(Align::BOTTOM));
+                }
+                table
                     .header(HEADER_HEIGHT, |mut h| {
                         h.col(|ui| { plain_header(ui, p, tr!("Time")); });
                         h.col(|ui| { plain_header(ui, p, tr!("Name")); });
@@ -6337,7 +6410,15 @@ impl OpenHlswApp {
                                 _ => None,
                             };
                             row.col(|ui| {
-                                ui.label(&c.time);
+                                ui.label(
+                                    c.time
+                                        .format(if show_date {
+                                            "%d.%m.%Y %H:%M:%S"
+                                        } else {
+                                            "%H:%M:%S"
+                                        })
+                                        .to_string(),
+                                );
                             });
                             row.col(|ui| {
                                 let mut name = RichText::new(&c.name);
@@ -11149,8 +11230,10 @@ fn apply_log_stats(players: &mut HashMap<String, LogPlayer>, line: &str) {
 
 /// `10/18/2026 - 19:22:33: "Bob<2><STEAM_1:0:1><CT>" say "hi"` → chat line.
 fn parse_chat_line(line: &str) -> Option<ChatLine> {
-    let (stamp, rest) = line.split_once(": ")?;
-    let time = stamp.rsplit(' ').next().unwrap_or_default().to_string();
+    let (time, rest) = match parse_log_stamp(line) {
+        Some(stamped) => stamped,
+        None => (chrono::Local::now().naive_local(), line.split_once(": ")?.1),
+    };
     // HLDS logs `rcon say` as: Server say "text"
     if let Some(text) = rest.strip_prefix("Server say \"") {
         return Some(ChatLine {
@@ -11580,8 +11663,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (c.time.as_str(), c.name.as_str(), c.team.as_str()),
-            ("19:22:33", "B<o>b", "CT")
+            (c.time.to_string().as_str(), c.name.as_str(), c.team.as_str()),
+            ("2026-10-18 19:22:33", "B<o>b", "CT")
         );
         assert!(c.team_only);
         assert_eq!(c.text, "rush b");

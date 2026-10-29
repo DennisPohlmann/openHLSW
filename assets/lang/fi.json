@@ -94,6 +94,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "Chat luetaan palvelinlokista. Napsauta \"Hae loki\" Rcon-asetuksissa aloittaaksesi sen vastaanoton.",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "@-merkillä alkavat chat-viestit soittavat ilmoitusäänen ja näkyvät tilarivillä (vaatii palvelimen lokin)",
  "Check that the router forwards UDP port {port} to this computer.": "Tarkista, että reititin ohjaa UDP-portin {port} tälle tietokoneelle.",
+ "Clear chat": "Tyhjennä chat",
  "Clear console": "Tyhjennä konsoli",
  "Clear filter": "Tyhjennä suodatin",
  "Clear location and provider cache": "Tyhjennä sijainti- ja palveluntarjoajavälimuisti",

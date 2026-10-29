@@ -94,6 +94,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "Chat sa číta z logu servera. Kliknite na \"Získať log\" v Nastavení Rcon a začnite ho prijímať.",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "Správy v chate začínajúce @ prehrajú zvuk upozornenia a zobrazia sa v stavovom riadku (vyžaduje log servera)",
  "Check that the router forwards UDP port {port} to this computer.": "Skontrolujte, či router presmerúva UDP port {port} na tento počítač.",
+ "Clear chat": "Vymazať chat",
  "Clear console": "Vymazať konzolu",
  "Clear filter": "Vymazať filter",
  "Clear location and provider cache": "Vymazať vyrovnávaciu pamäť polohy a poskytovateľov",

@@ -95,6 +95,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "聊天内容从服务器日志读取。在 Rcon 设置中点击“获取日志”即可开始接收。",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "以 @ 开头的聊天消息会播放通知声音并显示在状态栏中（需要服务器日志）",
  "Check that the router forwards UDP port {port} to this computer.": "请检查路由器是否将 UDP 端口 {port} 转发到这台电脑。",
+ "Clear chat": "清空聊天",
  "Clear console": "清空控制台",
  "Clear filter": "清除筛选",
  "Clear location and provider cache": "清除位置和运营商缓存",

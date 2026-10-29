@@ -90,6 +90,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "Chatten læses fra serverloggen. Klik på \"Hent log\" i Rcon-konfig for at begynde at modtage den.",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "Chatbeskeder der starter med @ afspiller notifikationslyden og vises i statuslinjen (kræver serverloggen)",
  "Check that the router forwards UDP port {port} to this computer.": "Kontrollér, at routeren videresender UDP-port {port} til denne computer.",
+ "Clear chat": "Ryd chat",
  "Clear console": "Ryd konsol",
  "Clear filter": "Ryd filter",
  "Clear location and provider cache": "Ryd placerings- og udbydercache",

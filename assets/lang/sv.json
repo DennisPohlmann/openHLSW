@@ -93,6 +93,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "Chatten läses från serverloggen. Klicka på \"Hämta logg\" i Rcon-konfig för att börja ta emot den.",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "Chattmeddelanden som börjar med @ spelar aviseringsljudet och visas i statusfältet (kräver serverloggen)",
  "Check that the router forwards UDP port {port} to this computer.": "Kontrollera att routern vidarebefordrar UDP-port {port} till den här datorn.",
+ "Clear chat": "Rensa chatten",
  "Clear console": "Rensa konsolen",
  "Clear filter": "Rensa filter",
  "Clear location and provider cache": "Rensa plats- och leverantörscache",

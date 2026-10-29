@@ -90,6 +90,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "Der Chat wird aus dem Serverlog gelesen. Klicke in der Rcon-Konfig auf \"Log holen\", um ihn zu empfangen.",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "Chatnachrichten, die mit @ beginnen, spielen den Benachrichtigungston und werden in der Statusleiste angezeigt (benötigt das Serverlog)",
  "Check that the router forwards UDP port {port} to this computer.": "Prüfe, ob der Router UDP-Port {port} an diesen Rechner weiterleitet.",
+ "Clear chat": "Chat leeren",
  "Clear console": "Konsole leeren",
  "Clear filter": "Filter leeren",
  "Clear location and provider cache": "Standort- und Provider-Cache leeren",

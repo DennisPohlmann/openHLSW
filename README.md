@@ -84,7 +84,9 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
 - Console like HLSW (switches C * F D E A, find, history, Tab completion); every command a
   button sends is shown with the server's answer, and so is the periodic `status` of Auto
   Update Status (switch A hides it).
-- Chat with Admin Notification, Ban List (with the Global ID Database), Change Level.
+- Chat with Admin Notification (switch D shows the date, S scrolls along, X clears it,
+  the window button opens the big window), Ban List (with the Global ID Database),
+  Change Level.
 - The console history keeps the last 200 commands across restarts; commands that may carry
   a secret (`rcon_password`, `sv_password`, `login`, `sv_setsteamaccount`,
   `rcon <password> ...`, anything containing "password", "passwd" or "token") stay in the
@@ -96,7 +98,7 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
 - Trace Route window with ping graph per hop; Global Player ID Database (`banned.cfg`
   import / export).
 - Console and Chat in a big window of their own (toolbar button or the window button next
-  to the console input): console above, chat below, the divider can be dragged (console
+  to the console or chat input): console above, chat below, the divider can be dragged (console
   20–90 %); input, history, find and switches are the same as in the tabs. Size and divider
   are remembered.
 - Settings like HLSW: My Games, Startup, Connecting, Rcon, Connections, Sounds, Misc.
