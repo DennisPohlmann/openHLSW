@@ -798,7 +798,7 @@ impl Default for Settings {
             max_queries_per_sec: 2.5,
             keep_order_on_hover: false,
             geo_lookup: true,
-            theme: Theme::Light,
+            theme: Theme::default(),
             text_size: TextSize::default(),
             font: UiFont::default(),
             text_smoothing: Default::default(),

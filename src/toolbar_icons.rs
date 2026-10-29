@@ -4,7 +4,7 @@
 //! the normal icons in the first row and the greyed-out ones in the second.
 
 use eframe::egui::{
-    self, Color32, CornerRadius, Rect, Response, Sense, Stroke, StrokeKind, TextureHandle, Ui,
+    self, Color32, Rect, Response, Sense, Stroke, StrokeKind, TextureHandle, Ui,
     emath::GuiRounding,
 };
 
@@ -109,7 +109,7 @@ impl ToolbarIcons {
             if border != Color32::TRANSPARENT {
                 ui.painter().rect(
                     frame,
-                    CornerRadius::ZERO,
+                    ui.visuals().widgets.hovered.corner_radius,
                     fill,
                     Stroke::new(1.0, border),
                     StrokeKind::Inside,

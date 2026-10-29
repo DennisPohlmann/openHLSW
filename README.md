@@ -49,7 +49,7 @@ Chinese (Simplified and Traditional) – the system language by default.
 
 ## Features
 
-Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black.
+Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black in a flat look with blue accent and rounded corners (Black by default).
 
 **Server list**
 - Several lists; add servers as `IP:port`, host name, `steam://connect/…` or

@@ -1,6 +1,5 @@
-//! Look & feel. The light theme mimics HLSW on Windows (white list
-//! views, grey chrome, square controls); the dark theme uses the same layout with
-//! dark colors.
+//! Look & feel: HLSW's layout in the flat look of current office suites. Plain light (or
+//! dark gray) areas, one blue accent, rounded controls and a little more room.
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Shadow, Stroke,
@@ -11,8 +10,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
-    #[default]
+    /// "modern": test builds had the new look as an extra skin.
+    #[serde(alias = "modern")]
     Light,
+    /// The default for new installations; a saved skin is kept.
+    #[default]
+    #[serde(alias = "modern_dark")]
     Dark,
 }
 
@@ -120,66 +123,67 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
 impl Theme {
     pub fn palette(self) -> Palette {
         match self {
-            // Colors picked from HLSW 1.4 on Windows 10/11.
+            // Neutral grays, one blue accent, light blue selection with dark text.
             Theme::Light => Palette {
-                window: rgb(240, 240, 240),
+                window: rgb(243, 242, 241),
                 list_bg: rgb(255, 255, 255),
-                list_border: rgb(130, 135, 144),
-                text: rgb(0, 0, 0),
-                weak_text: rgb(96, 96, 96),
-                disabled_text: rgb(160, 160, 160),
-                header_bg: rgb(255, 255, 255),
-                header_border: rgb(229, 229, 229),
-                selection_bg: rgb(90, 90, 90),
-                selection_text: rgb(255, 255, 255),
-                hover_bg: rgb(229, 243, 255),
-                popup_hover_bg: rgb(0, 120, 215),
-                offline_bg: rgb(255, 222, 222),
-                red: rgb(224, 0, 0),
-                green: rgb(0, 160, 0),
-                link: rgb(0, 0, 238),
-                graph_bg: rgb(236, 238, 240),
-                graph_hatch: rgb(200, 204, 210),
-                graph_line: rgb(0, 102, 204),
-                button_bg: rgb(225, 225, 225),
-                button_border: rgb(173, 173, 173),
-                button_hover_bg: rgb(229, 241, 251),
-                button_hover_border: rgb(0, 120, 215),
-                button_active_bg: rgb(204, 228, 247),
-                group_border: rgb(220, 220, 220),
-                console_cmd_bg: rgb(128, 128, 0),
-                console_cmd_fg: rgb(255, 255, 208),
-                console_resp_bg: rgb(255, 255, 200),
+                list_border: rgb(225, 223, 221),
+                text: rgb(50, 49, 48),
+                weak_text: rgb(96, 94, 92),
+                disabled_text: rgb(161, 159, 157),
+                header_bg: rgb(250, 249, 248),
+                header_border: rgb(237, 235, 233),
+                selection_bg: rgb(204, 222, 245),
+                selection_text: rgb(32, 31, 30),
+                hover_bg: rgb(235, 242, 251),
+                popup_hover_bg: rgb(222, 234, 249),
+                offline_bg: rgb(253, 231, 233),
+                red: rgb(209, 52, 56),
+                green: rgb(16, 124, 16),
+                link: rgb(24, 90, 189),
+                graph_bg: rgb(250, 249, 248),
+                graph_hatch: rgb(229, 227, 225),
+                graph_line: rgb(43, 87, 154),
+                button_bg: rgb(255, 255, 255),
+                button_border: rgb(200, 198, 196),
+                button_hover_bg: rgb(235, 242, 251),
+                button_hover_border: rgb(43, 87, 154),
+                button_active_bg: rgb(204, 222, 245),
+                group_border: rgb(225, 223, 221),
+                console_cmd_bg: rgb(43, 87, 154),
+                console_cmd_fg: rgb(255, 255, 255),
+                console_resp_bg: rgb(239, 244, 251),
             },
+            // The same in dark: dark gray areas, a lighter blue accent.
             Theme::Dark => Palette {
-                window: rgb(43, 43, 43),
-                list_bg: rgb(30, 30, 30),
-                list_border: rgb(70, 70, 70),
-                text: rgb(222, 222, 222),
-                weak_text: rgb(150, 150, 150),
-                disabled_text: rgb(100, 100, 100),
-                header_bg: rgb(38, 38, 38),
-                header_border: rgb(60, 60, 60),
-                selection_bg: rgb(64, 96, 140),
+                window: rgb(41, 41, 41),
+                list_bg: rgb(31, 31, 31),
+                list_border: rgb(64, 64, 64),
+                text: rgb(230, 230, 230),
+                weak_text: rgb(170, 170, 170),
+                disabled_text: rgb(110, 110, 110),
+                header_bg: rgb(36, 36, 36),
+                header_border: rgb(56, 56, 56),
+                selection_bg: rgb(40, 70, 115),
                 selection_text: rgb(255, 255, 255),
-                hover_bg: rgb(48, 56, 66),
-                popup_hover_bg: rgb(64, 96, 140),
-                offline_bg: rgb(78, 36, 40),
-                red: rgb(255, 110, 110),
-                green: rgb(110, 214, 110),
-                link: rgb(120, 170, 255),
-                graph_bg: rgb(36, 40, 46),
-                graph_hatch: rgb(52, 58, 66),
-                graph_line: rgb(110, 170, 255),
-                button_bg: rgb(58, 58, 58),
-                button_border: rgb(90, 90, 90),
-                button_hover_bg: rgb(64, 74, 86),
-                button_hover_border: rgb(100, 150, 220),
-                button_active_bg: rgb(54, 80, 112),
-                group_border: rgb(70, 70, 70),
-                console_cmd_bg: rgb(92, 92, 16),
-                console_cmd_fg: rgb(255, 246, 192),
-                console_resp_bg: rgb(48, 48, 28),
+                hover_bg: rgb(50, 56, 66),
+                popup_hover_bg: rgb(45, 75, 120),
+                offline_bg: rgb(80, 38, 42),
+                red: rgb(255, 120, 120),
+                green: rgb(110, 210, 110),
+                link: rgb(110, 170, 240),
+                graph_bg: rgb(36, 36, 36),
+                graph_hatch: rgb(55, 55, 55),
+                graph_line: rgb(110, 170, 240),
+                button_bg: rgb(52, 52, 52),
+                button_border: rgb(80, 80, 80),
+                button_hover_bg: rgb(60, 66, 76),
+                button_hover_border: rgb(110, 170, 240),
+                button_active_bg: rgb(40, 70, 115),
+                group_border: rgb(64, 64, 64),
+                console_cmd_bg: rgb(40, 70, 115),
+                console_cmd_fg: rgb(255, 255, 255),
+                console_resp_bg: rgb(33, 38, 46),
             },
         }
     }
@@ -193,8 +197,9 @@ impl Theme {
 }
 
 /// Rows of dropdown lists and menus: the row under the mouse or the keyboard focus is
-/// highlighted in blue with white text, the current entry of a dropdown in light blue. The
-/// popups lay out top-down justified, so the highlight runs across the whole width.
+/// highlighted (light blue with dark text in the light skin, blue with white text in the dark
+/// one), the current entry of a dropdown a little stronger. The popups lay out top-down
+/// justified, so the highlight runs across the whole width.
 pub fn popup_rows(style: &mut egui::Style) {
     let theme = if style.visuals.dark_mode {
         Theme::Dark
@@ -247,7 +252,7 @@ impl RowsContextMenu for egui::Response {
     }
 }
 
-/// Applies colors, square widgets and the compact Windows-like spacing.
+/// Applies colors, rounded widgets, soft shadows and the spacing.
 pub fn apply(ctx: &egui::Context, theme: Theme) {
     let p = theme.palette();
     let mut v = if theme == Theme::Dark {
@@ -266,20 +271,20 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     v.panel_fill = p.window;
     v.window_fill = p.window;
     v.window_stroke = Stroke::new(1.0, p.list_border);
-    v.window_corner_radius = CornerRadius::ZERO;
+    v.window_corner_radius = CornerRadius::same(8);
     v.window_shadow = Shadow {
-        offset: [2, 2],
-        blur: 6,
+        offset: [0, 4],
+        blur: 16,
         spread: 0,
-        color: Color32::from_black_alpha(60),
+        color: Color32::from_black_alpha(36),
     };
     v.popup_shadow = Shadow {
-        offset: [2, 2],
-        blur: 4,
+        offset: [0, 2],
+        blur: 8,
         spread: 0,
-        color: Color32::from_black_alpha(50),
+        color: Color32::from_black_alpha(30),
     };
-    v.menu_corner_radius = CornerRadius::ZERO;
+    v.menu_corner_radius = CornerRadius::same(6);
     v.extreme_bg_color = p.list_bg;
     v.text_edit_bg_color = Some(p.list_bg);
     v.faint_bg_color = p.window;
@@ -297,7 +302,7 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         &mut w.active,
         &mut w.open,
     ] {
-        wv.corner_radius = CornerRadius::ZERO;
+        wv.corner_radius = CornerRadius::same(4);
         wv.expansion = 0.0;
         wv.fg_stroke = Stroke::new(1.0, p.text);
     }
@@ -346,14 +351,14 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         ]
         .into();
         let s = &mut style.spacing;
-        s.item_spacing = egui::vec2(6.0, 4.0);
-        s.button_padding = egui::vec2(6.0, 2.0);
-        s.interact_size = egui::vec2(20.0, 18.0);
+        s.item_spacing = egui::vec2(8.0, 5.0);
+        s.button_padding = egui::vec2(10.0, 3.0);
+        s.interact_size = egui::vec2(20.0, 20.0);
         s.icon_width = 13.0;
         s.icon_width_inner = 7.0;
         s.icon_spacing = 4.0;
-        s.menu_margin = egui::Margin::same(3);
-        s.window_margin = egui::Margin::same(8);
+        s.menu_margin = egui::Margin::same(4);
+        s.window_margin = egui::Margin::same(12);
         s.combo_width = 120.0;
     });
 }
@@ -1033,5 +1038,19 @@ mod tests {
         }
         assert_eq!(TextSize::Px10.zoom(), 10.0 / BODY_SIZE);
         assert_eq!(TextSize::default(), TextSize::Px12);
+    }
+
+    #[test]
+    fn skins_load_and_dark_is_default() {
+        for (json, theme) in [
+            ("\"light\"", Theme::Light),
+            ("\"dark\"", Theme::Dark),
+            ("\"modern\"", Theme::Light),
+            ("\"modern_dark\"", Theme::Dark),
+        ] {
+            assert_eq!(serde_json::from_str::<Theme>(json).unwrap(), theme);
+        }
+        assert_eq!(serde_json::to_string(&Theme::Dark).unwrap(), "\"dark\"");
+        assert_eq!(Theme::default(), Theme::Dark);
     }
 }
