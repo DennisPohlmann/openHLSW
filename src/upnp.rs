@@ -17,11 +17,12 @@ const SEARCH_TARGETS: [&str; 2] = [
     "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
     "urn:schemas-upnp-org:device:InternetGatewayDevice:2",
 ];
-/// WAN connection services, preferred first.
+/// WAN connection services, preferred first. Version 1 comes before version 2: a FRITZ!Box
+/// refuses AddPortMapping on its WANIPConnection:2 service (UPnP error 403).
 const SERVICES: [&str; 3] = [
-    "urn:schemas-upnp-org:service:WANIPConnection:2",
     "urn:schemas-upnp-org:service:WANIPConnection:1",
     "urn:schemas-upnp-org:service:WANPPPConnection:1",
+    "urn:schemas-upnp-org:service:WANIPConnection:2",
 ];
 const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
 /// Description URLs tried on the default gateway when nothing answers the search:
@@ -108,6 +109,7 @@ pub fn discover(timeout: Duration) -> Result<Gateway, Error> {
     let mut buf = [0u8; 2048];
     let mut tried = Vec::new();
     let mut last_error = Error::NotFound;
+    let mut fallback: Option<Gateway> = None;
     while let Some(left) = deadline
         .checked_duration_since(Instant::now())
         .filter(|d| !d.is_zero())
@@ -136,7 +138,11 @@ pub fn discover(timeout: Duration) -> Result<Gateway, Error> {
         }
         tried.push(location.clone());
         match Gateway::from_description(&location, from.ip()) {
-            Ok(gateway) => return Ok(gateway),
+            Ok(gateway) if !gateway.is_v2() => return Ok(gateway),
+            // Keep looking for the version 1 service of the same router.
+            Ok(gateway) => {
+                fallback.get_or_insert(gateway);
+            }
             Err(e) => last_error = e,
         }
     }
@@ -149,7 +155,8 @@ pub fn discover(timeout: Duration) -> Result<Gateway, Error> {
                 continue;
             }
             match Gateway::from_description(&location, IpAddr::V4(gateway)) {
-                Ok(found) => return Ok(found),
+                Ok(found) if !found.is_v2() || fallback.is_none() => return Ok(found),
+                Ok(_) => {}
                 // Nothing listening there is "not found"; anything else is worth reporting.
                 Err(e) if matches!(last_error, Error::NotFound) && !matches!(e, Error::Io(_)) => {
                     last_error = e;
@@ -158,7 +165,7 @@ pub fn discover(timeout: Duration) -> Result<Gateway, Error> {
             }
         }
     }
-    Err(last_error)
+    fallback.ok_or(last_error)
 }
 
 impl Gateway {
@@ -193,6 +200,10 @@ impl Gateway {
             control_path,
             service_type,
         })
+    }
+
+    fn is_v2(&self) -> bool {
+        self.service_type.ends_with(":2")
     }
 
     /// The local address the router is reached from (the internal client of a mapping).
@@ -537,6 +548,14 @@ mod tests {
 <service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>
 <controlURL>/igdupnp/control/WANIPConn1</controlURL></service>
 </serviceList></device></deviceList></device></deviceList></device></root>"#;
+
+    #[test]
+    fn prefers_version_1_services() {
+        let both = "<service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:2</serviceType>\
+                    <controlURL>/v2</controlURL></service><service><serviceType>\
+                    urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/v1</controlURL></service>";
+        assert_eq!(find_service(both).unwrap().1, "/v1");
+    }
 
     #[test]
     fn finds_wan_ip_service() {

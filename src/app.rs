@@ -2052,12 +2052,15 @@ impl OpenHlswApp {
                 ),
                 None => tr!("UDP port {port} is forwarded in the router.", port = m.port),
             },
-            // 606 Action not authorized: FRITZ!Box without the per-device permission.
-            Some(Err(e)) if e.starts_with("UPnP error 606") => tr!(
-                "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.",
-                e = e,
-                port = self.settings.log_port
-            ),
+            // 606 Action not authorized / 403 Not available Action: FRITZ!Box without the
+            // per-device permission.
+            Some(Err(e)) if e.starts_with("UPnP error 606") || e.starts_with("UPnP error 403") => {
+                tr!(
+                    "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.",
+                    e = e,
+                    port = self.settings.log_port
+                )
+            }
             Some(Err(e)) => tr!(
                 "Port forwarding via UPnP failed: {e}. Enable UPnP in the router or forward the port by hand.",
                 e = e
@@ -3626,6 +3629,8 @@ impl OpenHlswApp {
                     self.status_message = e;
                     return;
                 }
+                // Asks the router again if the last forwarding failed (e.g. UPnP was off).
+                self.update_port_mapping();
                 let port = self.settings.log_port;
                 let public_ip = self.public_ip();
                 if let Some(s) = self.server_mut(id) {

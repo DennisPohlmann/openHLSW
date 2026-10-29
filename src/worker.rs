@@ -351,7 +351,7 @@ pub fn spawn_log_listener(notifier: &Notifier, port: u16) -> std::io::Result<()>
 /// Lease asked for; the mapping is renewed after half of it (and after a failure).
 const MAPPING_LEASE: u32 = 3600;
 const MAPPING_RENEW: Duration = Duration::from_secs(MAPPING_LEASE as u64 / 2);
-const MAPPING_RETRY: Duration = Duration::from_secs(600);
+const MAPPING_RETRY: Duration = Duration::from_secs(120);
 
 /// Thread that keeps the UDP log port forwarded in the router while it is wanted and
 /// removes the forwarding when it is no longer wanted or the program ends.
@@ -400,7 +400,8 @@ fn port_mapper(n: &Notifier, rx: &Receiver<Option<u16>>) {
         };
         match request {
             Ok(port) => {
-                if port == wanted {
+                // The same port again after a failure (Get Log pressed) retries right away.
+                if port == wanted && (mapped.is_some() || port.is_none()) {
                     continue;
                 }
                 wanted = port;
