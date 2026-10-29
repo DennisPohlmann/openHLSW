@@ -2897,6 +2897,9 @@ impl OpenHlswApp {
                 // Show the (new or existing) server: scroll the list to it.
                 self.scroll_to_selected = true;
                 self.address_input.clear();
+                // Ready for the next address: the game goes back to "Auto detect" (after the
+                // `Select` above, which takes over the game of the selected server).
+                self.add_game = None;
             }
             Action::Refresh(id) => self.refresh(id, true),
             Action::RefreshAll => self.refresh_all(true),
@@ -2915,6 +2918,8 @@ impl OpenHlswApp {
                         .get(idx.min(self.servers.len().saturating_sub(1)))
                         .map(|s| s.id);
                 }
+                // The game choice belonged to the removed server: back to "Auto detect".
+                self.add_game = None;
                 self.save_config();
             }
             Action::Connect(id) => self.request_connect(id, false, ctx),
