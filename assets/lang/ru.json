@@ -95,6 +95,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "Чат читается из лога сервера. Нажмите «Получить лог» в «Настройке Rcon», чтобы начать его получать.",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "Сообщения чата, начинающиеся с @, воспроизводят звук уведомления и показываются в строке состояния (нужен лог сервера)",
  "Check that the router forwards UDP port {port} to this computer.": "Проверьте, пробрасывает ли роутер UDP-порт {port} на этот компьютер.",
+ "Clear chat": "Очистить чат",
  "Clear console": "Очистить консоль",
  "Clear filter": "Очистить фильтр",
  "Clear location and provider cache": "Очистить кэш местоположения и провайдеров",

@@ -95,6 +95,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "聊天內容從伺服器記錄讀取。在 Rcon 設定中按「取得記錄」即可開始接收。",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "以 @ 開頭的聊天訊息會播放通知音效並顯示在狀態列（需要伺服器記錄）",
  "Check that the router forwards UDP port {port} to this computer.": "請檢查路由器是否將 UDP 連接埠 {port} 轉送到這台電腦。",
+ "Clear chat": "清除聊天",
  "Clear console": "清除主控台",
  "Clear filter": "清除篩選",
  "Clear location and provider cache": "清除位置與供應商快取",

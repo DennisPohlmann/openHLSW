@@ -95,6 +95,7 @@
  "Chat is read from the server log. Click \"Get Log\" in Rcon Config to start receiving it.": "A csevegés a szervernaplóból jön. Kattints a \"Napló lekérése\" gombra az Rcon-beállításban a fogadáshoz.",
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "A @ jellel kezdődő csetüzenetek lejátsszák az értesítési hangot, és megjelennek az állapotsorban (szerverlog szükséges)",
  "Check that the router forwards UDP port {port} to this computer.": "Ellenőrizze, hogy a router továbbítja-e a(z) {port} UDP-portot erre a számítógépre.",
+ "Clear chat": "Chat törlése",
  "Clear console": "Konzol törlése",
  "Clear filter": "Szűrő törlése",
  "Clear location and provider cache": "Hely- és szolgáltató-gyorsítótár törlése",
