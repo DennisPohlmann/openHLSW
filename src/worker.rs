@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
@@ -15,6 +15,7 @@ use openhlsw::address::ServerAddress;
 use openhlsw::gamespy2;
 use openhlsw::query::{self, Protocol};
 use openhlsw::rcon::{GoldSrcRcon, RconClient, RconError};
+use openhlsw::upnp;
 
 pub type ServerId = u64;
 
@@ -48,6 +49,16 @@ pub enum Event {
         from: SocketAddr,
         line: String,
     },
+    /// Result of forwarding the log port in the router (UPnP), see [`PortMapper`].
+    PortMap(Result<PortMapping, String>),
+}
+
+/// The log port forwarded in the router.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortMapping {
+    pub port: u16,
+    /// The router's Internet address, if it told us.
+    pub external_ip: Option<IpAddr>,
 }
 
 /// Who asked for an RCON command, so the answer lands in the right tab.
@@ -331,6 +342,111 @@ pub fn spawn_log_listener(notifier: &Notifier, port: u16) -> std::io::Result<()>
             }
         })?;
     Ok(())
+}
+
+// --------------------------------------------------------------------------
+// Port forwarding in the router (UPnP)
+// --------------------------------------------------------------------------
+
+/// Lease asked for; the mapping is renewed after half of it (and after a failure).
+const MAPPING_LEASE: u32 = 3600;
+const MAPPING_RENEW: Duration = Duration::from_secs(MAPPING_LEASE as u64 / 2);
+const MAPPING_RETRY: Duration = Duration::from_secs(600);
+
+/// Thread that keeps the UDP log port forwarded in the router while it is wanted and
+/// removes the forwarding when it is no longer wanted or the program ends.
+pub struct PortMapper {
+    tx: Option<Sender<Option<u16>>>,
+    done: Receiver<()>,
+}
+
+impl PortMapper {
+    pub fn spawn(notifier: &Notifier) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        let n = notifier.clone();
+        thread::Builder::new()
+            .name("port-mapper".into())
+            .spawn(move || {
+                port_mapper(&n, &rx);
+                let _ = done_tx.send(());
+            })
+            .expect("spawn port mapper thread");
+        Self { tx: Some(tx), done }
+    }
+
+    /// Forward `port` (`None`: remove the forwarding).
+    pub fn set(&self, port: Option<u16>) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(port);
+        }
+    }
+
+    /// Removes the forwarding and waits up to `timeout` for the router's answer.
+    pub fn shutdown(&mut self, timeout: Duration) {
+        self.tx = None;
+        let _ = self.done.recv_timeout(timeout);
+    }
+}
+
+fn port_mapper(n: &Notifier, rx: &Receiver<Option<u16>>) {
+    let mut wanted: Option<u16> = None;
+    let mut mapped: Option<(upnp::Gateway, u16)> = None;
+    let mut next_try: Option<Instant> = None;
+    loop {
+        let request = match next_try {
+            Some(at) => rx.recv_timeout(at.saturating_duration_since(Instant::now())),
+            None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        };
+        match request {
+            Ok(port) => {
+                if port == wanted {
+                    continue;
+                }
+                wanted = port;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {} // renew or retry
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if let Some((gateway, port)) = mapped.take() {
+                    let _ = gateway.delete_port_mapping("UDP", port);
+                }
+                return;
+            }
+        }
+        if let Some((gateway, port)) = mapped.take_if(|(_, port)| Some(*port) != wanted) {
+            let _ = gateway.delete_port_mapping("UDP", port);
+        }
+        next_try = None;
+        let Some(port) = wanted else { continue };
+        let gateway = match mapped.take() {
+            Some((gateway, _)) => Ok(gateway),
+            None => upnp::discover(Duration::from_secs(2)),
+        };
+        let result = gateway.and_then(|gateway| {
+            let local = gateway.local_ip()?;
+            gateway.add_port_mapping(
+                "UDP",
+                port,
+                SocketAddr::new(local, port),
+                MAPPING_LEASE,
+                "openHLSW server log",
+            )?;
+            Ok(gateway)
+        });
+        match result {
+            Ok(gateway) => {
+                let external_ip = gateway.external_ip().ok();
+                // Permanent mappings (lease 0) are refreshed too, e.g. after a router restart.
+                next_try = Some(Instant::now() + MAPPING_RENEW);
+                mapped = Some((gateway, port));
+                n.send(Event::PortMap(Ok(PortMapping { port, external_ip })));
+            }
+            Err(e) => {
+                next_try = Some(Instant::now() + MAPPING_RETRY);
+                n.send(Event::PortMap(Err(e.to_string())));
+            }
+        }
+    }
 }
 
 /// srcds log packets: `FF FF FF FF 'R' "L 10/18/2026 - 19:22:33: text\n\0"`

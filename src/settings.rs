@@ -624,6 +624,8 @@ pub struct Settings {
     pub kick_all_on_map_change: bool,
     // Connections
     pub log_port: u16,
+    /// Forward the log port in the router with UPnP while openHLSW listens on it.
+    pub upnp: bool,
     pub public_ip: String,
     // Sounds
     pub sounds_disabled: bool,
@@ -769,6 +771,7 @@ impl Default for Settings {
             log_on_map_change: true,
             kick_all_on_map_change: false,
             log_port: 27500,
+            upnp: true,
             public_ip: String::new(),
             sounds_disabled: true,
             sounds: SoundEvent::ALL
@@ -889,6 +892,8 @@ pub struct SettingsDialog {
     editing_game: Option<(&'static str, bool)>,
     selected_app: Option<usize>,
     port_test: Option<String>,
+    /// State of the UPnP forwarding, set by the app every frame.
+    pub upnp_status: Option<String>,
 }
 
 pub enum DialogResult {
@@ -906,6 +911,7 @@ impl SettingsDialog {
             editing_game: None,
             selected_app: None,
             port_test: None,
+            upnp_status: None,
         }
     }
 
@@ -1300,6 +1306,7 @@ impl SettingsDialog {
     fn connections(&mut self, ui: &mut Ui, p: &Palette) {
         let d = &mut self.draft;
         let port_test = &mut self.port_test;
+        let upnp_status = &self.upnp_status;
         group_box(
             ui,
             p,
@@ -1323,6 +1330,19 @@ impl SettingsDialog {
                 if let Some(msg) = port_test.as_ref() {
                     ui.label(RichText::new(msg).color(p.link));
                 }
+                ui.add_space(4.0);
+                ui.checkbox(
+                    &mut d.upnp,
+                    tr!("Forward the port in the router automatically (UPnP)"),
+                );
+                ui.label(tr!(
+                    "While openHLSW receives server logs it asks the router to forward the UDP port and removes the forwarding on exit."
+                ));
+                if d.upnp
+                    && let Some(msg) = upnp_status.as_ref()
+                {
+                    ui.label(RichText::new(msg).color(p.link));
+                }
             },
         );
         group_box(ui, p, tr!("Public IP"), ui.available_width() - 20.0, |ui| {
@@ -1336,7 +1356,7 @@ impl SettingsDialog {
                 .with_edit_menu();
             });
             ui.label(tr!(
-                "Used by Get Log (Internet). Empty = ask api.ipify.org."
+                "Used by Get Log (Internet). Empty = the router's address (UPnP), otherwise ask api.ipify.org."
             ));
         });
     }

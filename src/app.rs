@@ -44,8 +44,8 @@ use crate::settings::{
 };
 use crate::theme::{self, Palette, Theme};
 use crate::worker::{
-    self, Event, Notifier, QueryKind, RconEvent, RconHandle, RconRequest, RconStatus, RconTag,
-    ServerId,
+    self, Event, Notifier, PortMapper, PortMapping, QueryKind, RconEvent, RconHandle, RconRequest,
+    RconStatus, RconTag, ServerId,
 };
 
 /// Rules (cvars) change rarely; they are queried less often than info/players.
@@ -1339,6 +1339,10 @@ pub struct OpenHlswApp {
     last_list_refresh: Option<Instant>,
     traffic: Traffic,
     log_listener: Option<Result<u16, String>>,
+    /// Keeps the log port forwarded in the router (UPnP) while the listener runs.
+    port_mapper: PortMapper,
+    /// Last answer of the router to the forwarding (None: not asked / switched off).
+    port_mapping: Option<Result<PortMapping, String>>,
     chat_input: String,
     ban_input: String,
     ban_minutes: u32,
@@ -1456,6 +1460,7 @@ impl Find {
 impl OpenHlswApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
+        let port_mapper = PortMapper::spawn(&notifier);
         let mut config = config::load();
         crate::i18n::set_language(config.settings.language);
         // Old configs: switch once to the current default look (system font, 13 px).
@@ -1524,6 +1529,8 @@ impl OpenHlswApp {
             hide_password: config.hide_rcon_password,
             last_list_refresh: None,
             log_listener: None,
+            port_mapper,
+            port_mapping: None,
             chat_input: String::new(),
             ban_input: String::new(),
             ban_minutes: 0,
@@ -1867,7 +1874,64 @@ impl OpenHlswApp {
                 )
             });
         self.log_listener = Some(result.clone());
+        self.update_port_mapping();
         result
+    }
+
+    /// Forwards the log port in the router while the listener runs and UPnP is on.
+    fn update_port_mapping(&mut self) {
+        let port = match &self.log_listener {
+            Some(Ok(port)) if self.settings.upnp => Some(*port),
+            _ => None,
+        };
+        if port.is_none() {
+            self.port_mapping = None;
+        }
+        self.port_mapper.set(port);
+    }
+
+    /// The address servers on the Internet send their log to: the one from the settings,
+    /// otherwise the router's (UPnP); `None` = ask api.ipify.org.
+    fn public_ip(&self) -> Option<IpAddr> {
+        self.settings
+            .public_ip
+            .trim()
+            .parse::<IpAddr>()
+            .ok()
+            .or_else(|| match &self.port_mapping {
+                Some(Ok(m)) => m.external_ip.filter(|ip| geo::is_public(*ip)),
+                _ => None,
+            })
+    }
+
+    /// Text for Settings → Connections about the forwarding in the router.
+    fn port_mapping_status(&self) -> Option<String> {
+        if !self.settings.upnp {
+            return None;
+        }
+        Some(match &self.port_mapping {
+            None if matches!(self.log_listener, Some(Ok(_))) => {
+                tr!("Asking the router to forward the port…").into()
+            }
+            None => tr!("The port is forwarded once the server log is requested (Get Log).").into(),
+            Some(Ok(m)) => match m.external_ip {
+                Some(ip) if !geo::is_public(ip) => tr!(
+                    "UDP port {port} is forwarded, but the router has no public IPv4 address ({ip}, e.g. CGNAT / DS-Lite): Internet servers cannot reach it.",
+                    port = m.port,
+                    ip = ip
+                ),
+                Some(ip) => tr!(
+                    "UDP port {port} is forwarded in the router (public IP {ip}).",
+                    port = m.port,
+                    ip = ip
+                ),
+                None => tr!("UDP port {port} is forwarded in the router.", port = m.port),
+            },
+            Some(Err(e)) => tr!(
+                "Port forwarding via UPnP failed: {e}. Enable UPnP in the router or forward the port by hand.",
+                e = e
+            ),
+        })
     }
 
     fn handle_log_line(&mut self, from: SocketAddr, line: String) {
@@ -2300,6 +2364,7 @@ impl OpenHlswApp {
                     result,
                     detected,
                 } => {
+                    let public_ip = self.public_ip();
                     let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
                         continue;
                     };
@@ -2325,12 +2390,7 @@ impl OpenHlswApp {
                                 s.rcon.send(RconRequest::StartLog {
                                     internet,
                                     port: self.settings.log_port,
-                                    public_ip: self
-                                        .settings
-                                        .public_ip
-                                        .trim()
-                                        .parse::<IpAddr>()
-                                        .ok(),
+                                    public_ip,
                                 });
                             }
                             let engine_changed = s.is_goldsrc() != info.goldsrc;
@@ -2519,6 +2579,17 @@ impl OpenHlswApp {
                     }
                 }
                 Event::Log { from, line } => self.handle_log_line(from, line),
+                Event::PortMap(result) => {
+                    // Stale answer after UPnP was switched off.
+                    if !self.settings.upnp {
+                        continue;
+                    }
+                    let changed = self.port_mapping.as_ref() != Some(&result);
+                    self.port_mapping = Some(result);
+                    if changed && let Some(text) = self.port_mapping_status() {
+                        self.status_message = text;
+                    }
+                }
                 Event::Geo(result) => match result {
                     Ok(list) => {
                         for (ip, info) in list {
@@ -3326,7 +3397,7 @@ impl OpenHlswApp {
                     return;
                 }
                 let port = self.settings.log_port;
-                let public_ip = self.settings.public_ip.trim().parse::<IpAddr>().ok();
+                let public_ip = self.public_ip();
                 if let Some(s) = self.server_mut(id) {
                     s.log_target = Some((SocketAddr::from(([0, 0, 0, 0], port)), internet));
                     s.use_typed_rcon_password();
@@ -3483,6 +3554,7 @@ impl OpenHlswApp {
                     crate::i18n::set_language(new.language);
                 }
                 let port_changed = new.log_port != self.settings.log_port;
+                let upnp_changed = new.upnp != self.settings.upnp;
                 self.settings = new;
                 if let Some(dialog) = &mut self.settings_dialog {
                     dialog.draft = self.settings.clone();
@@ -3494,6 +3566,9 @@ impl OpenHlswApp {
                         }
                         Err(e) => e,
                     };
+                }
+                if upnp_changed {
+                    self.update_port_mapping();
                 }
                 let cache = self.settings.console_cache;
                 for s in &mut self.servers {
@@ -3528,6 +3603,8 @@ impl eframe::App for OpenHlswApp {
         if self.iddb_dirty {
             self.save_iddb();
         }
+        // Remove the forwarding in the router again.
+        self.port_mapper.shutdown(Duration::from_secs(3));
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
@@ -6385,7 +6462,9 @@ impl OpenHlswApp {
         self.find_window(ctx, actions);
         self.menu_dialog(ctx, actions);
         self.trace_window(ctx);
+        let upnp_status = self.port_mapping_status();
         if let Some(dialog) = &mut self.settings_dialog {
+            dialog.upnp_status = upnp_status;
             let p = self.settings.theme.palette();
             let addresses: Vec<String> =
                 self.servers.iter().map(|s| s.address.to_string()).collect();
