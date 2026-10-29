@@ -20,9 +20,13 @@ pub enum Theme {
 /// scaling). Scales the whole UI so lists and columns stay aligned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TextSize {
+    #[serde(rename = "px10")]
+    Px10,
+    #[serde(rename = "px11")]
+    Px11,
+    #[default]
     #[serde(rename = "px12", alias = "normal")]
     Px12,
-    #[default]
     #[serde(rename = "px13")]
     Px13,
     #[serde(rename = "px14", alias = "large")]
@@ -34,7 +38,9 @@ pub enum TextSize {
 }
 
 impl TextSize {
-    pub const ALL: [TextSize; 5] = [
+    pub const ALL: [TextSize; 7] = [
+        TextSize::Px10,
+        TextSize::Px11,
         TextSize::Px12,
         TextSize::Px13,
         TextSize::Px14,
@@ -44,6 +50,8 @@ impl TextSize {
 
     pub fn label(self) -> &'static str {
         match self {
+            TextSize::Px10 => "10 px",
+            TextSize::Px11 => "11 px",
             TextSize::Px12 => "12 px",
             TextSize::Px13 => "13 px",
             TextSize::Px14 => "14 px",
@@ -54,6 +62,8 @@ impl TextSize {
 
     fn pixels(self) -> f32 {
         match self {
+            TextSize::Px10 => 10.0,
+            TextSize::Px11 => 11.0,
             TextSize::Px12 => 12.0,
             TextSize::Px13 => 13.0,
             TextSize::Px14 => 14.0,
@@ -1009,4 +1019,19 @@ pub fn install_fonts(ctx: &egui::Context, font: &UiFont) {
 /// Font family of bold text (the interface font's bold face).
 pub fn bold() -> FontFamily {
     FontFamily::Name("bold".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_text_sizes_load_unchanged() {
+        for (json, size) in [("\"px10\"", TextSize::Px10), ("\"px11\"", TextSize::Px11)] {
+            assert_eq!(serde_json::from_str::<TextSize>(json).unwrap(), size);
+            assert_eq!(serde_json::to_string(&size).unwrap(), json);
+        }
+        assert_eq!(TextSize::Px10.zoom(), 10.0 / BODY_SIZE);
+        assert_eq!(TextSize::default(), TextSize::Px12);
+    }
 }

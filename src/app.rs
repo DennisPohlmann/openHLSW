@@ -1542,7 +1542,7 @@ impl OpenHlswApp {
         let port_mapper = PortMapper::spawn(&notifier);
         let mut config = config::load();
         crate::i18n::set_language(config.settings.language);
-        // Old configs: switch once to the current default look (system font, 13 px).
+        // Old configs: switch once to the current default look (system font, 12 px).
         if config.settings.appearance < crate::settings::APPEARANCE {
             config.settings.font = crate::theme::UiFont::default();
             config.settings.text_size = crate::theme::TextSize::default();
