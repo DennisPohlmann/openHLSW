@@ -75,7 +75,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
 **RCON** (Source over TCP, Half-Life 1 over UDP)
 - Rcon Config with Auto Update Status and server log (Get Log LAN / Internet).
 - Console like HLSW (switches C * F D E A, find, history, Tab completion); every command a
-  button sends is shown with the server's answer.
+  button sends is shown with the server's answer, and so is the periodic `status` of Auto
+  Update Status (switch A hides it).
 - Chat with Admin Notification, Ban List (with the Global ID Database), Change Level.
 
 **More**

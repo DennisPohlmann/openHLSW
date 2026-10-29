@@ -606,7 +606,7 @@ impl Server {
     /// One entry per line; `automatic` = caused by Auto Update Status (hidden with "A").
     /// Sends an RCON command and shows it in the console; the server's answer is shown there
     /// too, so every command a button triggers can be followed. Periodic `status` counts as
-    /// automatic (console switch "A" hides it).
+    /// automatic (shown by default; console switch "A" hides it).
     fn rcon_send(&mut self, command: impl Into<String>, tag: RconTag) {
         let command = command.into();
         self.console_add(LineKind::Command, &command, tag == RconTag::PlayerStatus);
@@ -1483,17 +1483,8 @@ impl OpenHlswApp {
             notifier,
             events,
             settings: {
-                // Older configs stored the old defaults 0.2 / 0.4 s; the default is now 1 s.
                 let mut st = config.settings.clone();
-                if st.defaults_revision < 1 {
-                    if [0.2, 0.4]
-                        .iter()
-                        .any(|d| (st.refresh_interval - d).abs() < 1e-4)
-                    {
-                        st.refresh_interval = 1.0;
-                    }
-                    st.defaults_revision = 1;
-                }
+                migrate_defaults(&mut st);
                 st.refresh_interval =
                     sanitize_interval(st.refresh_interval, st.max_queries_per_sec);
                 st
@@ -9534,6 +9525,26 @@ fn min_interval(max_queries_per_sec: f32) -> f32 {
     (1.0 / max_queries_per_sec.max(0.1)).clamp(0.1, 10.0)
 }
 
+/// Migrates settings saved with older defaults once (see `Settings::defaults_revision`).
+fn migrate_defaults(st: &mut Settings) {
+    // Older configs stored the old defaults 0.2 / 0.4 s; the default is now 1 s.
+    if st.defaults_revision < 1 {
+        if [0.2, 0.4]
+            .iter()
+            .any(|d| (st.refresh_interval - d).abs() < 1e-4)
+        {
+            st.refresh_interval = 1.0;
+        }
+        st.defaults_revision = 1;
+    }
+    // Older configs stored the old default "A" on, which hid the automatic `status` and its
+    // output, so the console looked dead.
+    if st.defaults_revision < 2 {
+        st.console.hide_automatic = false;
+        st.defaults_revision = 2;
+    }
+}
+
 fn sanitize_interval(secs: f32, max_queries_per_sec: f32) -> f32 {
     let min = min_interval(max_queries_per_sec);
     if secs.is_finite() {
@@ -10445,6 +10456,40 @@ mod tests {
         assert_eq!(status_line(""), "");
         let long = "a".repeat(STATUS_MAX_CHARS + 5);
         assert_eq!(status_line(&long).chars().count(), STATUS_MAX_CHARS + 2);
+    }
+
+    #[test]
+    fn migrate_defaults_shows_automatic_commands() {
+        assert!(!Settings::default().console.hide_automatic);
+
+        // Rev 0 config: old refresh default and "A" on.
+        let mut st = Settings {
+            defaults_revision: 0,
+            refresh_interval: 0.2,
+            ..Settings::default()
+        };
+        st.console.hide_automatic = true;
+        migrate_defaults(&mut st);
+        assert_eq!(st.defaults_revision, 2);
+        assert_eq!(st.refresh_interval, 1.0);
+        assert!(!st.console.hide_automatic);
+
+        // Rev 1 config: only "A" is migrated.
+        let mut st = Settings {
+            defaults_revision: 1,
+            refresh_interval: 0.4,
+            ..Settings::default()
+        };
+        st.console.hide_automatic = true;
+        migrate_defaults(&mut st);
+        assert_eq!(st.refresh_interval, 0.4);
+        assert!(!st.console.hide_automatic);
+
+        // Current config: the user's choice is kept.
+        let mut st = Settings::default();
+        st.console.hide_automatic = true;
+        migrate_defaults(&mut st);
+        assert!(st.console.hide_automatic);
     }
 
     #[test]

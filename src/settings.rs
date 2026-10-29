@@ -651,7 +651,8 @@ pub struct Settings {
     /// they get the default look once, see [`APPEARANCE`]).
     #[serde(default)]
     pub appearance: u32,
-    /// Bumped when a default changes, so old configs are migrated once (1 = refresh 1 s).
+    /// Bumped when a default changes, so old configs are migrated once (1 = refresh 1 s,
+    /// 2 = console switch "A" off: automatic commands shown).
     /// Missing in old configs = 0 (not the `Default` value), so they get migrated.
     #[serde(default)]
     pub defaults_revision: u32,
@@ -675,7 +676,8 @@ pub struct ConsoleOptions {
     pub show_date: bool,
     /// E: show empty lines.
     pub show_empty: bool,
-    /// A: hide commands sent automatically (Auto Update Status).
+    /// A: hide commands sent automatically (Auto Update Status) and their answers.
+    /// Off by default, so the periodic `status` and its output show up in the console.
     pub hide_automatic: bool,
 }
 
@@ -687,7 +689,7 @@ impl Default for ConsoleOptions {
             hide_feedback: false,
             show_date: false,
             show_empty: false,
-            hide_automatic: true,
+            hide_automatic: false,
         }
     }
 }
@@ -793,7 +795,7 @@ impl Default for Settings {
             text_smoothing: Default::default(),
             language: crate::i18n::Language::System,
             appearance: APPEARANCE,
-            defaults_revision: 1,
+            defaults_revision: 2,
             connect_on_double_click: true,
             view: ViewOptions::default(),
             console: ConsoleOptions::default(),
