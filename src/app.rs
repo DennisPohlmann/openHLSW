@@ -4534,10 +4534,17 @@ impl OpenHlswApp {
                 let game_icons = self.game_icons.as_ref();
                 let server = idx.map(|i| &mut self.servers[i]);
                 let graph = self.settings.view.ping_graph;
+                let mut copied = None;
                 if list_frame_with(ui, p, p.window, |ui| {
-                    info_panel(ui, p, server, location, flags, game_icons, graph)
+                    let (changed, text) =
+                        info_panel(ui, p, server, location, flags, game_icons, graph);
+                    copied = text;
+                    changed
                 }) {
                     actions.push(Action::SaveConfig);
+                }
+                if let Some(text) = copied {
+                    actions.push(Action::CopyText(text));
                 }
             });
         if self.settings.view.rules {
@@ -7479,12 +7486,14 @@ fn info_panel(
     flags: Option<&Flags>,
     game_icons: Option<&GameIcons>,
     show_graph: bool,
-) -> bool {
+) -> (bool, Option<String>) {
     let mut comment_changed = false;
+    let mut copied = None;
     ScrollArea::vertical()
         .id_salt("info_scroll")
         .auto_shrink(false)
         .show(ui, |ui| {
+            let mut copy = InfoCopy::default();
             let server = server_mut.as_deref();
             ui.add_space(2.0);
             // Title (the server name) and the ping graph.
@@ -7499,18 +7508,24 @@ fn info_panel(
             ui.horizontal(|ui| {
                 ui.add_space(3.0);
                 match &title {
-                    Some(t) => ui.add(
-                        Label::new(
-                            RichText::new(t)
-                                .color(p.text)
-                                .size(title_size)
-                                .family(crate::theme::bold()),
-                        )
-                            .wrap()
-                            .selectable(false),
-                    ),
-                    None => ui.label(""),
-                };
+                    Some(t) => {
+                        let r = ui.add(
+                            Label::new(
+                                RichText::new(t)
+                                    .color(p.text)
+                                    .size(title_size)
+                                    .family(crate::theme::bold()),
+                            )
+                                .wrap()
+                                .selectable(false)
+                                .sense(Sense::click()),
+                        );
+                        copy.menu(&r, tr!("Name"), t);
+                    }
+                    None => {
+                        ui.label("");
+                    }
+                }
             });
             ui.add_space(2.0);
             if show_graph {
@@ -7556,14 +7571,17 @@ fn info_panel(
                         .num_columns(2)
                         .spacing([10.0, 2.0])
                         .show(ui, |ui| {
-                            let row = |ui: &mut Ui, key: &str, value: RichText| {
+                            // Every value has a right-click menu to copy it (see `InfoCopy`).
+                            let row = |ui: &mut Ui, copy: &mut InfoCopy, key: &str, value: RichText| {
                                 ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                                     ui.label(RichText::new(key).color(p.text));
                                 });
-                                ui.add(Label::new(value).wrap());
+                                let text = value.text().to_string();
+                                let r = ui.add(Label::new(value).wrap().sense(Sense::click()));
+                                copy.menu(&r, key, &text);
                                 ui.end_row();
                             };
-                            row(ui, tr!("Address"), text(s.address.to_string()));
+                            row(ui, &mut copy, tr!("Address"), text(s.address.to_string()));
                             let ping = match (&s.state, s.ping) {
                                 (QueryState::Online, Some(ms)) => {
                                     let avg = s
@@ -7575,7 +7593,7 @@ fn info_panel(
                                 (QueryState::Offline(e), _) => RichText::new(e).color(p.red),
                                 _ => RichText::new(tr!("querying…")).color(p.weak_text),
                             };
-                            row(ui, tr!("Ping"), ping);
+                            row(ui, &mut copy, tr!("Ping"), ping);
                             match &location {
                                 Some(Some(g)) if !g.country.is_empty() => {
                                     ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -7585,7 +7603,8 @@ fn info_panel(
                                         if let Some(f) = flags.filter(|f| f.has(&g.country_code)) {
                                             f.show(ui, &g.country_code, 11.0);
                                         }
-                                        ui.label(g.place());
+                                        let r = ui.add(Label::new(g.place()).sense(Sense::click()));
+                                        copy.menu(&r, tr!("Location"), &g.place());
                                     });
                                     ui.end_row();
                                     let provider = if g.asn.is_empty() {
@@ -7593,10 +7612,10 @@ fn info_panel(
                                     } else {
                                         format!("{} ({})", g.provider(), g.asn)
                                     };
-                                    row(ui, tr!("Provider"), text(provider));
+                                    row(ui, &mut copy, tr!("Provider"), text(provider));
                                 }
-                                Some(Some(_)) => row(ui, tr!("Location"), text(tr!("unknown").into())),
-                                Some(None) => row(ui, tr!("Location"), text(tr!("Local network").into())),
+                                Some(Some(_)) => row(ui, &mut copy, tr!("Location"), text(tr!("unknown").into())),
+                                Some(None) => row(ui, &mut copy, tr!("Location"), text(tr!("Local network").into())),
                                 None => {}
                             }
                             if let Some(i) = &s.info {
@@ -7622,7 +7641,8 @@ fn info_panel(
                             if let (Some(icons), Some(icon)) = (game_icons, s.icon_key()) {
                                 icons.show(ui, icon, 16.0);
                             }
-                            ui.add(Label::new(text(game)).wrap());
+                            let r = ui.add(Label::new(text(game.clone())).wrap().sense(Sense::click()));
+                            copy.menu(&r, tr!("Game"), &game);
                         });
                         ui.end_row();
                                 let mut players = format!("{} / {}", i.players, i.max_players);
@@ -7630,14 +7650,24 @@ fn info_panel(
                                     players += &tr!(" ({bots} bots)", bots = i.bots);
                                 }
                                 let pc = if s.humans() > 0 { p.green } else { p.text };
-                                row(ui, tr!("Players"), RichText::new(players).color(pc));
+                                row(ui, &mut copy, tr!("Players"), RichText::new(players).color(pc));
                                 let next = s
                                     .rule("sm_nextmap")
                                     .filter(|n| !n.is_empty())
                                     .map(|n| tr!("  ({n} next)", n = n))
                                     .unwrap_or_default();
-                                row(ui, tr!("Map"), text(format!("{}{next}", i.map)));
-                                row(ui, tr!("Limits"), text(s.limits()));
+                                // The value copies only the map, without the next map.
+                                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                                    ui.label(RichText::new(tr!("Map")).color(p.text));
+                                });
+                                let r = ui.add(
+                                    Label::new(text(format!("{}{next}", i.map)))
+                                        .wrap()
+                                        .sense(Sense::click()),
+                                );
+                                copy.menu(&r, tr!("Map"), &i.map);
+                                ui.end_row();
+                                row(ui, &mut copy, tr!("Limits"), text(s.limits()));
                                 let ff = match s
                                     .rule("mp_friendlyfire")
                                     .or(s.rule("bf2_friendlyfire"))
@@ -7647,16 +7677,16 @@ fn info_panel(
                                     Some(_) => tr!("Yes"),
                                     None => "",
                                 };
-                                row(ui, tr!("Friendly Fire"), text(ff.into()));
+                                row(ui, &mut copy, tr!("Friendly Fire"), text(ff.into()));
                                 row(
-                                    ui,
+                                    ui, &mut copy,
                                     tr!("Server Type"),
                                     text(format!("{}, {}", i.server_type_name(), i.os_name())),
                                 );
-                                row(ui, tr!("Version"), text(i.version.clone()));
-                                row(ui, tr!("AddOns"), text(s.addons_compact()));
+                                row(ui, &mut copy, tr!("Version"), text(i.version.clone()));
+                                row(ui, &mut copy, tr!("AddOns"), text(s.addons_compact()));
                                 row(
-                                    ui,
+                                    ui, &mut copy,
                                     tr!("Anti-Cheat"),
                                     text(if i.vac {
                                         tr!("Valve Anti-Cheat").into()
@@ -7665,7 +7695,7 @@ fn info_panel(
                                     }),
                                 );
                                 row(
-                                    ui,
+                                    ui, &mut copy,
                                     tr!("Password"),
                                     text(if i.passworded {
                                         tr!("Yes").into()
@@ -7674,14 +7704,14 @@ fn info_panel(
                                     }),
                                 );
                                 if let Some(k) = &i.keywords {
-                                    row(ui, tr!("Tags"), text(k.clone()));
+                                    row(ui, &mut copy, tr!("Tags"), text(k.clone()));
                                 }
                                 if let Some(id) = i.steam_id {
-                                    row(ui, tr!("Steam ID"), text(id.to_string()));
+                                    row(ui, &mut copy, tr!("Steam ID"), text(id.to_string()));
                                 }
                                 if let Some(port) = i.tv_port {
                                     row(
-                                        ui,
+                                        ui, &mut copy,
                                         tr!("SourceTV"),
                                         text(tr!(
                                             "{name} (port {port})",
@@ -7693,12 +7723,13 @@ fn info_panel(
                             }
                             if let Some(t) = s.last_seen {
                                 let ago = (chrono::Local::now() - t).num_seconds().max(0);
-                                row(ui, tr!("Last Seen"), text(tr!("{ago} s ago", ago = ago)));
+                                row(ui, &mut copy, tr!("Last Seen"), text(tr!("{ago} s ago", ago = ago)));
                             }
                             if let Some(c) = &s.last_connected {
-                                row(ui, tr!("Last Connected"), text(c.clone()));
+                                row(ui, &mut copy, tr!("Last Connected"), text(c.clone()));
                             }
                         });
+                    copied = copy.take();
 
                     if let Some(s) = server_mut {
                         ui.add_space(6.0);
@@ -7726,7 +7757,48 @@ fn info_panel(
                     }
                 });
         });
-    comment_changed
+    (comment_changed, copied)
+}
+
+/// Right-click menu of the values in the server details: copy one value, its line
+/// ("Map: de_dust2") or all details. `lines` collects every line shown, so "Copy All Details"
+/// is answered after the panel is drawn (`take`).
+#[derive(Default)]
+struct InfoCopy {
+    lines: Vec<String>,
+    text: Option<String>,
+    all: bool,
+}
+
+impl InfoCopy {
+    fn menu(&mut self, response: &egui::Response, key: &str, value: &str) {
+        let line = format!("{key}: {value}");
+        response.context_menu(|ui| {
+            if ui.button(tr!("Copy Value")).clicked() {
+                self.text = Some(value.to_string());
+                ui.close();
+            }
+            if ui.button(tr!("Copy Line")).clicked() {
+                self.text = Some(line.clone());
+                ui.close();
+            }
+            ui.separator();
+            if ui.button(tr!("Copy All Details")).clicked() {
+                self.all = true;
+                ui.close();
+            }
+        });
+        self.lines.push(line);
+    }
+
+    /// The text to copy, if a menu entry was clicked.
+    fn take(self) -> Option<String> {
+        if self.all {
+            Some(self.lines.join("\n"))
+        } else {
+            self.text
+        }
+    }
 }
 
 /// Width of the key column in the server list's Name cells (room for the key on every row).
