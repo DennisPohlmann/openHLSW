@@ -5448,6 +5448,10 @@ impl OpenHlswApp {
                 let mut text = match l.kind {
                     LineKind::Log if o.translate_log => translate_log(&l.text),
                     LineKind::Log => strip_log_stamp(&l.text, l.time.naive_local()).to_string(),
+                    // The answer to `log on` and the like carries log lines ("L 10/29/2026 - ...").
+                    LineKind::Response if l.text.starts_with("L ") => {
+                        strip_log_stamp(&l.text, l.time.naive_local()).to_string()
+                    }
                     LineKind::Note => format!("openHLSW NOTE: {}", l.text),
                     _ => l.text.clone(),
                 };
@@ -11608,6 +11612,9 @@ mod tests {
         // same time (give or take a minute): the prefix goes
         assert_eq!(strip_log_stamp(line, at("2026-10-29 09:19:47")), rest);
         assert_eq!(strip_log_stamp(line, at("2026-10-29 09:20:40")), rest);
+        // RCON answers carry log lines with "L " in front
+        let answer = "L 10/29/2026 - 09:19:46: Log file closed.";
+        assert_eq!(strip_log_stamp(answer, stamp), "Log file closed.");
         // server clock in another time zone: the prefix stays
         assert_eq!(strip_log_stamp(line, at("2026-10-29 15:19:46")), line);
         // no prefix, broken prefix, "L ..." that is no prefix: unchanged
