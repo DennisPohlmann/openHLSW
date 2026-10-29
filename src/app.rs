@@ -1349,10 +1349,11 @@ pub struct OpenHlswApp {
     join_password: String,
     hide_join_password: bool,
     status_message: String,
-    /// Hide / Auto Update Status for servers without their own value (older configs, new
-    /// servers); each server keeps its own, see [`Server::hide_password`].
-    default_auto_update_status: bool,
-    default_hide_password: bool,
+    /// The old global Hide / Auto Update Status: only fill in servers loaded from a config
+    /// written before they were kept per server (see [`Server::hide_password`]). New servers
+    /// always start with both on.
+    legacy_auto_update_status: bool,
+    legacy_hide_password: bool,
     last_list_refresh: Option<Instant>,
     traffic: Traffic,
     log_listener: Option<Result<u16, String>>,
@@ -1533,8 +1534,8 @@ impl OpenHlswApp {
             join_password: String::new(),
             hide_join_password: true,
             status_message: tr!("Ready").into(),
-            default_auto_update_status: config.auto_update_status,
-            default_hide_password: config.hide_rcon_password,
+            legacy_auto_update_status: config.auto_update_status,
+            legacy_hide_password: config.hide_rcon_password,
             last_list_refresh: None,
             log_listener: None,
             port_mapper,
@@ -1573,7 +1574,7 @@ impl OpenHlswApp {
             find: None,
         };
 
-        app.add_saved_servers(&config.servers);
+        app.add_saved_servers(&config.servers, true);
         let startup = match config.settings.startup {
             StartupSelection::None => None,
             StartupSelection::LastUsed => config.selected.clone(),
@@ -1589,8 +1590,16 @@ impl OpenHlswApp {
     }
 
     /// Adds servers from the config / an import. Duplicates are skipped.
+    /// `from_config`: entries of this program's config (current or another server list), whose
+    /// missing RCON options come from the old global ones; anything else (LAN search, imports,
+    /// Steam favorites, Multi Insert) is a new server with the new-server defaults.
     /// Returns how many were added.
-    fn add_saved_servers(&mut self, saved: &[SavedServer]) -> usize {
+    fn add_saved_servers(&mut self, saved: &[SavedServer], from_config: bool) -> usize {
+        let (hide_default, auto_default) = rcon_fallback(
+            from_config,
+            self.legacy_hide_password,
+            self.legacy_auto_update_status,
+        );
         let mut added = 0;
         for saved in saved {
             let Some(address) = ServerAddress::parse(&saved.address) else {
@@ -1616,11 +1625,7 @@ impl OpenHlswApp {
                 server.hide_password,
                 server.auto_update_status,
                 server.status_interval,
-            ) = rcon_options(
-                saved,
-                self.default_hide_password,
-                self.default_auto_update_status,
-            );
+            ) = rcon_options(saved, hide_default, auto_default);
             if let Some(pw) = &saved.rcon_password {
                 server.rcon_password = pw.clone();
                 server.rcon_login = pw.clone();
@@ -1674,7 +1679,7 @@ impl OpenHlswApp {
         self.selected = None;
         self.list_order.clear();
         self.list_name = target.name;
-        self.add_saved_servers(&target.servers);
+        self.add_saved_servers(&target.servers, true);
         self.selected = self.servers.first().map(|s| s.id);
         self.last_list_refresh = None;
         self.status_message = tr!("Server list: {list_name}", list_name = self.list_name);
@@ -2641,7 +2646,7 @@ impl OpenHlswApp {
                             ..Default::default()
                         })
                         .collect();
-                    let added = self.add_saved_servers(&saved);
+                    let added = self.add_saved_servers(&saved, false);
                     self.status_message = tr!(
                         "LAN search: {count} servers found, {added} added",
                         count = found.len(),
@@ -2726,8 +2731,8 @@ impl OpenHlswApp {
                 .selected
                 .and_then(|id| self.server(id))
                 .map(|s| s.address.to_string()),
-            hide_rcon_password: self.default_hide_password,
-            auto_update_status: self.default_auto_update_status,
+            hide_rcon_password: self.legacy_hide_password,
+            auto_update_status: self.legacy_auto_update_status,
             settings: self.settings.clone(),
         };
         if let Err(e) = config::save(&config) {
@@ -2791,8 +2796,6 @@ impl OpenHlswApp {
                     self.status_message = tr!("Added {address}", address = address);
                     let mut server = Server::new(id, address, &self.notifier);
                     server.console_cache = self.settings.console_cache.max(1);
-                    server.hide_password = self.default_hide_password;
-                    server.auto_update_status = self.default_auto_update_status;
                     // The chosen game decides how the server is queried; A2S and GameSpy
                     // servers without a game are detected.
                     server.game = self
@@ -2947,7 +2950,7 @@ impl OpenHlswApp {
                         ..Default::default()
                     })
                     .collect();
-                let added = self.add_saved_servers(&saved);
+                let added = self.add_saved_servers(&saved, false);
                 self.status_message = tr!(
                     "Imported {added} of {count} Steam favorites",
                     added = added,
@@ -2983,7 +2986,7 @@ impl OpenHlswApp {
                 match std::fs::read_to_string(&path) {
                     Ok(text) => {
                         let saved = parse_server_list_file(&text);
-                        let added = self.add_saved_servers(&saved);
+                        let added = self.add_saved_servers(&saved, false);
                         self.status_message = tr!(
                             "Imported {added} of {count} servers from {path}",
                             added = added,
@@ -3050,7 +3053,7 @@ impl OpenHlswApp {
             }
             Action::MultiInsert(text) => {
                 let saved = parse_server_list_file(&text);
-                let added = self.add_saved_servers(&saved);
+                let added = self.add_saved_servers(&saved, false);
                 self.status_message = tr!("Added {added} servers", added = added);
                 self.last_list_refresh = None;
                 self.save_config();
@@ -9601,6 +9604,16 @@ fn rcon_options(saved: &SavedServer, hide_default: bool, auto_default: bool) -> 
     )
 }
 
+/// Hide and Auto Update Status for saved entries without their own values: the old global
+/// settings for entries of an old config, on for new servers (imports, LAN search …).
+fn rcon_fallback(from_config: bool, legacy_hide: bool, legacy_auto: bool) -> (bool, bool) {
+    if from_config {
+        (legacy_hide, legacy_auto)
+    } else {
+        (true, true)
+    }
+}
+
 /// Seconds until the next automatic `status`: the server's interval, after an error at least
 /// [`STATUS_RETRY_AFTER_ERROR`].
 fn status_wait(interval: u32, error: bool) -> u32 {
@@ -10542,6 +10555,28 @@ mod tests {
             ..own
         };
         assert_eq!(rcon_options(&huge, true, false).2, 600);
+    }
+
+    #[test]
+    fn new_servers_hide_password_and_update_status() {
+        // Added by hand: Server::new.
+        let (notifier, _events) = Notifier::new(egui::Context::default());
+        let address = ServerAddress::parse("203.0.113.10:27015").unwrap();
+        let s = Server::new(1, address, &notifier);
+        assert!(s.hide_password && s.auto_update_status && !s.save_password);
+        assert_eq!(s.status_interval, STATUS_INTERVAL_DEFAULT);
+
+        // Imported / LAN search: on even if the old global settings in the config are off.
+        let new = SavedServer {
+            address: "203.0.113.10:27015".into(),
+            ..Default::default()
+        };
+        let (hide, auto) = rcon_fallback(false, false, false);
+        assert_eq!(rcon_options(&new, hide, auto), (true, true, 30));
+
+        // Loaded from an old config: the old global settings are kept.
+        let (hide, auto) = rcon_fallback(true, false, false);
+        assert_eq!(rcon_options(&new, hide, auto), (false, false, 30));
     }
 
     #[test]

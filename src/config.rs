@@ -20,10 +20,11 @@ pub struct Config {
     /// "View Connect Log": newest last.
     pub connect_log: Vec<String>,
     pub selected: Option<String>,
-    /// "Hide" for servers without their own value (configs from before the RCON settings
-    /// were kept per server, new servers). Each server keeps its own in [`SavedServer`].
+    /// The old global "Hide": only fills in servers of a config written before the RCON
+    /// settings were kept per server (each server keeps its own in [`SavedServer`]). New
+    /// servers always start with Hide on.
     pub hide_rcon_password: bool,
-    /// "Auto Update Status" for servers without their own value, like `hide_rcon_password`.
+    /// The old global "Auto Update Status", like `hide_rcon_password`.
     pub auto_update_status: bool,
     #[serde(flatten)]
     pub settings: Settings,
@@ -77,7 +78,8 @@ pub struct SavedServer {
     /// Last successful query (RFC 3339).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<String>,
-    /// Rcon Config → Hide; missing = [`Config::hide_rcon_password`].
+    /// Rcon Config → Hide; missing = [`Config::hide_rcon_password`] for entries of this
+    /// config, on for imported servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_rcon_password: Option<bool>,
     /// Rcon Config → Auto Update Status; missing = [`Config::auto_update_status`].
