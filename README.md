@@ -64,7 +64,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   to the end of the list.
 
 **Server, players and rules**
-- Server info with game icon and HLSW's ping graph (fixed scale, green → yellow → red).
+- Server info with game icon and HLSW's ping graph (fixed scale, green → yellow → red);
+  right-click a value (name, address, map, …) to copy it, its line or all details.
 - Players with country flag and – via RCON `status` – ping, loss, Steam ID and IP;
   Battlefield 2 score, deaths, skill, team and bots straight from the query.
 - Right-click menus like HLSW: copy (names, Steam IDs, profile URLs, rows), Steam profile,
