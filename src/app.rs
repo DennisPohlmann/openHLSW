@@ -1184,9 +1184,10 @@ fn about_view(
         .outer_margin(Margin::symmetric(8, 8))
         .show(ui, |ui| {
             ui.set_width(width - 36.0);
+            // Tall enough for all of it at the default text size; scrolls only when larger.
             ScrollArea::vertical()
                 .min_scrolled_height(170.0)
-                .max_height(170.0)
+                .max_height(300.0)
                 .show(ui, |ui| {
                 egui::Grid::new("about_grid")
                     .num_columns(2)

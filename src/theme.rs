@@ -360,6 +360,23 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         s.menu_margin = egui::Margin::same(4);
         s.window_margin = egui::Margin::same(12);
         s.combo_width = 120.0;
+        // Thin, faint scroll bars in room of their own: egui's default floats a 10 px bar
+        // in text color over the content, which hid the end of the lines (About window).
+        s.scroll = egui::style::ScrollStyle {
+            floating: true,
+            bar_width: 6.0,
+            floating_width: 4.0,
+            floating_allocated_width: 10.0,
+            bar_inner_margin: 4.0,
+            foreground_color: true,
+            dormant_background_opacity: 0.0,
+            active_background_opacity: 0.0,
+            interact_background_opacity: 0.0,
+            dormant_handle_opacity: 0.25,
+            active_handle_opacity: 0.35,
+            interact_handle_opacity: 0.55,
+            ..egui::style::ScrollStyle::floating()
+        };
     });
 }
 
