@@ -903,10 +903,6 @@ enum Action {
     SetServerId(ServerId, usize),
     /// "Set all server IDs to current sequence": number the servers as currently sorted.
     RenumberServers,
-    /// Header menu: "Reset column width".
-    ResetColumns {
-        players: bool,
-    },
     /// Set a cvar via RCON ("Change Value..." in the rules list).
     SetCvar(ServerId, String, String),
     SetTheme(Theme),
@@ -3828,15 +3824,6 @@ impl OpenHlswApp {
                 }
                 self.save_config();
             }
-            Action::ResetColumns { players } => {
-                let v = &mut self.settings.view;
-                if players {
-                    v.player_columns_reset = v.player_columns_reset.wrapping_add(1);
-                } else {
-                    v.server_columns_reset = v.server_columns_reset.wrapping_add(1);
-                }
-                self.save_config();
-            }
             Action::SetCvar(id, key, value) => {
                 if let Some(s) = self.server_mut(id) {
                     let cmd = format!("{key} \"{}\"", value.replace('"', "'"));
@@ -4047,7 +4034,6 @@ impl eframe::App for OpenHlswApp {
                             other_lists: &other_lists,
                             show_comment: self.settings.view.comment,
                             hidden: &self.settings.view.hidden_server_columns,
-                            generation: self.settings.view.server_columns_reset,
                             flags: self.flags.as_ref(),
                             locations: &locations,
                             needle: &needle,
@@ -5060,7 +5046,6 @@ impl OpenHlswApp {
         let data = PlayerTableData {
             server: Some(s.id),
             shown: &self.settings.view.player_columns,
-            generation: self.settings.view.player_columns_reset,
             rows,
             flags: self.flags.as_ref(),
             has_status: !s.status_players.is_empty(),
@@ -6678,6 +6663,7 @@ impl OpenHlswApp {
             return;
         };
         let db = &mut self.iddb;
+        let p = self.settings.theme.palette();
         let mut open = true;
         let mut changed = false;
         NativeWindow::new("iddb", tr!("Global Player ID Database Editor"))
@@ -6851,7 +6837,7 @@ impl OpenHlswApp {
                             tr!("Comment"),
                         ] {
                             h.col(|ui| {
-                                ui.strong(t);
+                                plain_header(ui, &p, t);
                             });
                         }
                     })
@@ -7428,13 +7414,42 @@ pub(crate) fn styled_table<'a>(ui: &'a mut Ui, id: &str) -> TableBuilder<'a> {
     ui.visuals_mut().widgets.noninteractive.bg_stroke = Stroke::NONE;
     // Selectable labels would swallow the clicks meant for the row (selection, context menu).
     ui.style_mut().interaction.selectable_labels = false;
-    TableBuilder::new(ui)
+    // "Reset column width" in the header menu acts on the table drawn right now.
+    let reset = ui.ctx().data_mut(|d| {
+        d.insert_temp(egui::Id::unique("current_table"), id.to_owned());
+        d.remove_temp::<bool>(egui::Id::unique(("reset_columns", id)))
+            .unwrap_or(false)
+    });
+    let table = TableBuilder::new(ui)
         .id_salt(id)
         .striped(false)
         .resizable(true)
         .auto_shrink(false)
         .min_scrolled_height(0.0)
-        .cell_layout(Layout::left_to_right(Align::Center))
+        .cell_layout(Layout::left_to_right(Align::Center));
+    if reset {
+        // Forget the stored widths: the columns start again with their initial width.
+        table.reset();
+    }
+    table
+}
+
+/// Right-click menu of a list header: "Reset column width" for the table whose header
+/// is being drawn (see [`styled_table`]); takes effect on the next frame.
+pub(crate) fn reset_columns_menu(ui: &mut Ui) {
+    if ui.button(tr!("Reset column width")).clicked() {
+        reset_current_table(ui.ctx());
+        ui.close();
+    }
+}
+
+fn reset_current_table(ctx: &egui::Context) {
+    ctx.data_mut(|d| {
+        if let Some(id) = d.get_temp::<String>(egui::Id::unique("current_table")) {
+            d.insert_temp(egui::Id::unique(("reset_columns", id.as_str())), true);
+        }
+    });
+    ctx.request_repaint();
 }
 
 /// Header cell; returns the response of the whole cell (click = sort, double click = auto-size).
@@ -7571,20 +7586,17 @@ fn column_menu(
         }
     }
     ui.separator();
-    if ui.button(tr!("Reset column width")).clicked() {
-        actions.push(Action::ResetColumns { players });
-        ui.close();
-    }
+    reset_columns_menu(ui);
 }
 
 /// Header without sorting; returns true on double click (auto-size).
 pub(crate) fn plain_header(ui: &mut Ui, p: &Palette, title: &str) -> bool {
     let edge = separator_double_clicked(ui);
-    header_cell(ui, p, |ui| {
+    let resp = header_cell(ui, p, |ui| {
         ui.add(Label::new(title).selectable(false).wrap_mode(fit(ui)));
-    })
-    .double_clicked()
-        || edge
+    });
+    resp.rows_context_menu(reset_columns_menu);
+    resp.double_clicked() || edge
 }
 
 /// Width of `text` in the list font.
@@ -7650,8 +7662,6 @@ struct ListOptions<'a> {
     show_comment: bool,
     /// Columns switched off in the header's right-click menu (titles).
     hidden: &'a [String],
-    /// Bumped by "Reset column width" (new table id = default widths).
-    generation: u32,
     flags: Option<&'a Flags>,
     /// Per server (same order as `servers`): country code, provider.
     locations: &'a [(String, String)],
@@ -7758,9 +7768,8 @@ fn server_table(
                 }),
             )
         });
-    let table_id = format!("servers{}", opts.generation);
     let arrows = arrow_keys(ui.ctx(), "servers");
-    let mut table = styled_table(ui, &table_id).sense(Sense::click());
+    let mut table = styled_table(ui, "servers").sense(Sense::click());
     // Arrow up / down select the previous / next server.
     if let Some((down, _)) = arrows
         && !order.is_empty()
@@ -9175,7 +9184,6 @@ struct PlayerTableData<'a> {
     server: Option<ServerId>,
     /// Visible columns (titles), see [`PLAYER_COLUMNS`].
     shown: &'a [String],
-    generation: u32,
     rows: Vec<PlayerRow>,
     flags: Option<&'a Flags>,
     has_status: bool,
@@ -9423,8 +9431,7 @@ fn players_table(
             }),
         )
     });
-    let table_id = format!("players{}", data.generation);
-    let mut table = styled_table(ui, &table_id).sense(Sense::click());
+    let mut table = styled_table(ui, "players").sense(Sense::click());
     if let Some(i) = scroll_to {
         table = table.scroll_to_row(i, None);
     }
@@ -9993,7 +10000,7 @@ fn rules_table(
                 });
             }
             h.col(|ui| {
-                header_cell(ui, p, |_| {});
+                header_cell(ui, p, |_| {}).rows_context_menu(reset_columns_menu);
             });
         })
         .body(|body| {
@@ -11459,6 +11466,67 @@ fn status_line(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Draws a list with two resizable columns, returns their widths.
+    fn draw_table(ctx: &egui::Context, events: Vec<egui::Event>, reset: bool) -> Vec<f32> {
+        let p = Theme::default().palette();
+        let mut widths = Vec::new();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            styled_table(ui, "test")
+                .column(Column::initial(100.0).at_least(20.0))
+                .column(Column::remainder())
+                .header(HEADER_HEIGHT, |mut h| {
+                    for title in ["A", "B"] {
+                        h.col(|ui| {
+                            widths.push(ui.max_rect().width());
+                            plain_header(ui, &p, title);
+                            if reset {
+                                // What "Reset column width" in the header menu does.
+                                reset_current_table(ui.ctx());
+                            }
+                        });
+                    }
+                })
+                .body(|_| {});
+        });
+        out.textures_delta.clear();
+        widths
+    }
+
+    #[test]
+    fn reset_column_width() {
+        let ctx = egui::Context::default();
+        let initial = draw_table(&ctx, vec![], false)[0];
+        assert_eq!(initial, 100.0);
+
+        // Drag the separator after the first column 80 px to the right.
+        let mut pos = egui::pos2(ctx.content_rect().left() + initial + 3.0, 10.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        draw_table(&ctx, vec![egui::Event::PointerMoved(pos)], false);
+        draw_table(&ctx, vec![button(pos, true)], false);
+        for _ in 0..8 {
+            pos.x += 10.0;
+            draw_table(&ctx, vec![egui::Event::PointerMoved(pos)], false);
+        }
+        draw_table(&ctx, vec![button(pos, false)], false);
+        assert_eq!(draw_table(&ctx, vec![], false)[0], 180.0);
+
+        draw_table(&ctx, vec![], true);
+        assert_eq!(draw_table(&ctx, vec![], false)[0], initial);
+    }
 
     #[test]
     fn status_line_is_one_line() {
