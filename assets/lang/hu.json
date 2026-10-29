@@ -489,6 +489,7 @@
  "Text smoothing:": "Szövegsimítás:",
  "The last server list cannot be deleted": "Az utolsó szerverlista nem törölhető",
  "The port is forwarded once the server log is requested (Get Log).": "A port továbbítása a szervernapló lekérésekor történik (Napló lekérése).",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "A router elutasította a porttovábbítást ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → ez az eszköz → \"Permit independent port sharing for this device\", vagy továbbítsa kézzel a(z) {port} UDP-portot erre a számítógépre.",
  "The server is password protected and none is specified.\n\nContinue?": "A szerver jelszóval védett, és nincs megadva jelszó.\n\nFolytatja?",
  "This server/server list:": "Ez a szerver/szerverlista:",
  "Time": "Idő",

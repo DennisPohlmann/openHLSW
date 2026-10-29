@@ -483,6 +483,7 @@
  "Text smoothing:": "Vyhlazování textu:",
  "The last server list cannot be deleted": "Poslední seznam serverů nelze smazat",
  "The port is forwarded once the server log is requested (Get Log).": "Port se přesměruje, jakmile se vyžádá log serveru (Získat log).",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "Router odmítl přesměrování portu ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → toto zařízení → \"Permit independent port sharing for this device\", nebo UDP port {port} přesměrujte na tento počítač ručně.",
  "The server is password protected and none is specified.\n\nContinue?": "Server je chráněn heslem a žádné není zadáno.\n\nPokračovat?",
  "This server/server list:": "Tento server/seznam serverů:",
  "Time": "Čas",

@@ -497,6 +497,7 @@
  "Text smoothing:": "文字平滑：",
  "The last server list cannot be deleted": "無法刪除最後一個伺服器清單",
  "The port is forwarded once the server log is requested (Get Log).": "要求伺服器記錄（取得記錄）時會轉送連接埠。",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "路由器拒絕了連接埠轉送（{e}）。FRITZ!Box：Internet → Permit Access → Port Sharing → 此裝置 → \"Permit independent port sharing for this device\"，或手動將 UDP 連接埠 {port} 轉送到這台電腦。",
  "The server is password protected and none is specified.\n\nContinue?": "伺服器受密碼保護，但未指定密碼。\n\n要繼續嗎？",
  "This server/server list:": "此伺服器/伺服器清單：",
  "Time": "時間",

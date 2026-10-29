@@ -479,6 +479,7 @@
  "Text smoothing:": "Textutjämning:",
  "The last server list cannot be deleted": "Den sista serverlistan kan inte tas bort",
  "The port is forwarded once the server log is requested (Get Log).": "Porten vidarebefordras så snart serverloggen hämtas (Hämta logg).",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "Routern avvisade portvidarebefordran ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → den här enheten → \"Permit independent port sharing for this device\", eller vidarebefordra UDP-port {port} till den här datorn manuellt.",
  "The server is password protected and none is specified.\n\nContinue?": "Servern är lösenordsskyddad och inget lösenord har angetts.\n\nFortsätta?",
  "This server/server list:": "Denna server/serverlista:",
  "Time": "Tid",

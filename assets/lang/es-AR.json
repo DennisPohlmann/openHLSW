@@ -482,6 +482,7 @@
  "Text smoothing:": "Suavizado de texto:",
  "The last server list cannot be deleted": "No se puede eliminar la última lista de servidores",
  "The port is forwarded once the server log is requested (Get Log).": "El puerto se redirige en cuanto se pide el log del servidor (Obtener log).",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "El router rechazó la redirección de puerto ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → este dispositivo → \"Permit independent port sharing for this device\", o redirigí el puerto UDP {port} a esta computadora a mano.",
  "The server is password protected and none is specified.\n\nContinue?": "El servidor está protegido con contraseña y no se indicó ninguna.\n\n¿Continuar?",
  "This server/server list:": "Este servidor/lista de servidores:",
  "Time": "Hora",

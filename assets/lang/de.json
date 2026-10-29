@@ -503,6 +503,7 @@
  "Text smoothing:": "Schriftglättung:",
  "The last server list cannot be deleted": "Die letzte Serverliste kann nicht gelöscht werden",
  "The port is forwarded once the server log is requested (Get Log).": "Der Port wird weitergeleitet, sobald das Serverlog angefordert wird (Log holen).",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "Der Router hat die Portweiterleitung abgelehnt ({e}). FRITZ!Box: Internet → Freigaben → Portfreigaben → dieses Gerät → „Selbstständige Portfreigaben für dieses Gerät erlauben“, oder UDP-Port {port} von Hand an diesen Rechner weiterleiten.",
  "The server is password protected and none is specified.\n\nContinue?": "Der Server ist passwortgeschützt und es ist keines angegeben.\n\nTrotzdem fortfahren?",
  "This server/server list:": "Dieser Server/diese Serverliste:",
  "Time": "Zeit",

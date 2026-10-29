@@ -494,6 +494,7 @@
  "Text smoothing:": "Tekstin pehmennys:",
  "The last server list cannot be deleted": "Viimeistä palvelinluetteloa ei voi poistaa",
  "The port is forwarded once the server log is requested (Get Log).": "Portti ohjataan, kun palvelinloki pyydetään (Hae loki).",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "Reititin hylkäsi portin ohjauksen ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → tämä laite → \"Permit independent port sharing for this device\", tai ohjaa UDP-portti {port} tälle tietokoneelle käsin.",
  "The server is password protected and none is specified.\n\nContinue?": "Palvelin on suojattu salasanalla, eikä salasanaa ole annettu.\n\nJatketaanko?",
  "This server/server list:": "Tämä palvelin/palvelinluettelo:",
  "Time": "Aika",

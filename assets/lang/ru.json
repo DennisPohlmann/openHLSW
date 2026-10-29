@@ -496,6 +496,7 @@
  "Text smoothing:": "Сглаживание текста:",
  "The last server list cannot be deleted": "Последний список серверов нельзя удалить",
  "The port is forwarded once the server log is requested (Get Log).": "Порт будет проброшен, как только будет запрошен лог сервера («Получить лог»).",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "Роутер отклонил проброс порта ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → это устройство → \"Permit independent port sharing for this device\", или пробросьте UDP-порт {port} на этот компьютер вручную.",
  "The server is password protected and none is specified.\n\nContinue?": "Сервер защищён паролем, но пароль не указан.\n\nПродолжить?",
  "This server/server list:": "Этот сервер/список серверов:",
  "Time": "Время",

@@ -468,6 +468,7 @@
  "Text smoothing:": "Tekstvereffening:",
  "The last server list cannot be deleted": "De laatste serverlijst kan niet worden verwijderd",
  "The port is forwarded once the server log is requested (Get Log).": "De poort wordt doorgestuurd zodra de serverlog wordt opgevraagd (Log ophalen).",
+ "The router refused the port forwarding ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → this device → \"Permit independent port sharing for this device\", or forward UDP port {port} to this computer by hand.": "De router weigerde het doorsturen van de poort ({e}). FRITZ!Box: Internet → Permit Access → Port Sharing → dit apparaat → \"Permit independent port sharing for this device\", of stuur UDP-poort {port} handmatig door naar deze computer.",
  "The server is password protected and none is specified.\n\nContinue?": "De server is met een wachtwoord beveiligd en er is er geen opgegeven.\n\nDoorgaan?",
  "This server/server list:": "Deze server/serverlijst:",
  "Time": "Tijd",
