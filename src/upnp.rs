@@ -24,6 +24,10 @@ const SERVICES: [&str; 3] = [
     "urn:schemas-upnp-org:service:WANPPPConnection:1",
 ];
 const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
+/// Description URLs tried on the default gateway when nothing answers the search:
+/// FRITZ!Box and miniupnpd (OpenWrt, pfSense, many others).
+const WELL_KNOWN_DESCRIPTIONS: [(u16, &str); 2] =
+    [(49000, "/igddesc.xml"), (5000, "/rootDesc.xml")];
 /// Upper bound for a description or SOAP answer.
 const MAX_RESPONSE: u64 = 256 * 1024;
 
@@ -78,12 +82,27 @@ pub struct Gateway {
 /// Searches the local network for a UPnP router (waits up to `timeout` for answers).
 pub fn discover(timeout: Duration) -> Result<Gateway, Error> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
-    for st in SEARCH_TARGETS {
-        let request = format!(
-            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nST: {st}\r\n\
-             MAN: \"ssdp:discover\"\r\nMX: 2\r\n\r\n"
-        );
-        socket.send_to(request.as_bytes(), SSDP_ADDR)?;
+    // Also ask the default gateway directly: a host firewall (ufw, firewalld) drops the
+    // unicast answer to a multicast search, but lets the answer to a unicast one through.
+    let gateways = default_gateways();
+    let targets = std::iter::once(SSDP_ADDR).chain(
+        gateways
+            .iter()
+            .map(|gw| SocketAddr::new(IpAddr::V4(*gw), 1900)),
+    );
+    for target in targets {
+        for st in SEARCH_TARGETS {
+            let request = format!(
+                "M-SEARCH * HTTP/1.1\r\nHOST: {target}\r\nST: {st}\r\n\
+                 MAN: \"ssdp:discover\"\r\nMX: 2\r\n\r\n"
+            );
+            // A gateway that is not reachable must not stop the multicast search.
+            if let Err(e) = socket.send_to(request.as_bytes(), target)
+                && target == SSDP_ADDR
+            {
+                return Err(e.into());
+            }
+        }
     }
     let deadline = Instant::now() + timeout;
     let mut buf = [0u8; 2048];
@@ -119,6 +138,24 @@ pub fn discover(timeout: Duration) -> Result<Gateway, Error> {
         match Gateway::from_description(&location, from.ip()) {
             Ok(gateway) => return Ok(gateway),
             Err(e) => last_error = e,
+        }
+    }
+    // No answer: a host firewall may have dropped it, and some routers (FRITZ!Box) do not
+    // answer a unicast search. Try their well-known description URLs on the gateway.
+    for gateway in gateways {
+        for (port, path) in WELL_KNOWN_DESCRIPTIONS {
+            let location = format!("http://{gateway}:{port}{path}");
+            if tried.contains(&location) {
+                continue;
+            }
+            match Gateway::from_description(&location, IpAddr::V4(gateway)) {
+                Ok(found) => return Ok(found),
+                // Nothing listening there is "not found"; anything else is worth reporting.
+                Err(e) if matches!(last_error, Error::NotFound) && !matches!(e, Error::Io(_)) => {
+                    last_error = e;
+                }
+                Err(_) => {}
+            }
         }
     }
     Err(last_error)
@@ -264,6 +301,36 @@ impl Gateway {
             None => Err(Error::Protocol(format!("{action}: HTTP {status}"))),
         }
     }
+}
+
+/// IPv4 default gateways of this computer (Linux: `/proc/net/route`; elsewhere none, the
+/// multicast search alone is used).
+fn default_gateways() -> Vec<Ipv4Addr> {
+    std::fs::read_to_string("/proc/net/route")
+        .map(|table| parse_route_table(&table))
+        .unwrap_or_default()
+}
+
+/// Gateways of the default routes in a `/proc/net/route` table (hex, little endian).
+fn parse_route_table(table: &str) -> Vec<Ipv4Addr> {
+    let mut gateways = Vec::new();
+    for line in table.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let (Some(dest), Some(gw)) = (fields.get(1), fields.get(2)) else {
+            continue;
+        };
+        if *dest != "00000000" {
+            continue;
+        }
+        let Ok(gw) = u32::from_str_radix(gw, 16) else {
+            continue;
+        };
+        let ip = Ipv4Addr::from(gw.to_le_bytes());
+        if is_local(IpAddr::V4(ip)) && !gateways.contains(&ip) {
+            gateways.push(ip);
+        }
+    }
+    gateways
 }
 
 /// Addresses a router may answer from: private, link-local or CGNAT IPv4.
@@ -493,6 +560,21 @@ mod tests {
             Some("http://192.168.0.1:49000/igddesc.xml")
         );
         assert_eq!(ssdp_location("NOTIFY * HTTP/1.1\r\nLOCATION: x\r\n"), None);
+    }
+
+    #[test]
+    fn finds_default_gateways() {
+        let table = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
+                     wlan0\t00000000\t01B2A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n\
+                     wlan0\t00B2A8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\t0\t0\t0\n\
+                     tun0\t00000000\t0100000A\t0003\t0\t0\t50\t00000000\t0\t0\t0\n\
+                     wan0\t00000000\t017100CB\t0003\t0\t0\t900\t00000000\t0\t0\t0\n";
+        // 192.168.178.1 and 10.0.0.1; a public gateway (203.0.113.1) is not asked.
+        assert_eq!(
+            parse_route_table(table),
+            vec![Ipv4Addr::new(192, 168, 178, 1), Ipv4Addr::new(10, 0, 0, 1)]
+        );
+        assert!(parse_route_table("").is_empty());
     }
 
     #[test]

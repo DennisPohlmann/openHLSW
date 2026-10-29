@@ -131,7 +131,9 @@ services are gone), Metamod plugin management.
   openHLSW does that by itself with UPnP while it receives logs (and removes the forwarding
   on exit); it can be switched off in Settings → Connections. It needs UPnP enabled in the
   router (FRITZ!Box: "Permit independent port sharing") and a public IPv4 address – with
-  CGNAT / DS-Lite no forwarding helps. Without UPnP, forward the port by hand.
+  CGNAT / DS-Lite no forwarding helps. Without UPnP, forward the port by hand. A firewall
+  on this computer must let the port in too, e.g. `sudo ufw allow 27500/udp` (Linux with
+  ufw) or `sudo firewall-cmd --add-port=27500/udp --permanent` (firewalld).
 - **Settings** are stored in `config.json` in `%APPDATA%\openHLSW` (Windows),
   `~/.config/openHLSW` (Linux, FreeBSD) or `~/Library/Application Support/openHLSW` (macOS).
   Saved RCON passwords are stored there as plain text, as is the console history (without
