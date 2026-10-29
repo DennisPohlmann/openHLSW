@@ -10697,6 +10697,29 @@ pub(crate) trait EditMenu {
 
 impl EditMenu for egui::Response {
     fn with_edit_menu(self) -> Self {
+        // egui's TextEdit takes any button press as the start of a new selection, so the
+        // right click for this menu would drop the marked text. While the right button is
+        // in use on the field, put back the selection from before the press.
+        let ctx = self.ctx.clone();
+        let saved_id = self.id.with("selection_before_right_click");
+        let right = ctx.input(|i| {
+            let b = egui::PointerButton::Secondary;
+            i.pointer.button_pressed(b) || i.pointer.button_down(b) || i.pointer.button_released(b)
+        });
+        if let Some(mut state) = egui::TextEdit::load_state(&ctx, self.id) {
+            if right && (self.contains_pointer() || self.dragged()) {
+                let saved = ctx.data(|d| d.get_temp::<Option<egui::text::CCursorRange>>(saved_id));
+                if let Some(range) = saved
+                    && state.cursor.char_range() != range
+                {
+                    state.cursor.set_char_range(range);
+                    state.store(&ctx, self.id);
+                    ctx.request_repaint();
+                }
+            } else {
+                ctx.data_mut(|d| d.insert_temp(saved_id, state.cursor.char_range()));
+            }
+        }
         let field = self.clone();
         self.rows_context_menu(|ui| {
             let ctx = ui.ctx().clone();
@@ -11723,6 +11746,56 @@ mod tests {
         assert_eq!(sel.keys.len(), 2); // keeps the marked group
         sel.right_click("a");
         assert!(sel.contains("a") && sel.keys.len() == 1);
+    }
+
+    #[test]
+    fn right_click_keeps_the_selection() {
+        use egui::text::{CCursor, CCursorRange};
+        // Returns the selection after a right click into a field with "hello" marked.
+        fn right_click(edit_menu: bool) -> Option<CCursorRange> {
+            let ctx = egui::Context::default();
+            let frame = |events: Vec<egui::Event>| {
+                let mut field = None;
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    let mut text = "hello world";
+                    let r = ui.add(TextEdit::multiline(&mut text).id_salt("field"));
+                    let r = if edit_menu { r.with_edit_menu() } else { r };
+                    field = Some((r.id, r.rect.center()));
+                });
+                out.textures_delta.clear();
+                field.unwrap()
+            };
+            let (id, pos) = frame(Vec::new());
+            let hello = CCursorRange::two(CCursor::new(0), CCursor::new(5));
+            let mut state = TextEdit::load_state(&ctx, id).unwrap_or_default();
+            state.cursor.set_char_range(Some(hello));
+            state.store(&ctx, id);
+            ctx.memory_mut(|m| m.request_focus(id));
+            frame(Vec::new());
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(vec![egui::Event::PointerMoved(pos), button(true)]);
+            frame(vec![button(false)]);
+            frame(Vec::new());
+            TextEdit::load_state(&ctx, id).and_then(|s| s.cursor.char_range())
+        }
+        let hello = CCursorRange::two(CCursor::new(0), CCursor::new(5));
+        // egui alone drops it (otherwise this test would prove nothing) ...
+        assert_ne!(right_click(false), Some(hello));
+        // ... the edit menu keeps it, so Copy copies the marked text.
+        assert_eq!(right_click(true), Some(hello));
     }
 
     #[test]
