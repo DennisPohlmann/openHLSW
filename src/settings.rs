@@ -719,9 +719,6 @@ pub struct ViewOptions {
     pub hidden_server_columns: Vec<String>,
     /// Visible columns of the players list (titles, in any order).
     pub player_columns: Vec<String>,
-    /// Bumped by "Reset column width"; part of the table id, so widths start fresh.
-    pub server_columns_reset: u32,
-    pub player_columns_reset: u32,
 }
 
 impl Default for ViewOptions {
@@ -754,8 +751,6 @@ impl Default for ViewOptions {
             .iter()
             .map(|c| c.to_string())
             .collect(),
-            server_columns_reset: 0,
-            player_columns_reset: 0,
         }
     }
 }

@@ -65,6 +65,7 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
 - Columns like HLSW: flag, name with game icon (and a key for servers with a password), game,
   map, players, ping (current + average), version, location and provider, add-ons (MM:S,
   SourceMod, AMXX, …), anti-cheat, limits, comment. Double-click a header to fit a column, right-click to show / hide columns.
+  Right-click any list header (servers, players, rules, bans, maps, chat, …) for **Reset column width**.
 - Refresh every second by default; offline servers turn red, keep their last infos and move
   to the end of the list.
 
