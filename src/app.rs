@@ -5649,21 +5649,41 @@ impl OpenHlswApp {
             }))
             .show_separator_line(false)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let width = (ui.available_width() - 230.0).max(100.0);
-                    let resp = ui
-                        .add(
-                            TextEdit::singleline(input)
-                                .align(egui::Align2::LEFT_CENTER)
-                                .id_salt("console_input_field")
-                                .font(TextStyle::Monospace)
-                                .hint_text(tr!(
-                                    "RCON command, e.g. status  (Up/Down: history, Tab: complete)"
-                                ))
-                                .desired_width(width),
-                        )
-                        .with_edit_menu();
-                    *input_id = Some(resp.id);
+                // Right to left: the buttons take the width they need (it depends on the
+                // language and the text size) and the input field the rest of the row.
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let field_id = ui.make_persistent_id("console_input_field");
+                    let r = toggle_button(ui, p, "", *big_window).on_hover_text(if *big_window {
+                        tr!("Back to the main window")
+                    } else {
+                        tr!("Console and chat in a big window")
+                    });
+                    window_icon(ui, p, r.rect);
+                    if r.clicked() {
+                        *big_window = !*big_window;
+                    }
+                    if toggle_button(ui, p, "X", false)
+                        .on_hover_text(tr!("Clear console"))
+                        .clicked()
+                    {
+                        actions.push(Action::ClearConsole(id));
+                    }
+                    if toggle_button(ui, p, "S", *autoscroll)
+                        .on_hover_text(tr!("Auto scroll"))
+                        .clicked()
+                    {
+                        *autoscroll = !*autoscroll;
+                    }
+                    if ui
+                        .add(Button::new(tr!("Complete")).min_size(egui::vec2(60.0, 18.0)))
+                        .clicked()
+                    {
+                        complete = true;
+                        ui.memory_mut(|m| m.request_focus(field_id));
+                    }
+                    let send = ui
+                        .add(Button::new(tr!("Send")).min_size(egui::vec2(60.0, 18.0)))
+                        .clicked();
                     // History drop-down (the ▼ of HLSW's combo box).
                     let (arrow_rect, arrow) =
                         ui.allocate_exact_size(egui::vec2(16.0, 18.0), Sense::click());
@@ -5683,6 +5703,20 @@ impl OpenHlswApp {
                         p.text,
                         Stroke::NONE,
                     ));
+                    let width = ui.available_width().max(100.0);
+                    let resp = ui
+                        .add(
+                            TextEdit::singleline(input)
+                                .align(egui::Align2::LEFT_CENTER)
+                                .id(field_id)
+                                .font(TextStyle::Monospace)
+                                .hint_text(tr!(
+                                    "RCON command, e.g. status  (Up/Down: history, Tab: complete)"
+                                ))
+                                .desired_width(width),
+                        )
+                        .with_edit_menu();
+                    *input_id = Some(resp.id);
                     egui::Popup::menu(&arrow).show(|ui| {
                         ui.set_min_width(width);
                         if history.is_empty() {
@@ -5726,41 +5760,9 @@ impl OpenHlswApp {
                         }
                     }
                     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui
-                        .add(Button::new(tr!("Send")).min_size(egui::vec2(60.0, 18.0)))
-                        .clicked()
-                        || enter
-                    {
+                    if send || enter {
                         actions.push(Action::SendConsole(id));
                         resp.request_focus();
-                    }
-                    if ui
-                        .add(Button::new(tr!("Complete")).min_size(egui::vec2(60.0, 18.0)))
-                        .clicked()
-                    {
-                        complete = true;
-                        resp.request_focus();
-                    }
-                    if toggle_button(ui, p, "S", *autoscroll)
-                        .on_hover_text(tr!("Auto scroll"))
-                        .clicked()
-                    {
-                        *autoscroll = !*autoscroll;
-                    }
-                    if toggle_button(ui, p, "X", false)
-                        .on_hover_text(tr!("Clear console"))
-                        .clicked()
-                    {
-                        actions.push(Action::ClearConsole(id));
-                    }
-                    let r = toggle_button(ui, p, "", *big_window).on_hover_text(if *big_window {
-                        tr!("Back to the main window")
-                    } else {
-                        tr!("Console and chat in a big window")
-                    });
-                    window_icon(ui, p, r.rect);
-                    if r.clicked() {
-                        *big_window = !*big_window;
                     }
                 });
             });
@@ -6536,37 +6538,9 @@ impl OpenHlswApp {
             }))
             .show_separator_line(false)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let resp = ui
-                        .add(
-                            TextEdit::singleline(input)
-                                .align(egui::Align2::LEFT_CENTER)
-                                .id_salt("chat_input_field")
-                                .hint_text(tr!("Message to all players (rcon say)"))
-                                .desired_width((ui.available_width() - 130.0).max(100.0)),
-                        )
-                        .with_edit_menu();
-                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui
-                        .add(Button::new(tr!("Say")).min_size(egui::vec2(50.0, 18.0)))
-                        .clicked()
-                        || enter
-                    {
-                        actions.push(Action::Say(id));
-                        resp.request_focus();
-                    }
-                    if toggle_button(ui, p, "S", *autoscroll)
-                        .on_hover_text(tr!("Auto scroll"))
-                        .clicked()
-                    {
-                        *autoscroll = !*autoscroll;
-                    }
-                    if toggle_button(ui, p, "X", false)
-                        .on_hover_text(tr!("Clear chat"))
-                        .clicked()
-                    {
-                        actions.push(Action::ClearChat(id));
-                    }
+                // Right to left: the buttons take the width they need (it depends on the
+                // language and the text size) and the input field the rest of the row.
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let r = toggle_button(ui, p, "", *big_window).on_hover_text(if *big_window {
                         tr!("Back to the main window")
                     } else {
@@ -6575,6 +6549,35 @@ impl OpenHlswApp {
                     window_icon(ui, p, r.rect);
                     if r.clicked() {
                         *big_window = !*big_window;
+                    }
+                    if toggle_button(ui, p, "X", false)
+                        .on_hover_text(tr!("Clear chat"))
+                        .clicked()
+                    {
+                        actions.push(Action::ClearChat(id));
+                    }
+                    if toggle_button(ui, p, "S", *autoscroll)
+                        .on_hover_text(tr!("Auto scroll"))
+                        .clicked()
+                    {
+                        *autoscroll = !*autoscroll;
+                    }
+                    let say = ui
+                        .add(Button::new(tr!("Say")).min_size(egui::vec2(50.0, 18.0)))
+                        .clicked();
+                    let resp = ui
+                        .add(
+                            TextEdit::singleline(input)
+                                .align(egui::Align2::LEFT_CENTER)
+                                .id_salt("chat_input_field")
+                                .hint_text(tr!("Message to all players (rcon say)"))
+                                .desired_width(ui.available_width().max(100.0)),
+                        )
+                        .with_edit_menu();
+                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if say || enter {
+                        actions.push(Action::Say(id));
+                        resp.request_focus();
                     }
                 });
             });
