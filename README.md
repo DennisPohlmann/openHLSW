@@ -216,6 +216,11 @@ tools/       test server, version script for releases
 mapping it to the translation. Missing entries fall back to English; `cargo test` checks the
 `{placeholders}`.
 
+**Contributing**: see [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md); security problems are reported privately as described in
+[SECURITY.md](SECURITY.md). Accessibility, what works and what does not yet:
+[ACCESSIBILITY.md](ACCESSIBILITY.md).
+
 **Ideas for later**: ARK: Survival Ascended (needs an Epic login), GTA Network / RAGE MP
 (their server lists need HTTPS), system tray, View Manager.
 

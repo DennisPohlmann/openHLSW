@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in openHLSW does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please do **not** post real RCON passwords, Steam IDs,
+        server addresses or other private data; use placeholders such as
+        `203.0.113.10:27015`. Security problems go to the
+        [Security tab](https://github.com/DennisPohlmann/openHLSW/security) instead.
+  - type: input
+    id: version
+    attributes:
+      label: openHLSW version
+      description: Shown under ? → About.
+      placeholder: "0.5.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - FreeBSD
+    validations:
+      required: true
+  - type: input
+    id: system-details
+    attributes:
+      label: System details
+      description: Version, architecture and package (for example "Windows 11 x64, .msi" or "Ubuntu 24.04, Flatpak").
+  - type: input
+    id: game
+    attributes:
+      label: Game / server type
+      description: For example "CS2", "CS 1.6 (HLDS)", "Battlefield 2", "Minecraft Java".
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add server 203.0.113.10:27015
+        2. Open the RCON tab
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output or screenshots
+      description: Remove passwords, Steam IDs and addresses before posting.
+      render: text
