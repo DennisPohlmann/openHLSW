@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or a game that openHLSW should support.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: Describe the problem or the use case, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: How could openHLSW help?
+      description: How should it work? If HLSW had this feature, how did it work there?
+  - type: input
+    id: game
+    attributes:
+      label: Game / server type (if any)
+      description: For a new game, name it and its query protocol or a link to its documentation.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways or tools you tried.
