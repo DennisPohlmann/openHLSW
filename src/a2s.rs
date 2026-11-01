@@ -74,6 +74,31 @@ impl ServerInfo {
             _ => "?",
         }
     }
+
+    /// HLSW's grey rows after the rules (cvars): the info query's fields under HLSW's
+    /// keys. Fields the protocol does not report stay empty, like in HLSW.
+    pub fn info_rules(&self) -> Vec<Rule> {
+        let opt = |v: Option<u64>| v.map(|v| v.to_string()).unwrap_or_default();
+        let app_id = self.real_app_id();
+        [
+            ("gamedir", self.folder.clone()),
+            ("gamename", self.game.clone()),
+            ("steamid", opt((app_id != 0).then_some(app_id.into()))),
+            ("clientcount", self.players.to_string()),
+            ("clientmax", self.max_players.to_string()),
+            ("botcount", self.bots.to_string()),
+            ("secure", u8::from(self.vac).to_string()),
+            ("server_steam_id", opt(self.steam_id)),
+            ("game_tag", self.keywords.clone().unwrap_or_default()),
+            ("game_id", opt(self.game_id)),
+        ]
+        .into_iter()
+        .map(|(key, value)| Rule {
+            key: key.to_owned(),
+            value,
+        })
+        .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -671,6 +696,42 @@ mod tests {
         assert_eq!(info.app_id, 80);
         assert_eq!((info.players, info.max_players, info.bots), (5, 20, 2));
         assert_eq!(info.server_type, b'd');
+    }
+
+    #[test]
+    fn info_rules_use_hlsw_keys() {
+        let info = ServerInfo {
+            folder: "cstrike".into(),
+            game: "Counter-Strike".into(),
+            app_id: 10,
+            max_players: 32,
+            vac: true,
+            game_id: Some(10),
+            ..ServerInfo::default()
+        };
+        let rows: Vec<(String, String)> = info
+            .info_rules()
+            .into_iter()
+            .map(|r| (r.key, r.value))
+            .collect();
+        let expected = [
+            ("gamedir", "cstrike"),
+            ("gamename", "Counter-Strike"),
+            ("steamid", "10"),
+            ("clientcount", "0"),
+            ("clientmax", "32"),
+            ("botcount", "0"),
+            ("secure", "1"),
+            ("server_steam_id", ""),
+            ("game_tag", ""),
+            ("game_id", "10"),
+        ]
+        .map(|(k, v)| (k.to_owned(), v.to_owned()));
+        assert_eq!(rows, expected);
+        // Protocols without a Steam AppID (GameSpy …): empty, not "0".
+        let other = ServerInfo::default().info_rules();
+        assert_eq!(other[2].value, "");
+        assert_eq!(other[6].value, "0");
     }
 
     #[test]

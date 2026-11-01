@@ -79,7 +79,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   Battlefield 2 score, deaths, skill, team and bots straight from the query.
 - Right-click menus like HLSW: copy (names, Steam IDs, profile URLs, rows), Steam profile,
   Global ID Database, kick and ban with a duration – Multi Kick / Multi Ban for several
-  marked players. Rules: copy and change values.
+  marked players. Rules: copy and change values; after the cvars, HLSW's grey server info
+  rows (`gamedir`, `gamename`, `steamid`, `clientcount`, …, `game_id`).
 
 **RCON** (Source over TCP, Half-Life 1 over UDP)
 - Rcon Config with Auto Update Status and server log (Get Log LAN / Internet). Hide, Save,

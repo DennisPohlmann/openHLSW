@@ -5067,6 +5067,13 @@ impl OpenHlswApp {
                 let rules = idx
                     .map(|i| self.servers[i].rules.as_slice())
                     .unwrap_or_default();
+                // HLSW's grey server info rows after the cvars (while the server answers).
+                let info_rules = idx
+                    .map(|i| &self.servers[i])
+                    .filter(|s| !s.is_offline())
+                    .and_then(|s| s.info.as_ref())
+                    .map(|info| info.info_rules())
+                    .unwrap_or_default();
                 let rule_server = idx.map(|i| {
                     let s = &self.servers[i];
                     (s.id, !s.rcon_password.is_empty())
@@ -5077,13 +5084,14 @@ impl OpenHlswApp {
                     "rules_filter",
                     &mut self.rules_filter,
                     tr!("cvar or value"),
-                    rules.len(),
+                    rules.len() + info_rules.len(),
                 );
                 list_frame(ui, p, |ui| {
                     rules_table(
                         ui,
                         p,
                         rules,
+                        &info_rules,
                         &needle,
                         rule_server,
                         &mut self.rule_sel,
@@ -10290,24 +10298,37 @@ fn parse_status_players(text: &str) -> Vec<StatusPlayer> {
     out
 }
 
+/// Selection key of a server info row in the rules list, so it never matches a cvar of
+/// the same name (GameSpy servers have a `gamename` rule).
+fn info_rule_id(key: &str) -> String {
+    format!("\u{1}{key}")
+}
+
+/// The cvars, then (always at the end, on a grey background) HLSW's server info rows.
+#[allow(clippy::too_many_arguments)]
 fn rules_table(
     ui: &mut Ui,
     p: &Palette,
     rules: &[Rule],
+    info_rules: &[Rule],
     needle: &str,
     server: Option<(ServerId, bool)>,
     sel: &mut Selection,
     actions: &mut Vec<Action>,
 ) {
-    let all = rules;
-    let rules: Vec<&Rule> = rules
+    let all: Vec<&Rule> = rules.iter().chain(info_rules).collect();
+    // (rule, selection key, server info row)
+    let rows: Vec<(&Rule, String, bool)> = rules
         .iter()
-        .filter(|r| {
+        .map(|r| (r, r.key.clone(), false))
+        .chain(info_rules.iter().map(|r| (r, info_rule_id(&r.key), true)))
+        .filter(|(r, _, _)| {
             needle.is_empty()
                 || r.key.to_lowercase().contains(needle)
                 || r.value.to_lowercase().contains(needle)
         })
         .collect();
+    let rules: Vec<&Rule> = rows.iter().map(|(r, _, _)| *r).collect();
     let autosize = take_autosize(ui, "rules");
     let mut autosize_request = None;
     let fit_all = fit_all_pending(ui, "rules");
@@ -10328,13 +10349,14 @@ fn rules_table(
         })
     };
     let (fit0, fit1, fit2) = (fit_width(0), fit_width(1), fit_width(2));
-    let order: Vec<&str> = rules.iter().map(|r| r.key.as_str()).collect();
+    let order: Vec<&str> = rows.iter().map(|(_, id, _)| id.as_str()).collect();
     sel.retain(&order);
-    let marked: Vec<&Rule> = rules
+    let marked: Vec<&Rule> = rows
         .iter()
-        .copied()
-        .filter(|r| sel.contains(&r.key))
+        .filter(|(_, id, _)| sel.contains(id))
+        .map(|(r, _, _)| *r)
         .collect();
+    let marked_info = rows.iter().any(|(_, id, info)| *info && sel.contains(id));
     // Like HLSW only one rule is marked at a time (no Ctrl / Shift / Ctrl+A).
     // Ctrl+C while the mouse is over the list copies it.
     if ui.rect_contains_pointer(ui.max_rect()) && !ui.ctx().text_edit_focused() {
@@ -10375,36 +10397,54 @@ fn rules_table(
             });
         })
         .body(|body| {
-            body.rows(ROW_HEIGHT, rules.len(), |mut row| {
-                let r = rules[row.index()];
+            body.rows(ROW_HEIGHT, rows.len(), |mut row| {
+                let (r, id, info) = &rows[row.index()];
+                let (r, info) = (*r, *info);
                 let n = row.index() + 1;
-                row.set_selected(sel.contains(&r.key));
+                let selected = sel.contains(id);
+                row.set_selected(selected);
+                let bg = (info && !selected).then_some(p.info_bg);
+                let shade = |ui: &mut Ui| {
+                    if let Some(bg) = bg {
+                        // Also under the gaps between the cells: a clipped cell would cut
+                        // the band off at its own edge.
+                        let wide = |r: egui::Rect| r.expand2(egui::vec2(3.0, 0.0));
+                        let mut painter = ui.painter().clone();
+                        painter.set_clip_rect(wide(ui.clip_rect()));
+                        painter.rect_filled(wide(ui.max_rect()), 0.0, bg);
+                    }
+                };
                 row.col(|ui| {
+                    shade(ui);
                     // One pixel away from the list frame.
                     ui.add_space(1.0);
                     ui.label(format!("{n:02}"));
                 });
                 row.col(|ui| {
+                    shade(ui);
                     ui.add(Label::new(&r.key).wrap_mode(fit(ui)).selectable(false));
                 });
                 row.col(|ui| {
+                    shade(ui);
                     ui.add(Label::new(&r.value).wrap_mode(fit(ui)).selectable(false));
                 });
-                row.col(|_| {});
+                row.col(shade);
                 let resp = row.response();
                 if resp.clicked() {
-                    clicked = Some((r.key.clone(), egui::Modifiers::NONE));
+                    clicked = Some((id.clone(), egui::Modifiers::NONE));
                 }
                 if resp.secondary_clicked() {
-                    sel.right_click(&r.key);
+                    sel.right_click(id);
                     set_active_list(&resp.ctx, "rules");
                 }
-                let targets: Vec<&Rule> = if sel.contains(&r.key) && marked.len() > 1 {
-                    marked.clone()
+                let (targets, cvars): (Vec<&Rule>, bool) = if selected && marked.len() > 1 {
+                    (marked.clone(), !marked_info)
                 } else {
-                    vec![r]
+                    (vec![r], !info)
                 };
-                resp.rows_context_menu(|ui| rule_context_menu(ui, &targets, all, server, actions));
+                resp.rows_context_menu(|ui| {
+                    rule_context_menu(ui, &targets, cvars, &all, server, actions)
+                });
             });
         });
     if let Some((key, mods)) = clicked {
@@ -10417,10 +10457,12 @@ fn rules_table(
 }
 
 /// Right-click menu of the server rules (cvars), laid out like HLSW's.
+/// `cvars`: no server info row among the targets (only cvars can be changed).
 fn rule_context_menu(
     ui: &mut Ui,
     targets: &[&Rule],
-    all: &[Rule],
+    cvars: bool,
+    all: &[&Rule],
     server: Option<(ServerId, bool)>,
     actions: &mut Vec<Action>,
 ) {
@@ -10455,12 +10497,14 @@ fn rule_context_menu(
         }
     });
     let rcon = server.filter(|(_, ok)| *ok);
-    let r_btn = ui
-        .add_enabled(
-            rcon.is_some() && targets.len() == 1,
-            Button::new(tr!("Change Value...")),
-        )
-        .on_disabled_hover_text(tr!("Needs RCON (Rcon Config → Test)"));
+    let mut r_btn = ui.add_enabled(
+        rcon.is_some() && cvars && targets.len() == 1,
+        Button::new(tr!("Change Value...")),
+    );
+    // Server info rows are no cvars: nothing to change there, RCON or not.
+    if cvars {
+        r_btn = r_btn.on_disabled_hover_text(tr!("Needs RCON (Rcon Config → Test)"));
+    }
     if r_btn.clicked()
         && let Some((id, _)) = rcon
     {

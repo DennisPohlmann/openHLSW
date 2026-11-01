@@ -98,6 +98,8 @@ pub struct Palette {
     /// Row under the mouse or the keyboard focus in dropdowns and menus (white text).
     pub popup_hover_bg: Color32,
     pub offline_bg: Color32,
+    /// Rules list: HLSW's grey rows with the server info after the cvars.
+    pub info_bg: Color32,
     pub red: Color32,
     pub green: Color32,
     pub link: Color32,
@@ -138,6 +140,7 @@ impl Theme {
                 hover_bg: rgb(235, 242, 251),
                 popup_hover_bg: rgb(222, 234, 249),
                 offline_bg: rgb(253, 231, 233),
+                info_bg: rgb(232, 231, 230),
                 red: rgb(209, 52, 56),
                 green: rgb(16, 124, 16),
                 link: rgb(24, 90, 189),
@@ -169,6 +172,7 @@ impl Theme {
                 hover_bg: rgb(50, 56, 66),
                 popup_hover_bg: rgb(45, 75, 120),
                 offline_bg: rgb(80, 38, 42),
+                info_bg: rgb(52, 52, 52),
                 red: rgb(255, 120, 120),
                 green: rgb(110, 210, 110),
                 link: rgb(110, 170, 240),
