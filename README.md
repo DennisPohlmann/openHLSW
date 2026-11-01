@@ -106,9 +106,10 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   to the console or chat input): console above, chat below, the divider can be dragged (console
   20–90 %); input, history, find and switches are the same as in the tabs. Size and divider
   are remembered.
-- The main window opens maximized the first time, later as it was closed. "Restore"
-  gives the normal size you last chose (centered); maximized and normal window each
-  remember their own panel layout.
+- The main window opens maximized the first time, later exactly as it was closed:
+  position, size and maximized or not ("Restore" gives the normal size and place you last
+  chose; a window on a monitor that is gone is centered on the main one). Maximized and
+  normal window each remember their own panel layout, saved right after you drag a border.
 - Settings like HLSW: My Games, Startup, Connecting, Rcon, Connections, Sounds, Misc.
 - Sharp text: ClearType-like sub-pixel text on Windows, Linux and macOS (automatically off
   on high-resolution screens), any installed font (shown in its own look), text size 10–16 px

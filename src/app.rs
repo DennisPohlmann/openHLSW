@@ -1398,6 +1398,9 @@ pub struct OpenHlswApp {
     layout_maximized: bool,
     /// The window still has to be maximized after the start, if the settings say so.
     maximize_at_start: bool,
+    /// When eframe should save the egui memory (panel sizes, column widths) next,
+    /// after a panel border or column was dragged.
+    layout_save_at: Option<Instant>,
     /// The app itself, for the big console window (see [`AppHandle`]).
     this: std::sync::Weak<std::sync::Mutex<OpenHlswApp>>,
     search_id: Option<egui::Id>,
@@ -1601,6 +1604,7 @@ impl OpenHlswApp {
             window_changed_at: None,
             layout_maximized: config.settings.view.window_maximized,
             maximize_at_start: true,
+            layout_save_at: None,
             this: std::sync::Weak::new(),
             search_id: None,
             flags: Flags::load(&cc.egui_ctx),
@@ -2942,17 +2946,21 @@ impl OpenHlswApp {
         }
     }
 
-    /// Remembers the normal size of the main window (not maximized, fullscreen or
-    /// minimized) and whether it is maximized, for "Restore" and the next start; saved
+    /// Remembers position and normal size of the main window (not maximized, fullscreen
+    /// or minimized) and whether it is maximized, for "Restore" and the next start; saved
     /// once it has not changed for a second.
     fn track_main_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         // Without the text size zoom: `main` divides by it again (eframe applies the zoom
         // it remembers to the start size), so changing the text size keeps the window size.
         let zoom = ctx.zoom_factor();
-        let (size, maximized, fullscreen, time) = ctx.input(|i| {
+        let ppp = ctx.pixels_per_point();
+        let (size, pos, scale, maximized, fullscreen, time) = ctx.input(|i| {
             let v = i.viewport();
             (
                 i.viewport_rect().size() * zoom,
+                // Physical pixels; none while minimized and on Wayland.
+                v.outer_rect.map(|r| r.min * ppp),
+                v.native_pixels_per_point,
                 v.maximized,
                 v.fullscreen == Some(true),
                 i.time,
@@ -2981,6 +2989,12 @@ impl OpenHlswApp {
             let size = [size.x.round(), size.y.round()];
             changed |= view.window_size != size;
             view.window_size = size;
+            if let (Some(pos), Some(scale)) = (pos, scale) {
+                let pos = Some([pos.x.round(), pos.y.round()]);
+                changed |= view.window_pos != pos || view.window_scale != scale;
+                view.window_pos = pos;
+                view.window_scale = scale;
+            }
         }
         if changed {
             self.window_changed_at = Some(Instant::now());
@@ -4025,6 +4039,14 @@ impl eframe::App for AppHandle {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         lock_app(&self.0).ui(ui, frame);
     }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        lock_app(&self.0).save(storage);
+    }
+
+    fn auto_save_interval(&self) -> Duration {
+        lock_app(&self.0).auto_save_interval()
+    }
 }
 
 impl eframe::App for OpenHlswApp {
@@ -4037,6 +4059,19 @@ impl eframe::App for OpenHlswApp {
         }
         // Remove the forwarding in the router again.
         self.port_mapper.shutdown(Duration::from_secs(3));
+    }
+
+    /// The egui memory (layout) and the rest of eframe's state are saved now and then;
+    /// right after a drag sooner (`layout_save_at`).
+    fn auto_save_interval(&self) -> Duration {
+        match self.layout_save_at {
+            Some(at) if Instant::now() >= at => Duration::ZERO,
+            _ => Duration::from_secs(30),
+        }
+    }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.layout_save_at = None;
     }
 
     /// Also runs while the main window is hidden or covered (no `ui` then).
@@ -4061,6 +4096,12 @@ impl eframe::App for OpenHlswApp {
             return;
         }
 
+        // A panel border or column was dragged: have eframe save the layout soon, not
+        // only every 30 seconds and on exit (a crash or a shutdown would lose it).
+        if ui.ctx().drag_stopped_id().is_some() {
+            self.layout_save_at = Some(Instant::now() + Duration::from_millis(500));
+            ui.ctx().request_repaint_after(Duration::from_millis(600));
+        }
         // In the very first frame egui does not know the window size yet: panels laid out
         // now would remember sizes made for a huge window.
         if ui.ctx().cumulative_frame_nr() == 0 {

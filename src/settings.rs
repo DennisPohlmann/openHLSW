@@ -730,6 +730,21 @@ impl ViewOptions {
     }
 }
 
+impl ViewOptions {
+    /// The saved window position in physical pixels with its scale factor, if usable.
+    pub fn main_window_pos(&self) -> Option<([f32; 2], f32)> {
+        let [x, y] = self.window_pos?;
+        let scale = self.window_scale;
+        (x.is_finite()
+            && y.is_finite()
+            && x.abs() < 100_000.0
+            && y.abs() < 100_000.0
+            && scale.is_finite()
+            && (0.25..=8.0).contains(&scale))
+        .then_some(([x, y], scale))
+    }
+}
+
 /// What the View menu shows or hides.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -753,6 +768,11 @@ pub struct ViewOptions {
     /// next start use, and whether it was maximized.
     pub window_size: [f32; 2],
     pub window_maximized: bool,
+    /// Top left corner of the normal window frame in physical pixels and the scale
+    /// factor of its monitor then; `None` until the window was moved or resized (and
+    /// always on Wayland, which tells no window positions).
+    pub window_pos: Option<[f32; 2]>,
+    pub window_scale: f32,
     /// Columns switched off in the header's right-click menu (column titles).
     pub hidden_server_columns: Vec<String>,
     /// Visible columns of the players list (titles, in any order).
@@ -776,6 +796,8 @@ impl Default for ViewOptions {
             console_window_size: [1000.0, 720.0],
             window_size: DEFAULT_WINDOW_SIZE,
             window_maximized: true,
+            window_pos: None,
+            window_scale: 1.0,
             hidden_server_columns: Vec::new(),
             player_columns: [
                 "Country",
@@ -1762,6 +1784,21 @@ mod tests {
         assert_eq!(view.main_window_size(), DEFAULT_WINDOW_SIZE);
         view.window_size = [1880.0, 1040.0];
         assert_eq!(view.main_window_size(), [1880.0, 1040.0]);
+    }
+
+    #[test]
+    fn broken_window_positions_are_ignored() {
+        let mut view = ViewOptions::default();
+        assert_eq!(view.main_window_pos(), None);
+        view.window_pos = Some([-1200.0, 40.0]);
+        assert_eq!(view.main_window_pos(), Some(([-1200.0, 40.0], 1.0)));
+        view.window_scale = 0.0;
+        assert_eq!(view.main_window_pos(), None);
+        view.window_scale = 1.5;
+        view.window_pos = Some([f32::INFINITY, 0.0]);
+        assert_eq!(view.main_window_pos(), None);
+        view.window_pos = Some([-32000.0, -32000.0]);
+        assert!(view.main_window_pos().is_some()); // on no monitor: centered at the start
     }
 
     #[test]
