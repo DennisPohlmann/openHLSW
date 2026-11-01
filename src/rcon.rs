@@ -27,6 +27,8 @@ pub enum RconError {
     /// The server closed the connection (srcds does this after too many failed logins).
     Closed,
     Protocol(String),
+    /// ICMP error on the UDP RCON socket (GoldSrc): closed port or a firewall rejecting us.
+    Unreachable(std::io::Error),
 }
 
 impl RconError {
@@ -46,6 +48,7 @@ impl fmt::Display for RconError {
             RconError::BadPassword => write!(f, "Bad RCON password"),
             RconError::Closed => write!(f, "Connection closed by server"),
             RconError::Protocol(m) => write!(f, "{m}"),
+            RconError::Unreachable(e) => write!(f, "{}", crate::a2s::unreachable_text(e)),
         }
     }
 }
@@ -232,7 +235,13 @@ impl GoldSrcRcon {
     fn send_raw(&self, body: &[u8]) -> Result<(), RconError> {
         let mut packet = vec![0xFF; 4];
         packet.extend_from_slice(body);
-        self.socket.send(&packet)?;
+        self.socket.send(&packet).map_err(|e| {
+            if crate::a2s::is_unreachable(e.kind()) {
+                RconError::Unreachable(e)
+            } else {
+                e.into()
+            }
+        })?;
         crate::stats::add_sent(packet.len() + 28);
         Ok(())
     }
@@ -246,25 +255,29 @@ impl GoldSrcRcon {
                 Ok(Some(n))
             }
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(None),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset
-                ) =>
-            {
-                Err(RconError::Protocol("Port unreachable".into()))
-            }
+            Err(e) if crate::a2s::is_unreachable(e.kind()) => Err(RconError::Unreachable(e)),
             Err(e) => Err(e.into()),
         }
     }
 
     fn fetch_challenge(&mut self) -> Result<(), RconError> {
         let mut buf = vec![0u8; 4096];
-        for _ in 0..2 {
-            self.send_raw(b"challenge rcon\n")?;
+        for attempt in 0..2 {
+            // An ICMP error (for this or an earlier packet) counts like a lost packet.
+            let retry = |e: RconError| match e {
+                RconError::Unreachable(_) if attempt == 0 => {
+                    std::thread::sleep(crate::a2s::UNREACHABLE_PAUSE);
+                    Ok(None)
+                }
+                e => Err(e),
+            };
+            if let Err(e) = self.send_raw(b"challenge rcon\n") {
+                retry(e)?;
+                continue;
+            }
             let deadline = std::time::Instant::now() + self.timeout.min(Duration::from_secs(5));
             while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
-                let Some(n) = self.recv(&mut buf, left)? else {
+                let Some(n) = self.recv(&mut buf, left).or_else(retry)? else {
                     break;
                 };
                 let text = String::from_utf8_lossy(&buf[..n]);
@@ -283,7 +296,16 @@ impl GoldSrcRcon {
     /// Runs a command and returns its complete output.
     pub fn exec(&mut self, command: &str) -> Result<String, RconError> {
         for attempt in 0..2 {
-            let out = self.exec_once(command)?;
+            let out = match self.exec_once(command) {
+                Ok(out) => out,
+                // An ICMP error, often left over from an earlier packet (the server was
+                // restarting, or a firewall rejected one packet): try once more.
+                Err(RconError::Unreachable(_)) if attempt == 0 => {
+                    std::thread::sleep(crate::a2s::UNREACHABLE_PAUSE);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             let trimmed = out.trim();
             if trimmed.starts_with("Bad rcon_password") {
                 return Err(RconError::BadPassword);
@@ -358,5 +380,58 @@ impl GoldSrcRcon {
             }
         }
         Ok(crate::a2s::decode_text(&output))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::UdpSocket;
+
+    #[test]
+    fn goldsrc_login_survives_one_icmp_error() {
+        // Closed for the first packet (ICMP error), open when the client sends again.
+        let addr = UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let server = std::thread::spawn(move || {
+            std::thread::sleep(crate::a2s::UNREACHABLE_PAUSE / 3);
+            let socket = UdpSocket::bind(addr).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut buf = [0u8; 1400];
+            for _ in 0..2 {
+                let (n, from) = socket.recv_from(&mut buf).unwrap();
+                let text = String::from_utf8_lossy(&buf[4..n]).to_string();
+                let answer: &[u8] = if text.starts_with("challenge rcon") {
+                    b"\xFF\xFF\xFF\xFFchallenge rcon 12345\n\0"
+                } else {
+                    assert!(
+                        text.starts_with("rcon 12345 \"RCON_PASSWORD\" echo"),
+                        "{text}"
+                    );
+                    b"\xFF\xFF\xFF\xFFlopenHLSW\n\0"
+                };
+                socket.send_to(answer, from).unwrap();
+            }
+        });
+        let client = GoldSrcRcon::connect(addr, "RCON_PASSWORD", Duration::from_secs(2));
+        assert!(client.is_ok(), "{:?}", client.err());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn goldsrc_closed_port_is_unreachable() {
+        let addr = UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let e = GoldSrcRcon::connect(addr, "RCON_PASSWORD", Duration::from_secs(2))
+            .err()
+            .unwrap();
+        assert!(matches!(e, RconError::Unreachable(_)), "{e:?}");
+        assert_eq!(e.to_string(), "Port unreachable");
     }
 }

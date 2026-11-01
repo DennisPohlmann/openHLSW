@@ -127,7 +127,48 @@ pub enum QueryError {
     Io(std::io::Error),
     Timeout,
     Protocol(String),
+    /// An ICMP error came back instead of an answer: "port unreachable" from a closed
+    /// port, or "administratively prohibited" / "host unreachable" from a firewall in
+    /// front of the server. Firewalls of game server hosters answer like this when one
+    /// address sends them too many queries, so it is a reason to slow down.
+    Unreachable(std::io::Error),
 }
+
+/// True for the errors an ICMP "destination unreachable" leaves on a connected UDP
+/// socket: port unreachable (`ECONNREFUSED`, Windows `WSAECONNRESET`), host or network
+/// unreachable and "communication administratively prohibited" (`EHOSTUNREACH`,
+/// `ENETUNREACH`), and a local firewall rule that rejects the packet (`EPERM`/`EACCES`).
+pub fn is_unreachable(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::ConnectionRefused
+            | ErrorKind::ConnectionReset
+            | ErrorKind::HostUnreachable
+            | ErrorKind::NetworkUnreachable
+            | ErrorKind::PermissionDenied
+    )
+}
+
+/// Text for an ICMP error: "Port unreachable", or the system's text for the others.
+pub fn unreachable_text(e: &std::io::Error) -> String {
+    match e.kind() {
+        ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset => "Port unreachable".into(),
+        _ => format!("Unreachable: {e}"),
+    }
+}
+
+/// An I/O error of a UDP query socket: ICMP errors become [`QueryError::Unreachable`].
+pub(crate) fn udp_error(e: std::io::Error) -> QueryError {
+    if is_unreachable(e.kind()) {
+        QueryError::Unreachable(e)
+    } else {
+        e.into()
+    }
+}
+
+/// How long a UDP query waits after an ICMP error before it sends again: a rate limit in
+/// front of the server usually lets the next packet through after a short pause.
+pub const UNREACHABLE_PAUSE: Duration = Duration::from_millis(300);
 
 impl fmt::Display for QueryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -135,6 +176,7 @@ impl fmt::Display for QueryError {
             QueryError::Io(e) => write!(f, "{e}"),
             QueryError::Timeout => write!(f, "Timeout"),
             QueryError::Protocol(m) => write!(f, "{m}"),
+            QueryError::Unreachable(e) => write!(f, "{}", unreachable_text(e)),
         }
     }
 }
@@ -273,7 +315,16 @@ fn request(
 
     'send: loop {
         let packet = build_request(kind, challenge);
-        socket.send(&packet)?;
+        // A pending ICMP error of the last packet may also show up here.
+        match socket.send(&packet) {
+            Ok(_) => {}
+            Err(e) if is_unreachable(e.kind()) && timeouts == 0 => {
+                timeouts += 1;
+                std::thread::sleep(UNREACHABLE_PAUSE);
+                socket.send(&packet).map_err(udp_error)?;
+            }
+            Err(e) => return Err(udp_error(e)),
+        }
         packets += 1;
         crate::stats::add_sent(packet.len() + 28); // + IP/UDP headers
         let sent = Instant::now();
@@ -298,13 +349,15 @@ fn request(
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
                     continue;
                 }
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset
-                    ) =>
-                {
-                    return Err(QueryError::Protocol("Port unreachable".into()));
+                // ICMP error (closed port, or a firewall that rejects us for now): like a
+                // lost packet, wait a moment and send once more before giving up.
+                Err(e) if is_unreachable(e.kind()) => {
+                    timeouts += 1;
+                    if timeouts > 1 {
+                        return Err(QueryError::Unreachable(e));
+                    }
+                    std::thread::sleep(UNREACHABLE_PAUSE);
+                    continue 'send;
                 }
                 Err(e) => return Err(e.into()),
             };
@@ -759,5 +812,53 @@ mod tests {
             (rules[0].key.as_str(), rules[0].value.as_str()),
             ("sv_gravity", "800")
         );
+    }
+
+    /// A local UDP port that is closed right now (the OS answers with ICMP).
+    fn closed_port() -> SocketAddr {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.local_addr().unwrap()
+    }
+
+    fn info_packet() -> Vec<u8> {
+        let mut p = vec![0xFF, 0xFF, 0xFF, 0xFF, b'I', 17];
+        for s in ["My Server", "de_dust2", "cstrike", "Counter-Strike: Source"] {
+            p.extend_from_slice(s.as_bytes());
+            p.push(0);
+        }
+        p.extend_from_slice(&240u16.to_le_bytes());
+        p.extend_from_slice(&[1, 32, 0, b'd', b'l', 0, 1]);
+        p.extend_from_slice(b"1.0\0");
+        p.push(0);
+        p
+    }
+
+    #[test]
+    fn closed_port_is_unreachable_after_a_retry() {
+        let addr = closed_port();
+        let started = Instant::now();
+        let e = query_info(addr, Duration::from_millis(1500)).unwrap_err();
+        assert!(matches!(e, QueryError::Unreachable(_)), "{e:?}");
+        assert_eq!(e.to_string(), "Port unreachable");
+        assert!(started.elapsed() >= UNREACHABLE_PAUSE);
+    }
+
+    #[test]
+    fn one_icmp_error_is_retried() {
+        // Closed for the first packet (ICMP error), open when the query sends again.
+        let addr = closed_port();
+        let server = std::thread::spawn(move || {
+            std::thread::sleep(UNREACHABLE_PAUSE / 3);
+            let socket = UdpSocket::bind(addr).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut buf = [0u8; 1400];
+            let (_, from) = socket.recv_from(&mut buf).unwrap();
+            socket.send_to(&info_packet(), from).unwrap();
+        });
+        let (info, _) = query_info(addr, Duration::from_millis(1500)).unwrap();
+        assert_eq!(info.name, "My Server");
+        server.join().unwrap();
     }
 }

@@ -50,7 +50,7 @@ fn exchange(
 ) -> Result<(Vec<Vec<u8>>, bool, QueryMeta), QueryError> {
     let mut buf = vec![0u8; 65536];
     for attempt in 1..=attempts {
-        socket.send(packet)?;
+        socket.send(packet).map_err(crate::a2s::udp_error)?;
         crate::stats::add_sent(packet.len() + 28);
         let sent = Instant::now();
         let deadline = sent + timeout;
@@ -69,13 +69,13 @@ fn exchange(
                 {
                     break;
                 }
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::ConnectionReset
-                    ) =>
-                {
-                    return Err(QueryError::Protocol("Port unreachable".into()));
+                // ICMP error: like a lost packet, the next attempt may get through.
+                Err(e) if crate::a2s::is_unreachable(e.kind()) => {
+                    if attempt == attempts {
+                        return Err(QueryError::Unreachable(e));
+                    }
+                    std::thread::sleep(crate::a2s::UNREACHABLE_PAUSE);
+                    break;
                 }
                 Err(e) => return Err(e.into()),
             };

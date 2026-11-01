@@ -26,17 +26,17 @@ const RCON_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum Event {
     Info {
         id: ServerId,
-        result: Result<(Box<ServerInfo>, QueryMeta, SocketAddr), String>,
+        result: Result<(Box<ServerInfo>, QueryMeta, SocketAddr), QueryFailure>,
         /// Protocol found by auto detection (servers added without a game).
         detected: Option<Protocol>,
     },
     Players {
         id: ServerId,
-        result: Result<(Vec<Player>, QueryMeta), String>,
+        result: Result<(Vec<Player>, QueryMeta), QueryFailure>,
     },
     Rules {
         id: ServerId,
-        result: Result<(Vec<Rule>, QueryMeta), String>,
+        result: Result<(Vec<Rule>, QueryMeta), QueryFailure>,
     },
     Rcon {
         id: ServerId,
@@ -60,6 +60,34 @@ pub enum Event {
         port: u16,
         firewall: Option<crate::firewall::Firewall>,
     },
+}
+
+/// Why a server query failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryFailure {
+    pub message: String,
+    /// An ICMP error came back (port unreachable, administratively prohibited …): the
+    /// server's address may be rejecting us for sending too much, see
+    /// [`a2s::QueryError::Unreachable`].
+    pub unreachable: bool,
+}
+
+impl From<String> for QueryFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            unreachable: false,
+        }
+    }
+}
+
+impl From<a2s::QueryError> for QueryFailure {
+    fn from(e: a2s::QueryError) -> Self {
+        Self {
+            unreachable: matches!(e, a2s::QueryError::Unreachable(_)),
+            message: e.to_string(),
+        }
+    }
 }
 
 /// The log port forwarded in the router.
@@ -182,7 +210,9 @@ pub fn spawn_query(
             n.send(other_protocol(id, &address, protocol, game, kind));
             return;
         }
-        let addr = address.query_address().map_err(|e| format!("DNS: {e}"));
+        let addr = address
+            .query_address()
+            .map_err(|e| QueryFailure::from(format!("DNS: {e}")));
         // ip:port:queryport servers speak GameSpy 2, everything else Valve A2S.
         let gamespy = protocol == Protocol::GameSpy2;
         let event = match kind {
@@ -196,7 +226,7 @@ pub fn spawn_query(
                         a2s::query_info_with(a, QUERY_TIMEOUT, challenge)
                     };
                     r.map(|(info, meta)| (Box::new(info), meta, a))
-                        .map_err(|e| e.to_string())
+                        .map_err(QueryFailure::from)
                 }),
             },
             QueryKind::Players => Event::Players {
@@ -207,7 +237,7 @@ pub fn spawn_query(
                     } else {
                         a2s::query_players_with(a, QUERY_TIMEOUT, challenge)
                     }
-                    .map_err(|e| e.to_string())
+                    .map_err(QueryFailure::from)
                 }),
             },
             QueryKind::Rules => Event::Rules {
@@ -218,7 +248,7 @@ pub fn spawn_query(
                     } else {
                         a2s::query_rules_with(a, QUERY_TIMEOUT, challenge)
                     }
-                    .map_err(|e| e.to_string())
+                    .map_err(QueryFailure::from)
                 }),
             },
         };
@@ -235,7 +265,7 @@ fn detect_protocol(id: ServerId, address: &ServerAddress, challenge: Option<[u8;
         Err(e) => {
             return Event::Info {
                 id,
-                result: Err(format!("DNS: {e}")),
+                result: Err(format!("DNS: {e}").into()),
                 detected: None,
             };
         }
@@ -245,6 +275,7 @@ fn detect_protocol(id: ServerId, address: &ServerAddress, challenge: Option<[u8;
     } else {
         [Protocol::A2s, Protocol::GameSpy2, Protocol::GameSpy1]
     };
+    // Not `unreachable`: closed ports are expected while probing the protocols.
     let mut last = String::from("Timeout");
     for protocol in order {
         let result = match protocol {
@@ -255,7 +286,7 @@ fn detect_protocol(id: ServerId, address: &ServerAddress, challenge: Option<[u8;
                 .map(|(info, meta)| (Box::new(info), meta, addr))
                 .map_err(|e| e.to_string()),
             _ => match other_protocol(id, address, protocol, "", QueryKind::Info) {
-                Event::Info { result, .. } => result,
+                Event::Info { result, .. } => result.map_err(|e| e.message),
                 _ => continue,
             },
         };
@@ -277,7 +308,7 @@ fn detect_protocol(id: ServerId, address: &ServerAddress, challenge: Option<[u8;
     }
     Event::Info {
         id,
-        result: Err(last),
+        result: Err(last.into()),
         detected: None,
     }
 }
@@ -297,7 +328,9 @@ fn other_protocol(
         query_port: address.query_port,
         game: game.to_string(),
     };
-    let result = query::query(protocol, &target, OTHER_TIMEOUT).map_err(|e| e.to_string());
+    // Not `unreachable`: several ports may be tried, and closed ones answer with ICMP.
+    let result = query::query(protocol, &target, OTHER_TIMEOUT)
+        .map_err(|e| QueryFailure::from(e.to_string()));
     match kind {
         QueryKind::Info => Event::Info {
             id,
@@ -307,7 +340,9 @@ fn other_protocol(
                     .to_socket_addrs()
                     .ok()
                     .and_then(|mut a| a.next())
-                    .ok_or_else(|| format!("DNS: {} not found", address.host))?;
+                    .ok_or_else(|| {
+                        QueryFailure::from(format!("DNS: {} not found", address.host))
+                    })?;
                 Ok((Box::new(status.info), meta, game_addr))
             }),
         },

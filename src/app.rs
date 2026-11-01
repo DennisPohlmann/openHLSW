@@ -59,6 +59,46 @@ const STATUS_RETRY_AFTER_ERROR: u32 = 60;
 const RULES_REFRESH: Duration = Duration::from_secs(10);
 /// Time for the first log line after Get Log (`log on` and every RCON command are logged).
 const LOG_WAIT: Duration = Duration::from_secs(15);
+/// Queries per second to one IP address, for all servers on it together (at least the
+/// per-server limit). Game server hosters run many servers on one address and their
+/// firewalls limit the queries per sender: above that they answer with ICMP "port
+/// unreachable" or "administratively prohibited" instead of letting the queries through.
+const HOST_QUERY_RATE: f32 = 10.0;
+
+/// Shared query budget of all servers on one IP address (see [`HOST_QUERY_RATE`]).
+struct HostBudget {
+    budget: f32,
+    at: Instant,
+    /// 0.1 … 1.0: halved after each ICMP error from the address, recovers with answers.
+    factor: f32,
+}
+
+impl Default for HostBudget {
+    fn default() -> Self {
+        Self {
+            budget: 1.0,
+            at: Instant::now(),
+            factor: 1.0,
+        }
+    }
+}
+
+impl HostBudget {
+    fn answered(&mut self, packets: u32) {
+        self.budget -= packets.saturating_sub(1) as f32;
+        self.factor = (self.factor + 0.05).min(1.0);
+    }
+
+    fn failed(&mut self, unreachable: bool) {
+        self.budget -= 1.0; // the retry
+        if unreachable {
+            // The address rejects us: slow down and pause until the budget has recovered.
+            self.factor = (self.factor * 0.5).max(0.1);
+            self.budget = self.budget.min(0.0);
+        }
+    }
+}
+
 /// A server that has not answered for this long is shown as offline (red line).
 const OFFLINE_AFTER: Duration = Duration::from_secs(10);
 const CHAT_MAX_LINES: usize = 1000;
@@ -279,6 +319,23 @@ impl Server {
             chat: Vec::new(),
             log_target: None,
             log_waiting: None,
+        }
+    }
+
+    /// Key of the shared query budget of all servers on the same IP address.
+    fn host_key(&self) -> String {
+        match self.resolved {
+            Some(addr) => addr.ip().to_string(),
+            None => self.address.host.to_ascii_lowercase(),
+        }
+    }
+
+    /// A query failed: the retry counts too, and after an ICMP error (the address
+    /// rejects us, often for sending too much) the server gets fewer queries.
+    fn query_failed(&mut self, unreachable: bool) {
+        self.budget -= 1.0;
+        if unreachable {
+            self.rate_factor = (self.rate_factor * 0.5).max(0.25);
         }
     }
 
@@ -1411,6 +1468,8 @@ pub struct OpenHlswApp {
     game_icons: Option<GameIcons>,
     geo: HashMap<IpAddr, GeoInfo>,
     geo_pending: HashSet<IpAddr>,
+    /// Query budgets per server IP address (see [`HOST_QUERY_RATE`]).
+    hosts: HashMap<String, HostBudget>,
     last_geo_request: Option<Instant>,
     /// Row order shown last frame (kept while hovering if keep_order_on_hover).
     list_order: Vec<ServerId>,
@@ -1614,6 +1673,7 @@ impl OpenHlswApp {
             game_icons: GameIcons::load(&cc.egui_ctx),
             geo: geo::load_cache(),
             geo_pending: HashSet::new(),
+            hosts: HashMap::new(),
             last_geo_request: None,
             list_order: Vec::new(),
             paused_for_game: false,
@@ -1851,7 +1911,15 @@ impl OpenHlswApp {
         let notifier = self.notifier.clone();
         let selected = self.selected == Some(id);
         let base_rate = self.settings.max_queries_per_sec.max(0.1);
-        let Some(s) = self.server_mut(id) else { return };
+        let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
+            return;
+        };
+        // All servers on this IP address share one budget as well.
+        let host = self.hosts.entry(s.host_key()).or_default();
+        let host_rate = HOST_QUERY_RATE.max(base_rate) * host.factor;
+        host.budget =
+            (host.budget + host.at.elapsed().as_secs_f32() * host_rate).min(host_rate.max(1.0));
+        host.at = Instant::now();
         // Never more than the server itself announces (HLDS often uses max_queries_sec 1 with a
         // 1 s window: a short burst would already be dropped).
         let (limit, window) = s.announced_query_limit().unwrap_or((f32::INFINITY, 30.0));
@@ -1883,10 +1951,11 @@ impl OpenHlswApp {
             }
             // Explicit refreshes (click, F5) always go out; the budget may go negative
             // and the automatic refresh then waits until it has recovered.
-            if !force_details && s.budget < 1.0 {
+            if !force_details && (s.budget < 1.0 || host.budget < 1.0) {
                 break;
             }
             s.budget -= 1.0;
+            host.budget -= 1.0;
             s.busy[slot] = true;
             s.sent[slot] = Some(Instant::now());
             if slot == 2 {
@@ -1908,10 +1977,15 @@ impl OpenHlswApp {
     }
 
     fn refresh_all(&mut self, force_details: bool) {
-        let mut ids: Vec<ServerId> = self.servers.iter().map(|s| s.id).collect();
-        // The selected server first.
-        ids.sort_by_key(|id| Some(*id) != self.selected);
-        for id in ids {
+        // The selected server first, then the one whose info was asked for longest ago:
+        // when servers share an address budget, they take turns.
+        let mut order: Vec<(bool, Option<Instant>, ServerId)> = self
+            .servers
+            .iter()
+            .map(|s| (Some(s.id) != self.selected, s.sent[0], s.id))
+            .collect();
+        order.sort();
+        for (_, _, id) in order {
             let force = force_details && Some(id) == self.selected;
             self.refresh(id, force);
         }
@@ -2554,10 +2628,12 @@ impl OpenHlswApp {
                     if detected.is_some() {
                         s.detected = detected;
                     }
+                    let host = self.hosts.entry(s.host_key()).or_default();
                     match result {
                         Ok((info, meta, addr)) => {
                             let ping = meta.rtt.as_millis() as u32;
                             s.charge(&meta);
+                            host.answered(meta.packets);
                             let map_changed =
                                 s.info.as_ref().is_some_and(|old| old.map != info.map);
                             s.resolved = Some(addr);
@@ -2588,17 +2664,20 @@ impl OpenHlswApp {
                             s.last_seen = Some(chrono::Local::now());
                         }
                         Err(e) => {
-                            s.budget -= 1.0; // the timeout retry
+                            s.query_failed(e.unreachable); // the retry
+                            host.failed(e.unreachable);
                             if s.info.is_some() {
                                 s.push_ping(None);
-                                s.rate_factor = (s.rate_factor * 0.5).max(0.25);
+                                if !e.unreachable {
+                                    s.rate_factor = (s.rate_factor * 0.5).max(0.25);
+                                }
                             }
                             if s.last_ok.elapsed() >= OFFLINE_AFTER {
                                 if s.state == QueryState::Online {
                                     went_offline = true;
                                 }
                                 s.ping = None;
-                                s.state = QueryState::Offline(e);
+                                s.state = QueryState::Offline(e.message);
                             }
                         }
                     }
@@ -2608,12 +2687,17 @@ impl OpenHlswApp {
                         continue;
                     };
                     s.busy[1] = false;
+                    let host = self.hosts.entry(s.host_key()).or_default();
                     match result {
                         Ok((players, meta)) => {
                             s.charge(&meta);
+                            host.answered(meta.packets);
                             s.players = players;
                         }
-                        Err(_) => s.budget -= 1.0,
+                        Err(e) => {
+                            s.query_failed(e.unreachable);
+                            host.failed(e.unreachable);
+                        }
                     }
                 }
                 Event::Rules { id, result } => {
@@ -2621,12 +2705,17 @@ impl OpenHlswApp {
                         continue;
                     };
                     s.busy[2] = false;
+                    let host = self.hosts.entry(s.host_key()).or_default();
                     match result {
                         Ok((rules, meta)) => {
                             s.charge(&meta);
+                            host.answered(meta.packets);
                             s.rules = rules;
                         }
-                        Err(_) => s.budget -= 1.0,
+                        Err(e) => {
+                            s.query_failed(e.unreachable);
+                            host.failed(e.unreachable);
+                        }
                     }
                 }
                 Event::Rcon { id, event } => {
@@ -12150,6 +12239,29 @@ fn status_line(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_budget_slows_down_after_icmp_errors() {
+        let mut host = HostBudget {
+            budget: 5.0,
+            ..Default::default()
+        };
+        // Timeouts cost the retry but do not slow the address down (the server may be down).
+        host.failed(false);
+        assert_eq!((host.budget, host.factor), (4.0, 1.0));
+        // ICMP errors halve the rate (down to 10 %) and pause until the budget recovers.
+        host.failed(true);
+        assert_eq!((host.budget, host.factor), (0.0, 0.5));
+        for _ in 0..10 {
+            host.failed(true);
+        }
+        assert!((host.factor - 0.1).abs() < 1e-6);
+        // Answers let it recover; extra packets (challenge, retry) are charged.
+        host.budget = 2.0;
+        host.answered(2);
+        assert_eq!(host.budget, 1.0);
+        assert!((host.factor - 0.15).abs() < 1e-6);
+    }
 
     /// What the items of the header menu (see [`reset_columns_menu`]) do.
     fn menu_request(ctx: &egui::Context, table: &str, what: &str, col: Option<usize>) {

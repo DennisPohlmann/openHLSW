@@ -417,7 +417,7 @@ pub(crate) fn udp_exchange(
     })?;
     socket.connect(addr)?;
     let start = Instant::now();
-    socket.send(request)?;
+    socket.send(request).map_err(crate::a2s::udp_error)?;
     crate::stats::add_sent(request.len() + 28);
     let mut deadline = start + timeout;
     let mut rtt = None;
@@ -433,6 +433,9 @@ pub(crate) fn udp_exchange(
         socket.set_read_timeout(Some(deadline - now))?;
         let n = match socket.recv(&mut buf) {
             Ok(n) => n,
+            Err(e) if crate::a2s::is_unreachable(e.kind()) => {
+                return Err(QueryError::Unreachable(e));
+            }
             Err(e) => {
                 let e = QueryError::from(e);
                 if matches!(e, QueryError::Timeout) {

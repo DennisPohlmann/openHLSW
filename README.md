@@ -125,9 +125,13 @@ services are gone), Metamod plugin management.
 
 - **Query limit**: srcds answers only `sv_max_queries_sec` queries per second per IP
   (default 3). openHLSW stays below it (Settings → Misc → Query limit, 2.5/s per server), so
-  the refresh interval can go down to 0.4 s. After a timeout the rate for that server is
-  lowered for a while. Timeouts usually mean a firewall or DDoS protection drops queries;
-  raise the interval or lower the query limit then.
+  the refresh interval can go down to 0.4 s. All servers on one IP address together get at
+  most 10 queries per second (or the query limit, if higher): hosters' firewalls limit the
+  queries per sender and answer with ICMP "port unreachable" or "administratively
+  prohibited" above that. After a timeout the rate for that server is lowered for a while,
+  after such an ICMP error the rate for the whole address, and the query is sent once more
+  before the server counts as unreachable. Timeouts and these errors usually mean a firewall
+  or DDoS protection drops queries; raise the interval or lower the query limit then.
 - **Other games**: Valve, GameSpy 1 and GameSpy 2 / 3 servers are detected automatically;
   GameSpy servers with an own query port are entered as `IP:gameport:queryport`. For all
   other games choose the game in the game list next to the address field before adding: its
