@@ -21,7 +21,7 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- The Id must end in .ico: Windows Installer stores advertised shortcut icons under
+    <!-- The Id must end in .ico: Windows Installer stores shortcut icons under
          this name, and without the extension the Start menu and taskbar show a blank icon.
          IconFile is the icon build.rs embeds in the .exe (small sizes as bitmaps). -->
     <Icon Id="AppIcon.ico" SourceFile="$(var.IconFile)" />
@@ -45,15 +45,28 @@
 
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component>
-        <File Id="OpenHlswExe" Source="$(var.BinDir)\openhlsw.exe" KeyPath="yes">
-          <Shortcut Name="openHLSW"
-                    Description="Game server browser and RCON admin tool"
-                    Directory="ProgramMenuFolder"
-                    WorkingDirectory="INSTALLFOLDER"
-                    Icon="AppIcon.ico"
-                    IconIndex="0"
-                    Advertise="yes" />
-        </File>
+        <File Id="OpenHlswExe" Source="$(var.BinDir)\openhlsw.exe" KeyPath="yes" />
+      </Component>
+      <!-- A plain shortcut that points straight at openhlsw.exe. An advertised shortcut
+           (Advertise="yes") points at the Windows Installer package instead: every click
+           first checks the installation and may start a repair that needs the original
+           .msi, and once that file was deleted or moved Windows reports that the shortcut
+           or the program cannot be found. A shortcut needs a KeyPath of its own; Windows
+           Installer expects a value under HKCU for the Start menu. -->
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="openHLSW"
+                  Description="Game server browser and RCON admin tool"
+                  Target="[#OpenHlswExe]"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon.ico"
+                  IconIndex="0" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\openHLSW"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
       </Component>
       <Component>
         <File Source="$(var.BinDir)\openhlsw-cli.exe" />
