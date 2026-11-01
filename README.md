@@ -181,11 +181,19 @@ Linux needs the OpenGL, X11 and Wayland development packages, e.g. on Debian / U
 `sudo apt install libxkbcommon-dev libgl1-mesa-dev libwayland-dev`; FreeBSD
 `pkg install pkgconf libX11 libxkbcommon`.
 
+**Checks before a push**: `tools/check-all.sh` runs clippy and the tests and compiles for
+every system the packages are built for (Windows, macOS, Linux aarch64 / riscv64, FreeBSD;
+add the Rust targets once as the script tells you). `git config core.hooksPath tools/hooks`
+runs it before every `git push`. It does not cover linking for Windows / macOS or the
+installers; CI builds those on every push.
+
 **Packages and releases**: `.github/workflows/build.yml` checks and builds all packages of
-the download table on every push to `main` and every pull request (as workflow artifacts).
-Releases are made by [semantic-release](https://semantic-release.gitbook.io/) from the
+the download table on every push to `main` and every pull request (as workflow artifacts,
+kept 7 days). Releases are made on demand only: run the workflow manually on `main` with
+"release" ticked (`gh workflow run build.yml -f release=true`). Then
+[semantic-release](https://semantic-release.gitbook.io/) reads the
 [Conventional Commits](https://www.conventionalcommits.org/) since the last tag: a `feat`
-(minor), `fix` / `perf` (patch) or breaking change (major) on `main` sets the version in
+(minor), `fix` / `perf` (patch) or breaking change (major) sets the version in
 `Cargo.toml` and `Cargo.lock`, writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
 release with all packages and their `.sha256` files. Never tag by hand. Packaging files are in `packaging/`
 (Linux desktop entry and Flatpak, WiX installer, macOS `Info.plist`).
@@ -229,7 +237,7 @@ src/
 vendor/      egui's painting crates with sub-pixel text, see vendor/README.md
 assets/      icons, flags, translations (assets/lang/*.json)
 packaging/   packages and installer
-tools/       test server, version script for releases
+tools/       test server, version script for releases, checks before a push
 ```
 
 **Translations**: the English text in the code is the key (`tr!("Refresh")`,

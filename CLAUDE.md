@@ -5,14 +5,19 @@ Rust (egui/eframe) remake of HLSW: game server browser and RCON admin tool
 painting crates are patched copies in `vendor/` (see `vendor/README.md`).
 
 Build and check: `cargo clippy --all-targets -- -D warnings`, `cargo test`,
-`cargo build --release`.
+`cargo build --release`. `tools/check-all.sh` runs clippy, the tests and
+`cargo check` for every CI target (Windows, macOS, Linux aarch64/riscv64,
+FreeBSD); run it before every push (also the pre-push hook in `tools/hooks`).
 
 Version in `Cargo.toml` and `Cargo.lock`; history in `CHANGELOG.md`.
 
 Releases: Conventional Commits + semantic-release (`.releaserc.json`). CI
 (`.github/workflows/build.yml`) checks and builds all packages on every
-push to `main` and every pull request (workflow artifacts);
-`feat`/`fix`/breaking commits on `main` make semantic-release set the
+push to `main` and every pull request (workflow artifacts, 7 days) without
+publishing. Releases are on demand only: a manual run on `main` with
+`release` ticked (`gh workflow run build.yml -f release=true`, only when
+Dennis says so) makes semantic-release, for `feat`/`fix`/breaking commits
+since the last tag, set the
 version (`tools/set-version.sh`), write `CHANGELOG.md`, commit
 `chore(release): vX.Y.Z [skip ci]`, tag `vX.Y.Z` and publish the GitHub
 release, to which the packages built from that tag are added. There is no
@@ -26,12 +31,12 @@ crate and GitHub Actions updates; egui updates stay manual.
    your answer which checklist points the change touched and the result
    (one or two lines are enough when nothing was found).
 2. **Every release, without exception (standing rule from Dennis):**
-   releases are made by semantic-release in CI when `feat`, `fix` or
-   breaking-change commits reach `main` (version bump, `CHANGELOG.md`, tag
-   `vX.Y.Z`, GitHub release). Before pushing such commits to `main`, run
-   the `release-security-gate` skill over the whole repo, without asking
+   releases are made by semantic-release in CI when the workflow is run
+   manually with `release` ticked (version bump, `CHANGELOG.md`, tag
+   `vX.Y.Z`, GitHub release). Before triggering a release, run the
+   `release-security-gate` skill over the whole repo, without asking
    first. Never tag by hand or edit version fields / `CHANGELOG.md`; report
-   the gate result and ask Dennis for the go before the push.
+   the gate result and ask Dennis for the go before the release.
 3. **Sensitive data, every task (standing rule from Dennis):** before you
    call a task done, commit or publish anything, run the
    `security-privacy-audit` skill (credentials, personal data, IPs and

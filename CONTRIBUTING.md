@@ -24,6 +24,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+`tools/check-all.sh` runs both and also compiles for Windows, macOS, the other
+Linux architectures and FreeBSD, like CI does; `git config core.hooksPath tools/hooks`
+runs it before every push.
+
 `tools/fake_srcds.py` simulates a Source, GoldSrc or GameSpy 2 server, so you can
 test queries, RCON and the server log without a real server.
 
@@ -40,7 +44,7 @@ CI builds and checks every pull request on all systems.
 - New third-party code, icons, fonts or data need a license that is compatible
   with GPL-3.0-or-later and a note in the README section License.
 - Do not edit `CHANGELOG.md` or the version in `Cargo.toml` / `Cargo.lock`, and
-  do not create tags: releases are made automatically.
+  do not create tags: releases are made by the maintainer through CI.
 - egui's painting crates in `vendor/` are patched copies; changes there follow
   [vendor/README.md](vendor/README.md).
 

@@ -1,6 +1,6 @@
 ---
 name: release-security-gate
-description: Full security pass over openHLSW before release-relevant commits are pushed to main (semantic-release then bumps, tags and releases). Use whenever a release is being prepared; ends with a go/no-go report and never tags or pushes on its own.
+description: Full security pass over openHLSW before a release is triggered (manual CI run with "release"; semantic-release then bumps, tags and releases). Use whenever a release is being prepared; ends with a go/no-go report and never tags, pushes or triggers a release on its own.
 ---
 
 # Release security gate (openHLSW)
@@ -8,13 +8,15 @@ description: Full security pass over openHLSW before release-relevant commits ar
 Run all steps over the whole repository, not only the last diff. Report a
 table with the 20 points (ok / finding / n.a.) and a go/no-go.
 
-Releases are made by semantic-release in CI: every push to `main` that
-contains a `feat`, `fix` or breaking-change commit (Conventional Commits)
-sets the version in `Cargo.toml` / `Cargo.lock`, writes `CHANGELOG.md`, tags
-`vX.Y.Z`, publishes the GitHub release and adds all packages to it. So this
-gate runs **before pushing release-relevant commits to `main`**, without
-asking first. Never tag by hand, never edit the version fields or
-`CHANGELOG.md` by hand, and do not push to `main` yourself: report the gate
+Releases are made by semantic-release in CI, on demand only: a manual run
+of the workflow on `main` with `release` ticked (`gh workflow run build.yml
+-f release=true`) reads the `feat`, `fix` and breaking-change commits
+(Conventional Commits) since the last tag, sets the version in `Cargo.toml` /
+`Cargo.lock`, writes `CHANGELOG.md`, tags `vX.Y.Z`, publishes the GitHub
+release and adds all packages to it. So this gate runs **before a release is
+triggered**, without asking first. Never tag by hand, never edit the version
+fields or `CHANGELOG.md` by hand, and do not trigger the release or push to
+`main` yourself: report the gate
 result and the version semantic-release will make (`feat` → minor, `fix` →
 patch, `!`/`BREAKING CHANGE` → major), then ask Dennis for the go.
 
@@ -65,4 +67,4 @@ patch, `!`/`BREAKING CHANGE` → major), then ask Dennis for the go.
     semantic-release will write. Any `BLOCKED` item is a no-go.
 12. **Report:** go/no-go, the `security-privacy-audit` summary, findings
     with file:line and fix, the version semantic-release will make, then
-    ask Dennis for the go to push to `main`.
+    ask Dennis for the go to trigger the release.

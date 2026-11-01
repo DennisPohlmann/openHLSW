@@ -1,25 +1,32 @@
 name: build
 
-# Every push to main checks (clippy, tests) and builds all packages as workflow artifacts:
+# Every push to main and every pull request checks (clippy, tests) and builds all packages
+# as workflow artifacts, without publishing anything:
 #   Linux   x86_64, aarch64: .tar.gz, .deb, .rpm, .flatpak
 #   Linux   riscv64:         .tar.gz, .deb, .rpm
 #   Windows x64, x86, arm64: .msi, -portable.zip
 #   macOS   universal:       .dmg, .zip (Apple silicon + Intel)
 #   FreeBSD x86_64:          .tar.gz
-# semantic-release then reads the Conventional Commits since the last tag:
-# for a feat, fix or breaking change it sets the version in Cargo.toml and
-# Cargo.lock, writes CHANGELOG.md, commits that as "chore(release): vX.Y.Z
-# [skip ci]", tags vX.Y.Z and creates the GitHub release; the packages are
-# then built from that tag and added to the release, each with a .sha256
-# file. A manual run builds
-# without publishing. A pull request (e.g. from Dependabot) runs the same
-# checks and builds without publishing.
+# Releases are made on demand only: run this workflow manually on main with "release"
+# ticked (Actions -> build -> Run workflow, or `gh workflow run build.yml -f release=true`).
+# semantic-release then reads the Conventional Commits since the last tag: for a feat,
+# fix or breaking change it sets the version in Cargo.toml and Cargo.lock, writes
+# CHANGELOG.md, commits that as "chore(release): vX.Y.Z [skip ci]", tags vX.Y.Z and
+# creates the GitHub release; the packages are then built from that tag and added to the
+# release, each with a .sha256 file. Without a feat/fix/breaking commit since the last
+# tag no release is made. A manual run without "release" only builds.
+# Workflow artifacts are kept 7 days; release packages stay in the GitHub release.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish a release (version, CHANGELOG.md, tag, GitHub release)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,7 +50,7 @@ jobs:
   release:
     name: semantic-release
     needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
     permissions:
       contents: write
@@ -140,6 +147,7 @@ jobs:
         with:
           name: openhlsw-linux-${{ matrix.arch }}
           path: dist/*
+          retention-days: 7
 
   flatpak:
     name: flatpak ${{ matrix.arch }}
@@ -200,6 +208,7 @@ jobs:
         with:
           name: openhlsw-flatpak-${{ matrix.arch }}
           path: dist/*
+          retention-days: 7
 
   windows:
     name: windows ${{ matrix.arch }}
@@ -289,6 +298,7 @@ jobs:
         with:
           name: openhlsw-windows-${{ matrix.arch }}
           path: dist/*
+          retention-days: 7
 
   macos:
     name: macos universal
@@ -369,6 +379,7 @@ jobs:
         with:
           name: openhlsw-macos-universal
           path: dist/*
+          retention-days: 7
 
   freebsd:
     name: freebsd x86_64
@@ -416,6 +427,7 @@ jobs:
         with:
           name: openhlsw-freebsd-x86_64
           path: dist/*.tar.gz
+          retention-days: 7
 
   upload:
     name: add the packages to the release

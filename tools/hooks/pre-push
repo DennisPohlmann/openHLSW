@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Runs tools/check-all.sh before every push, so that the CI workflow does not fail.
+# Enable once with: git config core.hooksPath tools/hooks
+# Skip in an emergency with: git push --no-verify
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if ! git diff --quiet HEAD --; then
+    echo "pre-push: note: uncommitted changes are checked too, the push contains only commits" >&2
+fi
+exec tools/check-all.sh
