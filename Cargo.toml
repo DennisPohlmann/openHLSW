@@ -19,6 +19,8 @@ rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sys-locale = "0.3"
+# The main window is placed with winit directly (eframe's own winit, no extra crate).
+winit = { version = "0.30", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
