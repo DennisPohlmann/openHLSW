@@ -7560,16 +7560,27 @@ pub(crate) fn tab_strip<T: Copy + PartialEq>(
 }
 
 /// Table with HLSW-style header (white, thin separators) and no grid lines in the body.
-pub(crate) fn styled_table<'a>(ui: &'a mut Ui, id: &str) -> TableBuilder<'a> {
+pub(crate) fn styled_table<'a>(ui: &'a mut Ui, id: &str) -> ListTable<'a> {
     ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
     ui.visuals_mut().widgets.noninteractive.bg_stroke = Stroke::NONE;
     // Selectable labels would swallow the clicks meant for the row (selection, context menu).
     ui.style_mut().interaction.selectable_labels = false;
-    // "Reset column width" in the header menu acts on the table drawn right now.
-    let reset = ui.ctx().data_mut(|d| {
+    // The column width items of the header menu act on the table drawn right now; the
+    // header cells count themselves (see [`header_cell`]).
+    let (reset, fit_all, reset_column, fit_column, widths) = ui.ctx().data_mut(|d| {
         d.insert_temp(egui::Id::unique("current_table"), id.to_owned());
-        d.remove_temp::<bool>(egui::Id::unique(("reset_columns", id)))
-            .unwrap_or(false)
+        d.insert_temp(egui::Id::unique("header_column"), 0usize);
+        (
+            d.remove_temp::<bool>(egui::Id::unique(("reset_columns", id)))
+                .unwrap_or(false),
+            d.remove_temp::<bool>(egui::Id::unique(("fit_all_columns", id)))
+                .unwrap_or(false),
+            d.remove_temp::<usize>(egui::Id::unique(("reset_column", id))),
+            // Lists that fit a column themselves have taken it already (`take_autosize`).
+            d.remove_temp::<usize>(egui::Id::unique(("autosize", id))),
+            d.get_temp::<Vec<f32>>(egui::Id::unique(("header_widths", id)))
+                .unwrap_or_default(),
+        )
     });
     let table = TableBuilder::new(ui)
         .id_salt(id)
@@ -7578,29 +7589,130 @@ pub(crate) fn styled_table<'a>(ui: &'a mut Ui, id: &str) -> TableBuilder<'a> {
         .auto_shrink(false)
         .min_scrolled_height(0.0)
         .cell_layout(Layout::left_to_right(Align::Center));
+    // Resetting one column forgets all stored widths and keeps the other columns at the
+    // width they have now.
+    let keep = match reset_column {
+        Some(col) if !reset => {
+            table.reset();
+            widths
+                .into_iter()
+                .enumerate()
+                .map(|(i, w)| (i != col).then_some(w))
+                .collect()
+        }
+        _ => Vec::new(),
+    };
     if reset {
         // Forget the stored widths: the columns start again with their initial width.
         table.reset();
     }
-    table
+    ListTable {
+        builder: table,
+        fit_all,
+        fit_column,
+        keep,
+        columns: 0,
+    }
 }
 
-/// Right-click menu of a list header: "Reset column width" for the table whose header
-/// is being drawn (see [`styled_table`]); takes effect on the next frame.
+/// [`TableBuilder`] of a list that carries out the column width items of the header menu
+/// on its columns (for one frame).
+pub(crate) struct ListTable<'a> {
+    builder: TableBuilder<'a>,
+    /// "Fit all columns": every column as wide as its widest cell.
+    fit_all: bool,
+    /// "Fit column": this column as wide as its widest cell.
+    fit_column: Option<usize>,
+    /// "Reset column width": the width of every other column (empty: none).
+    keep: Vec<Option<f32>>,
+    columns: usize,
+}
+
+impl<'a> ListTable<'a> {
+    pub(crate) fn column(mut self, column: Column) -> Self {
+        let i = self.columns;
+        self.columns += 1;
+        let column = if self.fit_all || self.fit_column == Some(i) {
+            column.auto_size_this_frame(true)
+        } else if let Some(Some(w)) = self.keep.get(i) {
+            column.range(*w..=*w)
+        } else {
+            column
+        };
+        self.builder = self.builder.column(column);
+        self
+    }
+
+    pub(crate) fn sense(mut self, sense: Sense) -> Self {
+        self.builder = self.builder.sense(sense);
+        self
+    }
+
+    pub(crate) fn scroll_to_row(mut self, row: usize, align: Option<Align>) -> Self {
+        self.builder = self.builder.scroll_to_row(row, align);
+        self
+    }
+
+    pub(crate) fn stick_to_bottom(mut self, stick: bool) -> Self {
+        self.builder = self.builder.stick_to_bottom(stick);
+        self
+    }
+
+    pub(crate) fn header(
+        self,
+        height: f32,
+        add_header_row: impl FnOnce(TableRow<'_, '_>),
+    ) -> egui_extras::Table<'a> {
+        self.builder.header(height, add_header_row)
+    }
+}
+
+/// Right-click menu of a list header: fit or reset the width of the column right-clicked
+/// or of all columns, in the table whose header is being drawn (see [`styled_table`]);
+/// takes effect on the next frame.
 pub(crate) fn reset_columns_menu(ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let Some((table, col)) = ctx.data(|d| {
+        Some((
+            d.get_temp::<String>(egui::Id::unique("current_table"))?,
+            d.get_temp::<usize>(egui::Id::unique("menu_column"))?,
+        ))
+    }) else {
+        return;
+    };
+    let request = |key: egui::Id, col: Option<usize>| {
+        ctx.data_mut(|d| match col {
+            Some(col) => d.insert_temp(key, col),
+            None => d.insert_temp(key, true),
+        });
+        ctx.request_repaint();
+    };
+    let id = |what: &str| egui::Id::unique((what, table.as_str()));
+    if ui.button(tr!("Fit column to content")).clicked() {
+        request(id("autosize"), Some(col));
+        ui.close();
+    }
+    if ui.button(tr!("Fit all columns to content")).clicked() {
+        request(id("fit_all_columns"), None);
+        ui.close();
+    }
     if ui.button(tr!("Reset column width")).clicked() {
-        reset_current_table(ui.ctx());
+        request(id("reset_column"), Some(col));
+        ui.close();
+    }
+    if ui.button(tr!("Reset all column widths")).clicked() {
+        request(id("reset_columns"), None);
         ui.close();
     }
 }
 
-fn reset_current_table(ctx: &egui::Context) {
-    ctx.data_mut(|d| {
-        if let Some(id) = d.get_temp::<String>(egui::Id::unique("current_table")) {
-            d.insert_temp(egui::Id::unique(("reset_columns", id.as_str())), true);
-        }
-    });
-    ctx.request_repaint();
+/// True if "Fit all columns to content" is pending for `table`: lists that measure their
+/// columns over all rows themselves (not only the visible ones) do that for every column then.
+fn fit_all_pending(ui: &Ui, table: &str) -> bool {
+    ui.ctx().data(|d| {
+        d.get_temp::<bool>(egui::Id::unique(("fit_all_columns", table)))
+            .unwrap_or(false)
+    })
 }
 
 /// Header cell; returns the response of the whole cell (click = sort, double click = auto-size).
@@ -7615,6 +7727,23 @@ pub(crate) fn header_cell(ui: &mut Ui, p: &Palette, add: impl FnOnce(&mut Ui)) -
         ui.scope_id().with("header_cell"),
         Sense::click(),
     );
+    // Which column this is (for the header menu) and how wide it is now, see [`styled_table`].
+    let width = ui.max_rect().width();
+    ui.ctx().data_mut(|d| {
+        let col = d
+            .get_temp::<usize>(egui::Id::unique("header_column"))
+            .unwrap_or(0);
+        d.insert_temp(egui::Id::unique("header_column"), col + 1);
+        d.insert_temp(egui::Id::unique("menu_column"), col);
+        if let Some(table) = d.get_temp::<String>(egui::Id::unique("current_table")) {
+            let widths = d.get_temp_mut_or_default::<Vec<f32>>(egui::Id::unique((
+                "header_widths",
+                table.as_str(),
+            )));
+            widths.truncate(col);
+            widths.push(width);
+        }
+    });
     ui.painter().rect_filled(rect, 0.0, p.header_bg);
     ui.painter().vline(
         rect.right() - 0.5,
@@ -7878,47 +8007,53 @@ fn server_table(
         .map(|&(c, t, _)| (t, visible(c, t), !matches!(c, Col::Index | Col::Name)))
         .collect();
     let autosize = take_autosize(ui, "servers");
-    // Double click on a header / separator: fit the column to all servers in the list.
-    let fit_width = autosize
-        .and_then(|i| columns.get(i))
-        .map(|&(col, title, _)| {
-            let spacing = 6.0;
-            fit_column(
-                ui,
-                title,
-                order.iter().map(|&idx| {
-                    let s = &servers[idx];
-                    let info = s.info.as_ref();
-                    match col {
-                        Col::Index => {
-                            let star = if s.rcon_password.is_empty() {
-                                0.0
-                            } else {
-                                12.0 + spacing
-                            };
-                            ((idx + 1).to_string(), 16.5 + spacing + star)
+    let fit_all = fit_all_pending(ui, "servers");
+    // Double click on a header / separator: fit the column to all servers in the list;
+    // "Fit all columns": every column.
+    let fit_widths: Vec<Option<f32>> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, &(col, title, _))| {
+            (fit_all || autosize == Some(i)).then(|| {
+                let spacing = 6.0;
+                fit_column(
+                    ui,
+                    title,
+                    order.iter().map(|&idx| {
+                        let s = &servers[idx];
+                        let info = s.info.as_ref();
+                        match col {
+                            Col::Index => {
+                                let star = if s.rcon_password.is_empty() {
+                                    0.0
+                                } else {
+                                    12.0 + spacing
+                                };
+                                ((idx + 1).to_string(), 16.5 + spacing + star)
+                            }
+                            Col::Address => (s.address.to_string(), 0.0),
+                            Col::Name => (
+                                info.map(|i| i.name.clone()).unwrap_or_default(),
+                                16.0 + spacing + KEY_SLOT + spacing,
+                            ),
+                            Col::Game => (s.game_short(), 0.0),
+                            Col::Map => (info.map(|i| i.map.clone()).unwrap_or_default(), 0.0),
+                            Col::Players => (s.players_text(), 0.0),
+                            Col::Ping => (s.ping_text(), 0.0),
+                            Col::Version => (s.version_text(), 0.0),
+                            Col::Location => (opts.locations[idx].1.clone(), 0.0),
+                            Col::AddOn => (s.addons_short(), 0.0),
+                            Col::AntiCheat => (s.anticheat(), 0.0),
+                            Col::Ranking => (s.ranking().0, 0.0),
+                            Col::Limits => (s.limits(), 0.0),
+                            Col::Comment => (s.comment.clone(), 0.0),
+                            Col::GameName | Col::GameAddress => (String::new(), 0.0),
                         }
-                        Col::Address => (s.address.to_string(), 0.0),
-                        Col::Name => (
-                            info.map(|i| i.name.clone()).unwrap_or_default(),
-                            16.0 + spacing + KEY_SLOT + spacing,
-                        ),
-                        Col::Game => (s.game_short(), 0.0),
-                        Col::Map => (info.map(|i| i.map.clone()).unwrap_or_default(), 0.0),
-                        Col::Players => (s.players_text(), 0.0),
-                        Col::Ping => (s.ping_text(), 0.0),
-                        Col::Version => (s.version_text(), 0.0),
-                        Col::Location => (opts.locations[idx].1.clone(), 0.0),
-                        Col::AddOn => (s.addons_short(), 0.0),
-                        Col::AntiCheat => (s.anticheat(), 0.0),
-                        Col::Ranking => (s.ranking().0, 0.0),
-                        Col::Limits => (s.limits(), 0.0),
-                        Col::Comment => (s.comment.clone(), 0.0),
-                        Col::GameName | Col::GameAddress => (String::new(), 0.0),
-                    }
-                }),
-            )
-        });
+                    }),
+                )
+            })
+        })
+        .collect();
     let arrows = arrow_keys(ui.ctx(), "servers");
     let mut table = styled_table(ui, "servers").sense(Sense::click());
     // Arrow up / down select the previous / next server.
@@ -7942,10 +8077,7 @@ fn server_table(
         let column = if i + 1 == columns.len() {
             Column::remainder().at_least(60.0)
         } else {
-            sized(
-                Column::initial(*width).at_least(20.0),
-                fit_width.filter(|_| autosize == Some(i)),
-            )
+            sized(Column::initial(*width).at_least(20.0), fit_widths[i])
         };
         table = table.column(column);
     }
@@ -9571,17 +9703,25 @@ fn players_table(
         .iter()
         .map(|c| (c.0, c.1 && visible(c.0), c.1 && c.0 != "Name"))
         .collect();
-    // Double click on a header / separator: fit the column to all players.
-    let fit_width = autosize.and_then(|i| columns.get(i)).map(|&&(title, ..)| {
-        fit_column(
-            ui,
-            title,
-            list.iter().enumerate().map(|(n, r)| match title {
-                "#" => (format!("{:02}", n + 1), 0.0),
-                _ => (player_cell(r, title).0, 0.0),
-            }),
-        )
-    });
+    let fit_all = fit_all_pending(ui, "players");
+    // Double click on a header / separator: fit the column to all players;
+    // "Fit all columns": every column.
+    let fit_widths: Vec<Option<f32>> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, &&(title, ..))| {
+            (fit_all || autosize == Some(i)).then(|| {
+                fit_column(
+                    ui,
+                    title,
+                    list.iter().enumerate().map(|(n, r)| match title {
+                        "#" => (format!("{:02}", n + 1), 0.0),
+                        _ => (player_cell(r, title).0, 0.0),
+                    }),
+                )
+            })
+        })
+        .collect();
     let mut table = styled_table(ui, "players").sense(Sense::click());
     if let Some(i) = scroll_to {
         table = table.scroll_to_row(i, None);
@@ -9590,10 +9730,7 @@ fn players_table(
         table = table.column(if title == "Country" {
             Column::exact(w)
         } else {
-            sized(
-                Column::initial(w).at_least(min).clip(true),
-                fit_width.filter(|_| autosize == Some(i)),
-            )
+            sized(Column::initial(w).at_least(min).clip(true), fit_widths[i])
         });
     }
     table
@@ -10092,9 +10229,11 @@ fn rules_table(
         .collect();
     let autosize = take_autosize(ui, "rules");
     let mut autosize_request = None;
-    // Double click on a header / separator: fit the column to all (filtered) rules.
+    let fit_all = fit_all_pending(ui, "rules");
+    // Double click on a header / separator: fit the column to all (filtered) rules;
+    // "Fit all columns": every column.
     let fit_width = |col: usize| {
-        (autosize == Some(col)).then(|| {
+        (fit_all || autosize == Some(col)).then(|| {
             let header = ["", tr!("Key"), tr!("Value")][col];
             fit_column(
                 ui,
@@ -11643,6 +11782,15 @@ fn status_line(message: &str) -> String {
 mod tests {
     use super::*;
 
+    /// What the items of the header menu (see [`reset_columns_menu`]) do.
+    fn menu_request(ctx: &egui::Context, table: &str, what: &str, col: Option<usize>) {
+        let key = egui::Id::unique((what, table));
+        ctx.data_mut(|d| match col {
+            Some(col) => d.insert_temp(key, col),
+            None => d.insert_temp(key, true),
+        });
+    }
+
     /// Draws a list with two resizable columns, returns their widths.
     fn draw_table(ctx: &egui::Context, events: Vec<egui::Event>, reset: bool) -> Vec<f32> {
         let p = Theme::default().palette();
@@ -11666,7 +11814,7 @@ mod tests {
                             plain_header(ui, &p, title);
                             if reset {
                                 // What "Reset column width" in the header menu does.
-                                reset_current_table(ui.ctx());
+                                menu_request(ui.ctx(), "test", "reset_columns", None);
                             }
                         });
                     }
@@ -11702,6 +11850,100 @@ mod tests {
 
         draw_table(&ctx, vec![], true);
         assert_eq!(draw_table(&ctx, vec![], false)[0], initial);
+    }
+
+    /// Draws a list with two narrow, clipped columns and one row of long texts; returns the
+    /// column widths. `fit_all` does what "Fit all columns" in the header menu does.
+    fn draw_long_rows(ctx: &egui::Context, fit_all: bool) -> Vec<f32> {
+        if fit_all {
+            menu_request(ctx, "test_fit", "fit_all_columns", None);
+        }
+        let p = Theme::default().palette();
+        let mut widths = Vec::new();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            styled_table(ui, "test_fit")
+                .column(Column::initial(40.0).at_least(20.0).clip(true))
+                .column(Column::initial(40.0).at_least(20.0).clip(true))
+                .column(Column::remainder())
+                .header(HEADER_HEIGHT, |mut h| {
+                    for title in ["A", "B", ""] {
+                        h.col(|ui| {
+                            widths.push(ui.max_rect().width());
+                            plain_header(ui, &p, title);
+                        });
+                    }
+                })
+                .body(|body| {
+                    body.rows(ROW_HEIGHT, 1, |mut row| {
+                        for text in ["a rather long first value", "second"] {
+                            row.col(|ui| {
+                                ui.add(Label::new(text).wrap_mode(fit(ui)));
+                            });
+                        }
+                        row.col(|_| {});
+                    });
+                });
+        });
+        out.textures_delta.clear();
+        widths
+    }
+
+    #[test]
+    fn fit_all_columns() {
+        let ctx = egui::Context::default();
+        assert_eq!(draw_long_rows(&ctx, false)[..2], [40.0, 40.0]);
+        draw_long_rows(&ctx, true);
+        let fitted = draw_long_rows(&ctx, false);
+        let width = |text: &str| {
+            ctx.fonts_mut(|f| {
+                f.layout_no_wrap(
+                    text.into(),
+                    egui::FontId::proportional(14.0),
+                    Color32::WHITE,
+                )
+                .size()
+                .x
+            })
+        };
+        // Every column as wide as its widest cell (here wider than its initial width).
+        for (fitted, text) in fitted.iter().zip(["a rather long first value", "second"]) {
+            assert!((fitted - width(text)).abs() < 2.0, "{fitted} vs {text:?}");
+        }
+        // The widths are kept afterwards.
+        assert_eq!(draw_long_rows(&ctx, false), fitted);
+    }
+
+    #[test]
+    fn fit_and_reset_one_column() {
+        let ctx = egui::Context::default();
+        let initial = draw_long_rows(&ctx, false);
+        assert_eq!(initial[..2], [40.0, 40.0]);
+        // "Fit column to content" on the second column: only that one changes.
+        menu_request(&ctx, "test_fit", "autosize", Some(1));
+        draw_long_rows(&ctx, false);
+        let fitted = draw_long_rows(&ctx, false);
+        assert_eq!(fitted[0], 40.0);
+        assert!(fitted[1] > 40.0, "{fitted:?}");
+        assert_eq!(draw_long_rows(&ctx, false), fitted);
+        // Fit both, then "Reset column width" on the first: the second keeps its width.
+        draw_long_rows(&ctx, true);
+        let both = draw_long_rows(&ctx, false);
+        assert!(both[0] > 40.0, "{both:?}");
+        menu_request(&ctx, "test_fit", "reset_column", Some(0));
+        draw_long_rows(&ctx, false);
+        let reset = draw_long_rows(&ctx, false);
+        assert_eq!(reset[..2], [40.0, both[1]]);
+        // "Reset all column widths".
+        menu_request(&ctx, "test_fit", "reset_columns", None);
+        draw_long_rows(&ctx, false);
+        assert_eq!(draw_long_rows(&ctx, false)[..2], initial[..2]);
     }
 
     #[test]
