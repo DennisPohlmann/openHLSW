@@ -44,8 +44,8 @@ pub enum Event {
     },
     /// Result of a server location lookup.
     Geo(Result<Vec<(IpAddr, crate::geo::GeoInfo)>, String>),
-    /// Tag of the latest openHLSW release (startup update check; failures send nothing).
-    LatestRelease(String),
+    /// Tag of the latest openHLSW release (update check), `None` when GitHub gave none.
+    LatestRelease(Option<String>),
     /// One line from a server log stream (`logaddress_add`).
     Log {
         from: SocketAddr,
@@ -375,13 +375,15 @@ pub fn spawn_geo_lookup(notifier: &Notifier, ips: Vec<IpAddr>) {
 /// Asks GitHub for the latest release of openHLSW (see [`crate::update`]).
 pub fn spawn_update_check(notifier: &Notifier, homepage: &'static str) {
     let n = notifier.clone();
-    thread::spawn(move || match crate::update::latest_release(homepage) {
-        Ok(tag) => n.send(Event::LatestRelease(tag)),
-        Err(e) => {
-            if cfg!(debug_assertions) {
-                eprintln!("update check: {e}");
-            }
-        }
+    thread::spawn(move || {
+        let tag = crate::update::latest_release(homepage)
+            .map_err(|e| {
+                if cfg!(debug_assertions) {
+                    eprintln!("update check: {e}");
+                }
+            })
+            .ok();
+        n.send(Event::LatestRelease(tag));
     });
 }
 

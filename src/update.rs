@@ -1,10 +1,11 @@
-//! Update check at startup: asks GitHub for the latest release and offers it when it is
-//! newer than this program (Settings → Startup → Check for updates on startup).
+//! Update check at startup (Settings → Startup → Check for updates on startup) and from
+//! "? → Check for updates...": asks GitHub for the latest release and offers it when it is
+//! newer than this program.
 //!
 //! The request goes through the system's `curl` (Windows 10 and later, macOS and Linux
 //! distributions ship it), so openHLSW needs no TLS library of its own. Any failure (no
-//! curl, offline, timeout, rate limit, unexpected answer) is silent: there is simply no
-//! offer. GitHub's `releases/latest` never returns drafts or pre-releases; the answer is
+//! curl, offline, timeout, rate limit, unexpected answer) is silent at startup; the check
+//! from the menu says that it did not work. GitHub's `releases/latest` never returns drafts or pre-releases; the answer is
 //! checked for them anyway.
 
 use std::process::Command;
@@ -56,6 +57,36 @@ pub fn to_offer(tag: &str, current: &str, skipped: &str) -> Option<String> {
         return None;
     }
     Some(format!("{}.{}.{}", latest.0, latest.1, latest.2))
+}
+
+/// What an update check shows.
+#[derive(Debug, PartialEq)]
+pub enum Outcome {
+    /// A newer release ("0.6.0").
+    Offer(String),
+    UpToDate,
+    Failed,
+}
+
+/// What to show for the answer of a check (`latest`: the release tag, `None` when GitHub
+/// gave none). The check at start (`manual` false) shows only a newer release that was not
+/// skipped; the one from the menu always answers and offers a skipped release too.
+pub fn outcome(
+    latest: Option<&str>,
+    current: &str,
+    skipped: &str,
+    manual: bool,
+) -> Option<Outcome> {
+    let result = match latest {
+        Some(tag) if parse_version(tag).is_some() => {
+            match to_offer(tag, current, if manual { "" } else { skipped }) {
+                Some(version) => Outcome::Offer(version),
+                None => Outcome::UpToDate,
+            }
+        }
+        _ => Outcome::Failed,
+    };
+    (manual || matches!(result, Outcome::Offer(_))).then_some(result)
 }
 
 #[derive(Deserialize)]
@@ -149,6 +180,44 @@ mod tests {
         // A newer release than the skipped one is offered again.
         assert_eq!(to_offer("v0.6.1", "0.5.3", "0.6.0"), Some("0.6.1".into()));
         assert_eq!(to_offer("v0.6.0", "0.5.3", "garbage"), Some("0.6.0".into()));
+    }
+
+    #[test]
+    fn startup_check_is_silent_unless_newer() {
+        assert_eq!(
+            outcome(Some("v0.6.0"), "0.5.3", "", false),
+            Some(Outcome::Offer("0.6.0".into()))
+        );
+        assert_eq!(outcome(Some("v0.6.0"), "0.5.3", "0.6.0", false), None);
+        assert_eq!(outcome(Some("v0.5.3"), "0.5.3", "", false), None);
+        assert_eq!(outcome(Some("garbage"), "0.5.3", "", false), None);
+        assert_eq!(outcome(None, "0.5.3", "", false), None);
+    }
+
+    #[test]
+    fn manual_check_always_answers() {
+        assert_eq!(
+            outcome(Some("v0.6.0"), "0.5.3", "", true),
+            Some(Outcome::Offer("0.6.0".into()))
+        );
+        // A skipped release is offered again when asked for.
+        assert_eq!(
+            outcome(Some("v0.6.0"), "0.5.3", "0.6.0", true),
+            Some(Outcome::Offer("0.6.0".into()))
+        );
+        assert_eq!(
+            outcome(Some("v0.5.3"), "0.5.3", "", true),
+            Some(Outcome::UpToDate)
+        );
+        assert_eq!(
+            outcome(Some("v0.5.2"), "0.5.3", "", true),
+            Some(Outcome::UpToDate)
+        );
+        assert_eq!(
+            outcome(Some("v0.7.0-rc.1"), "0.5.3", "", true),
+            Some(Outcome::Failed)
+        );
+        assert_eq!(outcome(None, "0.5.3", "", true), Some(Outcome::Failed));
     }
 
     #[test]

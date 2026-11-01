@@ -1524,9 +1524,11 @@ pub struct OpenHlswApp {
     /// Scroll the server list to the selected server in the next frame (after Add).
     scroll_to_selected: bool,
     show_license: bool,
-    /// Newer release found by the update check at start ("0.6.0"), and the state of
-    /// "Don't remind me about this version".
-    update_offer: Option<(String, bool)>,
+    /// Result window of the update check, with the state of "Don't remind me about this
+    /// version" for an offer.
+    update_offer: Option<(crate::update::Outcome, bool)>,
+    /// An update check is running; `true` when it was asked for from the menu.
+    update_checking: Option<bool>,
     editing_comment: Option<(ServerId, String)>,
     /// "Connecting..." window: server we wait on for a free slot, since when.
     waiting: Option<(ServerId, Instant)>,
@@ -1719,6 +1721,7 @@ impl OpenHlswApp {
             scroll_to_selected: false,
             show_license: false,
             update_offer: None,
+            update_checking: None,
             editing_comment: None,
             waiting: None,
             show_filter: false,
@@ -1743,6 +1746,7 @@ impl OpenHlswApp {
             .map(|s| s.id);
         app.play(SoundEvent::StartUp);
         if app.settings.check_updates {
+            app.update_checking = Some(false);
             worker::spawn_update_check(&app.notifier, HOMEPAGE);
         }
         app
@@ -2875,12 +2879,15 @@ impl OpenHlswApp {
                     }
                 },
                 Event::LatestRelease(tag) => {
-                    self.update_offer = crate::update::to_offer(
-                        &tag,
+                    let manual = self.update_checking.take() == Some(true);
+                    if let Some(outcome) = crate::update::outcome(
+                        tag.as_deref(),
                         crate::update::CURRENT,
                         &self.settings.skipped_update,
-                    )
-                    .map(|version| (version, false));
+                        manual,
+                    ) {
+                        self.update_offer = Some((outcome, false));
+                    }
                 }
             }
         }
@@ -4652,6 +4659,19 @@ impl OpenHlswApp {
                     ui.close();
                 }
                 ui.separator();
+                if ui
+                    .add_enabled(
+                        self.update_checking != Some(true),
+                        Button::new(tr!("Check for updates...")),
+                    )
+                    .clicked()
+                {
+                    // A check still running from the start answers this click.
+                    if self.update_checking.replace(true).is_none() {
+                        worker::spawn_update_check(&self.notifier, HOMEPAGE);
+                    }
+                    ui.close();
+                }
                 if ui.button(tr!("Visit openHLSW homepage")).clicked() {
                     actions.push(Action::OpenUrl(HOMEPAGE.into()));
                     ui.close();
@@ -7625,11 +7645,44 @@ impl OpenHlswApp {
         ctx.request_repaint_after(Duration::from_millis(500));
     }
 
-    /// "A new version of openHLSW is available" after the update check at start. The
-    /// download page is opened without showing its address anywhere.
+    /// Result of the update check: "A new version of openHLSW is available", or for the
+    /// check from the menu also "latest version" / "could not check". The download page is
+    /// opened without showing its address anywhere.
     fn update_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
-        let Some((version, skip)) = &mut self.update_offer else {
+        use crate::update::Outcome;
+        let Some((outcome, skip)) = &mut self.update_offer else {
             return;
+        };
+        let version = match outcome {
+            Outcome::Offer(version) => version.clone(),
+            Outcome::UpToDate | Outcome::Failed => {
+                let text = if *outcome == Outcome::UpToDate {
+                    tr!(
+                        "You are using the latest version (v{current}).",
+                        current = crate::update::CURRENT
+                    )
+                } else {
+                    tr!("Could not check for updates. Please try again later.").to_string()
+                };
+                let mut open = true;
+                let mut ok = false;
+                NativeWindow::new("update", tr!("Check for updates"))
+                    .open(&mut open)
+                    .collapsible(false)
+                    .resizable(false)
+                    .default_width(380.0)
+                    .show(ctx, |ui| {
+                        ui.add(Label::new(text).wrap());
+                        ui.add_space(6.0);
+                        ok = ui
+                            .add(Button::new(tr!("OK")).min_size(egui::vec2(75.0, 22.0)))
+                            .clicked();
+                    });
+                if ok || !open {
+                    self.update_offer = None;
+                }
+                return;
+            }
         };
         let mut open = true;
         let mut download = false;

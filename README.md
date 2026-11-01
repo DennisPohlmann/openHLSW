@@ -147,7 +147,9 @@ services are gone), Metamod plugin management.
   (with the system's `curl`; nothing else is sent). If it is newer, a small window offers to
   open the download page; "Don't remind me about this version" skips that release. Without
   an answer (offline, no `curl`, GitHub not reachable) nothing is shown. Switch it off in
-  Settings → Startup.
+  Settings → Startup. **? → Check for updates...** checks at any time, also with the
+  setting off, offers a skipped release again and always answers (latest version / could
+  not check).
 - **Server log / chat**: "Get Log" sends `logaddress_add` and `log on`. The UDP port must be
   reachable – for Internet forwarded in your router. By default openHLSW listens on a free
   port chosen at start; Settings → Connections → Fixed UDP port sets one (e.g. 27500). With
@@ -219,7 +221,7 @@ src/
   games.rs, game_icons.rs, flags.rs          game list, icons, country flags
   filter.rs, iddb.rs, discover.rs            filter, Global ID Database, Steam favorites / LAN
   firewall.rs                                local firewall check for the log port
-  update.rs                                  update check at start (latest GitHub release)
+  update.rs                                  update check (latest GitHub release)
   geo.rs, trace.rs, stats.rs                 location, Trace Route, traffic counters
   i18n.rs, config.rs                         languages, settings file
   server_io.rs                               server list export / import (JSON, CSV, text)
