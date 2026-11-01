@@ -138,6 +138,8 @@ struct Server {
     ban_filter: String,
     maps: Vec<String>,
     map_selected: Option<String>,
+    /// Search text of the Change Level tab (see [`map_matches`]).
+    map_search: String,
     /// Shown in the Change Level tab ("Loading…", "42 maps", errors).
     maps_status: String,
     maps_loading: bool,
@@ -267,6 +269,7 @@ impl Server {
             ban_filter: String::new(),
             maps: Vec::new(),
             map_selected: None,
+            map_search: String::new(),
             maps_status: String::new(),
             maps_loading: false,
             pending_change: None,
@@ -6739,12 +6742,14 @@ impl OpenHlswApp {
         idx: usize,
         actions: &mut Vec<Action>,
     ) {
+        // An open dialog (the "Change level to …?" question) keeps the keys.
+        let keys = self.dialog.is_none();
         let kick_all = &mut self.settings.kick_all_on_map_change;
         let s = &mut self.servers[idx];
         let id = s.id;
         let current = s.info.as_ref().map(|i| i.map.clone()).unwrap_or_default();
 
-        // HLSW layout: map list left, Update / Change Level / Kick all on the right.
+        // HLSW layout: search and map grid left, Update / Change Level / Kick all on the right.
         egui::Panel::right("map_controls")
             .frame(Frame::new().inner_margin(Margin {
                 left: 8,
@@ -6790,47 +6795,208 @@ impl OpenHlswApp {
         egui::CentralPanel::default()
             .frame(Frame::new())
             .show(ui, |ui| {
+                let ctx = ui.ctx().clone();
+                let mut search_enter = false;
+                let mut shown: Vec<usize> = Vec::new();
+                ui.horizontal(|ui| {
+                    ui.label(tr!("Search:"));
+                    let field = ui
+                        .add(
+                            TextEdit::singleline(&mut s.map_search)
+                                .align(egui::Align2::LEFT_CENTER)
+                                .hint_text(tr!("Map name, * and ? allowed"))
+                                .desired_width(200.0),
+                        )
+                        .with_edit_menu();
+                    search_enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if !s.map_search.is_empty() && ui.button(tr!("Clear")).clicked() {
+                        s.map_search.clear();
+                    }
+                    shown = (0..s.maps.len())
+                        .filter(|&i| map_matches(&s.map_search, &s.maps[i]))
+                        .collect();
+                    if !s.map_search.trim().is_empty() {
+                        ui.label(
+                            RichText::new(tr!(
+                                "{shown} of {count} maps",
+                                shown = shown.len(),
+                                count = s.maps.len()
+                            ))
+                            .color(p.weak_text),
+                        );
+                    }
+                });
+                ui.add_space(4.0);
+
+                let selected_pos = |s: &Server| {
+                    s.map_selected
+                        .as_ref()
+                        .and_then(|m| shown.iter().position(|&i| s.maps[i] == *m))
+                };
+                // Enter in the search field picks the first hit, then the arrow keys and
+                // Enter work in the grid.
+                if search_enter && !shown.is_empty() {
+                    if selected_pos(s).is_none() {
+                        s.map_selected = Some(s.maps[shown[0]].clone());
+                    }
+                    set_active_list(&ctx, "maps");
+                }
+
                 list_frame(ui, p, |ui| {
+                    if shown.is_empty() {
+                        if !s.maps.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(tr!("No map matches the search.")).color(p.weak_text),
+                            );
+                        }
+                        return;
+                    }
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    let widest = ctx.fonts_mut(|f| {
+                        shown
+                            .iter()
+                            .map(|&i| {
+                                f.layout_no_wrap(s.maps[i].clone(), font.clone(), p.text)
+                                    .size()
+                                    .x
+                            })
+                            .fold(0.0, f32::max)
+                    });
+                    // As many columns as fit; the scroll bar keeps its place at the right.
+                    let width =
+                        (ui.available_width() - ui.spacing().scroll.bar_width - 2.0).max(1.0);
+                    let cols = ((width / (widest + 16.0).max(60.0)) as usize).max(1);
+                    let cell_w = width / cols as f32;
+                    let rows = shown.len().div_ceil(cols);
+
+                    // Arrow keys move in the grid, Home / End jump, Enter changes the level (not the
+                    // Enter that just left the search field).
+                    let mut moved = None;
+                    if keys
+                        && !search_enter
+                        && active_list(&ctx) == "maps"
+                        && !ctx.text_edit_focused()
+                    {
+                        let last = shown.len() - 1;
+                        let pos = selected_pos(s);
+                        let (step, enter) = ctx.input(|i| {
+                            if i.modifiers.command || i.modifiers.alt {
+                                return (None, false);
+                            }
+                            let at = pos.unwrap_or(0);
+                            let step = if pos.is_none()
+                                && [
+                                    Key::ArrowLeft,
+                                    Key::ArrowRight,
+                                    Key::ArrowUp,
+                                    Key::ArrowDown,
+                                ]
+                                .iter()
+                                .any(|&k| i.key_pressed(k))
+                            {
+                                Some(0)
+                            } else if i.key_pressed(Key::ArrowRight) {
+                                Some((at + 1).min(last))
+                            } else if i.key_pressed(Key::ArrowLeft) {
+                                Some(at.saturating_sub(1))
+                            } else if i.key_pressed(Key::ArrowDown) {
+                                Some(if at + cols <= last { at + cols } else { at })
+                            } else if i.key_pressed(Key::ArrowUp) {
+                                Some(at.checked_sub(cols).unwrap_or(at))
+                            } else if i.key_pressed(Key::Home) {
+                                Some(0)
+                            } else if i.key_pressed(Key::End) {
+                                Some(last)
+                            } else {
+                                None
+                            };
+                            (step, i.key_pressed(Key::Enter))
+                        });
+                        if let Some(to) = step {
+                            s.map_selected = Some(s.maps[shown[to]].clone());
+                            moved = Some(to);
+                        }
+                        if enter && let Some(m) = s.map_selected.clone() {
+                            actions.push(Action::ChangeLevel(id, m));
+                        }
+                    }
+
                     let selected = s.map_selected.clone();
                     let mut clicked = None;
-                    styled_table(ui, "maps")
-                        .sense(Sense::click())
-                        .column(Column::exact(28.0))
-                        .column(Column::remainder().clip(true))
-                        .header(HEADER_HEIGHT, |mut h| {
-                            h.col(|ui| {
-                                plain_header(ui, p, "#");
-                            });
-                            h.col(|ui| {
-                                plain_header(ui, p, tr!("Map"));
-                            });
-                        })
-                        .body(|body| {
-                            body.rows(ROW_HEIGHT, s.maps.len(), |mut row| {
-                                let m = &s.maps[row.index()];
-                                row.set_selected(selected.as_deref() == Some(m.as_str()));
-                                let n = row.index() + 1;
-                                row.col(|ui| {
-                                    ui.label(format!("{n:02}"));
-                                });
-                                row.col(|ui| {
-                                    let mut t = RichText::new(m);
-                                    if *m == current {
-                                        t = t.strong();
+                    // Rows of exactly ROW_HEIGHT, so `show_rows` knows where each one is.
+                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                    egui::ScrollArea::vertical()
+                        .id_salt("maps_grid")
+                        .auto_shrink(false)
+                        .show_rows(ui, ROW_HEIGHT, rows, |ui, range| {
+                            let left = ui.max_rect().left();
+                            let top = ui.max_rect().top() - range.start as f32 * ROW_HEIGHT;
+                            if let Some(to) = moved {
+                                let rect = egui::Rect::from_min_size(
+                                    egui::pos2(left, top + (to / cols) as f32 * ROW_HEIGHT),
+                                    egui::vec2(cell_w, ROW_HEIGHT),
+                                );
+                                ui.scroll_to_rect(rect, None);
+                            }
+                            for r in range {
+                                let (row, _) = ui.allocate_exact_size(
+                                    egui::vec2(width, ROW_HEIGHT),
+                                    Sense::hover(),
+                                );
+                                for (c, &i) in shown.iter().skip(r * cols).take(cols).enumerate() {
+                                    let m = &s.maps[i];
+                                    let is_selected = selected.as_deref() == Some(m.as_str());
+                                    let rect = egui::Rect::from_min_size(
+                                        row.min + egui::vec2(c as f32 * cell_w, 0.0),
+                                        egui::vec2(cell_w, ROW_HEIGHT),
+                                    );
+                                    let resp = ui.interact(
+                                        rect,
+                                        ui.scope_id().with(("map", m)),
+                                        Sense::click(),
+                                    );
+                                    resp.widget_info(|| {
+                                        egui::WidgetInfo::selected(
+                                            egui::Role::ListBoxOption,
+                                            true,
+                                            is_selected,
+                                            m,
+                                        )
+                                    });
+                                    let painter = ui.painter_at(rect);
+                                    let color = if is_selected {
+                                        painter.rect_filled(rect, 0.0, p.selection_bg);
+                                        p.selection_text
+                                    } else {
+                                        if resp.hovered() {
+                                            painter.rect_filled(rect, 0.0, p.hover_bg);
+                                        }
+                                        if *m == current {
+                                            ui.visuals().strong_text_color()
+                                        } else {
+                                            p.text
+                                        }
+                                    };
+                                    painter.text(
+                                        egui::pos2(rect.left() + 4.0, rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        m,
+                                        font.clone(),
+                                        color,
+                                    );
+                                    if resp.clicked() {
+                                        clicked = Some(m.clone());
                                     }
-                                    ui.add(Label::new(t).selectable(false));
-                                });
-                                let r = row.response();
-                                if r.clicked() {
-                                    clicked = Some(m.clone());
+                                    if resp.double_clicked() {
+                                        actions.push(Action::ChangeLevel(id, m.clone()));
+                                    }
                                 }
-                                if r.double_clicked() {
-                                    actions.push(Action::ChangeLevel(id, m.clone()));
-                                }
-                            });
+                            }
                         });
                     if clicked.is_some() {
                         s.map_selected = clicked;
+                        set_active_list(&ctx, "maps");
                     }
                 });
             });
@@ -10905,6 +11071,43 @@ fn parse_map_list(text: &str) -> Vec<String> {
     maps
 }
 
+/// Map search of the Change Level tab, case insensitive. Plain text finds maps containing
+/// it; with `*` (any number of characters) or `?` (exactly one) the whole name must match,
+/// like a file pattern: `de_*`, `*_2`, `cs_?ffice`.
+fn map_matches(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.trim().to_lowercase();
+    let name = name.to_lowercase();
+    if !pattern.contains(['*', '?']) {
+        return name.contains(&pattern);
+    }
+    let (pat, txt): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
+    let (mut pi, mut ti) = (0, 0);
+    // Position after the last `*` and the text position it is matched up to.
+    let mut star: Option<(usize, usize)> = None;
+    while ti < txt.len() {
+        match pat.get(pi) {
+            Some('*') => {
+                star = Some((pi + 1, ti));
+                pi += 1;
+            }
+            Some(&c) if c == '?' || c == txt[ti] => {
+                pi += 1;
+                ti += 1;
+            }
+            _ => match star {
+                // Let the last `*` take one more character and try again.
+                Some((after, at)) => {
+                    pi = after;
+                    ti = at + 1;
+                    star = Some((after, at + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pat[pi..].iter().all(|&c| c == '*')
+}
+
 /// The little yellow star HLSW shows for servers with an RCON password.
 fn star(ui: &mut Ui, size: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), Sense::hover());
@@ -12299,6 +12502,30 @@ mod tests {
             let c = parse_chat_line(line).unwrap();
             assert_eq!((c.name.as_str(), c.text.as_str()), ("Console", "hello all"));
         }
+    }
+
+    #[test]
+    fn map_search_patterns() {
+        // Plain text: part of the name, any case.
+        assert!(map_matches("dust", "de_dust2"));
+        assert!(map_matches("DUST", "de_dust2"));
+        assert!(map_matches("", "de_dust2"));
+        assert!(map_matches("  ", "de_dust2"));
+        assert!(!map_matches("aztec", "de_dust2"));
+        // `*` and `?`: the whole name must match.
+        assert!(map_matches("de_*", "de_dust2"));
+        assert!(!map_matches("de_*", "cs_office"));
+        assert!(map_matches("*2", "de_dust2"));
+        assert!(!map_matches("*2", "de_dust"));
+        assert!(map_matches("*dust*", "de_dust2"));
+        assert!(map_matches("cs_?ffice", "cs_office"));
+        assert!(!map_matches("cs_?ffice", "cs_ffice"));
+        assert!(map_matches("d*_d*t?", "de_dust2"));
+        assert!(map_matches("*", "anything"));
+        assert!(map_matches("**a**", "banana"));
+        assert!(!map_matches("a*b", "aXbY"));
+        assert!(map_matches("a*b*", "aXbY"));
+        assert!(map_matches("*ü*", "de_Über"));
     }
 
     #[test]

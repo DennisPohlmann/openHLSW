@@ -91,7 +91,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   Update Status (switch A hides it).
 - Chat with Admin Notification (switch D shows the date, S scrolls along, X clears it,
   the window button opens the big window), Ban List (with the Global ID Database),
-  Change Level.
+  Change Level (maps side by side in a grid; the search takes part of a name or a pattern
+  with `*` and `?`, such as `de_*`; arrow keys and Enter work too).
 - The console history keeps the last 200 commands across restarts; commands that may carry
   a secret (`rcon_password`, `sv_password`, `login`, `sv_setsteamaccount`,
   `rcon <password> ...`, anything containing "password", "passwd" or "token") stay in the

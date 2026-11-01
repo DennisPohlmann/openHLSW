@@ -92,6 +92,7 @@
  "Chat messages starting with @ play the notification sound and are shown in the status bar (needs the server log)": "Chatnachrichten, die mit @ beginnen, spielen den Benachrichtigungston und werden in der Statusleiste angezeigt (benötigt das Serverlog)",
  "Check for updates on startup": "Beim Start nach Updates suchen",
  "Check that the router forwards UDP port {port} to this computer.": "Prüfe, ob der Router UDP-Port {port} an diesen Rechner weiterleitet.",
+ "Clear": "Leeren",
  "Clear chat": "Chat leeren",
  "Clear console": "Konsole leeren",
  "Clear filter": "Filter leeren",
@@ -275,6 +276,7 @@
  "Log port and public IP": "Log-Port und öffentliche IP",
  "Loss": "Verlust",
  "Map change": "Mapwechsel",
+ "Map name, * and ? allowed": "Map-Name, * und ? erlaubt",
  "Marked Rows": "Markierte Zeilen",
  "Maximum ping:": "Maximaler Ping:",
  "Message": "Nachricht",
@@ -313,6 +315,7 @@
  "No Steam account (bot or LAN player)": "Kein Steam-Konto (Bot oder LAN-Spieler)",
  "No commands yet": "Noch keine Befehle",
  "No connections yet.": "Noch keine Verbindungen.",
+ "No map matches the search.": "Keine Map passt zur Suche.",
  "No maps found. The server's answer is in the Console tab.": "Keine Maps gefunden. Die Antwort des Servers steht im Tab Konsole.",
  "No password": "Kein Passwort",
  "No plugins installed.": "Keine Plugins installiert.",
@@ -614,5 +617,6 @@
  "{count} maps": "{count} Maps",
  "{name} (port {port})": "{name} (Port {port})",
  "{server}: {name} wrote: {text}": "{server}: {name} schrieb: {text}",
+ "{shown} of {count} maps": "{shown} von {count} Maps",
  "{total} total": "{total} gesamt"
 }
