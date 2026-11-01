@@ -1391,6 +1391,13 @@ pub struct OpenHlswApp {
     console_window: bool,
     /// Its current size; goes into the settings when it is closed.
     console_window_size: Option<egui::Vec2>,
+    /// When the main window last changed its normal size or maximized state; it is saved
+    /// once that has not changed for a second.
+    window_changed_at: Option<Instant>,
+    /// The main window is maximized: the panels have a layout of their own for that.
+    layout_maximized: bool,
+    /// The window still has to be maximized after the start, if the settings say so.
+    maximize_at_start: bool,
     /// The app itself, for the big console window (see [`AppHandle`]).
     this: std::sync::Weak<std::sync::Mutex<OpenHlswApp>>,
     search_id: Option<egui::Id>,
@@ -1591,6 +1598,9 @@ impl OpenHlswApp {
             trace: None,
             console_window: false,
             console_window_size: None,
+            window_changed_at: None,
+            layout_maximized: config.settings.view.window_maximized,
+            maximize_at_start: true,
             this: std::sync::Weak::new(),
             search_id: None,
             flags: Flags::load(&cc.egui_ctx),
@@ -2932,6 +2942,59 @@ impl OpenHlswApp {
         }
     }
 
+    /// Remembers the normal size of the main window (not maximized, fullscreen or
+    /// minimized) and whether it is maximized, for "Restore" and the next start; saved
+    /// once it has not changed for a second.
+    fn track_main_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        // Without the text size zoom: `main` divides by it again (eframe applies the zoom
+        // it remembers to the start size), so changing the text size keeps the window size.
+        let zoom = ctx.zoom_factor();
+        let (size, maximized, fullscreen, time) = ctx.input(|i| {
+            let v = i.viewport();
+            (
+                i.viewport_rect().size() * zoom,
+                v.maximized,
+                v.fullscreen == Some(true),
+                i.time,
+            )
+        });
+        if let Some(maximized) = maximized {
+            self.layout_maximized = maximized;
+        }
+        // X11 window managers ignore the maximize request of the still hidden window at
+        // the start, so ask again once it is shown.
+        if self.maximize_at_start && ctx.cumulative_frame_nr() >= 2 {
+            self.maximize_at_start = false;
+            if self.settings.view.window_maximized && maximized == Some(false) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+        }
+        // Right after the start some systems maximize the window a few frames late.
+        let Some(maximized) = maximized.filter(|_| !fullscreen && time > 2.0) else {
+            return;
+        };
+        let view = &mut self.settings.view;
+        let mut changed = view.window_maximized != maximized;
+        view.window_maximized = maximized;
+        let [min_w, min_h] = crate::settings::MIN_WINDOW_SIZE;
+        if !maximized && size.x >= min_w - 1.0 && size.y >= min_h - 1.0 {
+            let size = [size.x.round(), size.y.round()];
+            changed |= view.window_size != size;
+            view.window_size = size;
+        }
+        if changed {
+            self.window_changed_at = Some(Instant::now());
+        }
+        if let Some(at) = self.window_changed_at {
+            if at.elapsed() >= Duration::from_secs(1) {
+                self.window_changed_at = None;
+                actions.push(Action::SaveConfig);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(1100));
+            }
+        }
+    }
+
     fn save_config(&mut self) {
         let config = Config {
             servers: self.servers.iter().map(Self::saved_server).collect(),
@@ -3969,6 +4032,9 @@ impl eframe::App for OpenHlswApp {
         if self.iddb_dirty {
             self.save_iddb();
         }
+        if self.window_changed_at.take().is_some() {
+            self.save_config();
+        }
         // Remove the forwarding in the router again.
         self.port_mapper.shutdown(Duration::from_secs(3));
     }
@@ -3995,8 +4061,19 @@ impl eframe::App for OpenHlswApp {
             return;
         }
 
+        // In the very first frame egui does not know the window size yet: panels laid out
+        // now would remember sizes made for a huge window.
+        if ui.ctx().cumulative_frame_nr() == 0 {
+            ui.ctx().request_repaint();
+            return;
+        }
+
         let p = self.settings.theme.palette();
         let mut actions = Vec::new();
+        self.track_main_window(ui.ctx(), &mut actions);
+        // Start sizes of the panels, as shares of the window (each layout only uses them
+        // until the user drags a panel border).
+        let window = ui.ctx().content_rect().size();
         self.shortcuts(ui, &mut actions);
 
         let chrome = Frame::new()
@@ -4023,18 +4100,20 @@ impl eframe::App for OpenHlswApp {
                 .show(ui, |ui| self.status_bar(ui, &p));
         }
         if view.rcon_section {
-            egui::Panel::bottom("tools")
+            // Maximized and normal window each keep their own panel sizes, so a smaller
+            // window does not squeeze the maximized layout (and the other way round).
+            egui::Panel::bottom(("tools", self.layout_maximized))
                 .frame(chrome)
                 .resizable(true)
-                .default_size(150.0)
+                .default_size((window.y * 0.2).clamp(150.0, 220.0))
                 .min_size(110.0)
                 .show(ui, |ui| self.tools_panel(ui, &p, &mut actions));
         }
         if view.server_list {
-            // Like HLSW: the server list takes a bit less than half of the window, the
-            // details (info, players, rules) get the rest above the Rcon section.
-            let list_height = 300.0;
-            egui::Panel::top("server_list")
+            // Like HLSW: the server list takes about a third of the window, the details
+            // (info, players, rules) get the rest above the Rcon section.
+            let list_height = (window.y * 0.33).clamp(150.0, 400.0);
+            egui::Panel::top(("server_list", self.layout_maximized))
                 .frame(chrome)
                 .resizable(true)
                 .default_size(list_height)
@@ -4949,10 +5028,12 @@ impl OpenHlswApp {
             top: 4,
             bottom: 4,
         });
-        egui::Panel::left("server_info")
+        let info_width = (ui.available_width() * 0.3).clamp(280.0, 700.0);
+        let players_height = (ui.available_height() * 0.5).max(100.0);
+        egui::Panel::left(("server_info", self.layout_maximized))
             .frame(info_chrome)
             .resizable(true)
-            .default_size(385.0)
+            .default_size(info_width)
             .min_size(220.0)
             .show(ui, |ui| {
                 let location = idx
@@ -4976,10 +5057,10 @@ impl OpenHlswApp {
                 }
             });
         if self.settings.view.rules {
-            egui::Panel::top("players")
+            egui::Panel::top(("players", self.layout_maximized))
                 .frame(chrome)
                 .resizable(true)
-                .default_size(140.0)
+                .default_size(players_height)
                 .min_size(50.0)
                 .show(ui, |ui| self.players_section(ui, p, idx, actions));
             egui::CentralPanel::default().frame(chrome).show(ui, |ui| {

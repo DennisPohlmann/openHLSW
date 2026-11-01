@@ -710,6 +710,26 @@ pub struct ChatOptions {
     pub show_date: bool,
 }
 
+/// Smallest size of the main window in points.
+pub const MIN_WINDOW_SIZE: [f32; 2] = [800.0, 500.0];
+/// Normal (not maximized) size of the main window until the user resizes it.
+pub const DEFAULT_WINDOW_SIZE: [f32; 2] = [1600.0, 900.0];
+
+impl ViewOptions {
+    /// The saved normal size of the main window, at least [`MIN_WINDOW_SIZE`]; a broken
+    /// value gives [`DEFAULT_WINDOW_SIZE`].
+    pub fn main_window_size(&self) -> [f32; 2] {
+        let [w, h] = self.window_size;
+        if !(w.is_finite() && h.is_finite()) {
+            return DEFAULT_WINDOW_SIZE;
+        }
+        [
+            w.clamp(MIN_WINDOW_SIZE[0], 8000.0),
+            h.clamp(MIN_WINDOW_SIZE[1], 8000.0),
+        ]
+    }
+}
+
 /// What the View menu shows or hides.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -729,6 +749,10 @@ pub struct ViewOptions {
     /// the console above the chat (0.2–0.9), and its size.
     pub console_window_split: f32,
     pub console_window_size: [f32; 2],
+    /// Main window: its normal size in points (not maximized), which "Restore" and the
+    /// next start use, and whether it was maximized.
+    pub window_size: [f32; 2],
+    pub window_maximized: bool,
     /// Columns switched off in the header's right-click menu (column titles).
     pub hidden_server_columns: Vec<String>,
     /// Visible columns of the players list (titles, in any order).
@@ -750,6 +774,8 @@ impl Default for ViewOptions {
             ping_graph: true,
             console_window_split: 0.75,
             console_window_size: [1000.0, 720.0],
+            window_size: DEFAULT_WINDOW_SIZE,
+            window_maximized: true,
             hidden_server_columns: Vec::new(),
             player_columns: [
                 "Country",
@@ -1719,4 +1745,29 @@ fn plugins(ui: &mut Ui, p: &Palette) {
             });
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn main_window_size_is_never_tiny() {
+        let mut view = ViewOptions::default();
+        assert_eq!(view.main_window_size(), DEFAULT_WINDOW_SIZE);
+        // What a minimized window used to leave behind.
+        view.window_size = [0.0, 0.0];
+        assert_eq!(view.main_window_size(), MIN_WINDOW_SIZE);
+        view.window_size = [f32::NAN, 900.0];
+        assert_eq!(view.main_window_size(), DEFAULT_WINDOW_SIZE);
+        view.window_size = [1880.0, 1040.0];
+        assert_eq!(view.main_window_size(), [1880.0, 1040.0]);
+    }
+
+    #[test]
+    fn old_configs_start_maximized() {
+        let view: ViewOptions = serde_json::from_str("{}").unwrap();
+        assert!(view.window_maximized);
+        assert_eq!(view.window_size, DEFAULT_WINDOW_SIZE);
+    }
 }

@@ -50,17 +50,26 @@ pub fn app_icon() -> std::sync::Arc<egui::IconData> {
 }
 
 fn main() -> eframe::Result {
+    // The window opens maximized (first start) or as it was closed, and "Restore" gives
+    // the normal size the user last chose, centered. The app saves both
+    // (`OpenHlswApp::track_main_window`), not eframe: eframe also saves the size of a
+    // minimized window, which then restored to a tiny window. Panel sizes and column
+    // widths are stored with the egui memory.
+    let settings = config::load().settings;
+    let view = &settings.view;
+    // eframe multiplies the start size by the text size zoom it remembers from last time.
+    let zoom = settings.text_size.zoom();
+    let [w, h] = view.main_window_size();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(concat!("openHLSW - v", env!("CARGO_PKG_VERSION")))
             .with_app_id("openhlsw")
-            .with_inner_size([1400.0, 900.0])
-            .with_min_inner_size([800.0, 500.0])
-            .with_maximized(true)
+            .with_inner_size([w / zoom, h / zoom])
+            .with_min_inner_size(settings::MIN_WINDOW_SIZE)
+            .with_maximized(view.window_maximized)
             .with_icon(app_icon()),
-        // Remember size, position and maximized state of the window (the first start is
-        // maximized); panel sizes and column widths are stored with the egui memory.
-        persist_window: true,
+        centered: true,
+        persist_window: false,
         ..Default::default()
     };
     eframe::run_native(
