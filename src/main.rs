@@ -33,6 +33,7 @@ mod theme;
 mod toolbar_icons;
 mod trace;
 mod typeahead;
+mod update;
 #[cfg(windows)]
 mod win_icon;
 mod worker;

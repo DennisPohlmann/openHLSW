@@ -1452,6 +1452,9 @@ pub struct OpenHlswApp {
     /// Scroll the server list to the selected server in the next frame (after Add).
     scroll_to_selected: bool,
     show_license: bool,
+    /// Newer release found by the update check at start ("0.6.0"), and the state of
+    /// "Don't remind me about this version".
+    update_offer: Option<(String, bool)>,
     editing_comment: Option<(ServerId, String)>,
     /// "Connecting..." window: server we wait on for a free slot, since when.
     waiting: Option<(ServerId, Instant)>,
@@ -1638,6 +1641,7 @@ impl OpenHlswApp {
             toolbar_icons: crate::toolbar_icons::ToolbarIcons::load(&cc.egui_ctx),
             scroll_to_selected: false,
             show_license: false,
+            update_offer: None,
             editing_comment: None,
             waiting: None,
             show_filter: false,
@@ -1661,6 +1665,9 @@ impl OpenHlswApp {
             .and_then(|a| app.servers.iter().find(|s| s.address == a))
             .map(|s| s.id);
         app.play(SoundEvent::StartUp);
+        if app.settings.check_updates {
+            worker::spawn_update_check(&app.notifier, HOMEPAGE);
+        }
         app
     }
 
@@ -2761,6 +2768,14 @@ impl OpenHlswApp {
                         self.status_message = tr!("Location lookup failed: {e}", e = e);
                     }
                 },
+                Event::LatestRelease(tag) => {
+                    self.update_offer = crate::update::to_offer(
+                        &tag,
+                        crate::update::CURRENT,
+                        &self.settings.skipped_update,
+                    )
+                    .map(|version| (version, false));
+                }
             }
         }
         if went_offline {
@@ -7222,9 +7237,64 @@ impl OpenHlswApp {
         ctx.request_repaint_after(Duration::from_millis(500));
     }
 
+    /// "A new version of openHLSW is available" after the update check at start. The
+    /// download page is opened without showing its address anywhere.
+    fn update_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let Some((version, skip)) = &mut self.update_offer else {
+            return;
+        };
+        let mut open = true;
+        let mut download = false;
+        let mut later = false;
+        NativeWindow::new("update", tr!("Update available"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(380.0)
+            .show(ctx, |ui| {
+                ui.add(
+                    Label::new(tr!(
+                        "A new version of openHLSW is available (v{new}). You are using v{current}.",
+                        new = version,
+                        current = crate::update::CURRENT
+                    ))
+                    .wrap(),
+                );
+                ui.add_space(6.0);
+                ui.checkbox(skip, tr!("Don't remind me about this version"));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    download = ui
+                        .add(
+                            Button::new(tr!("Download latest release"))
+                                .min_size(egui::vec2(90.0, 22.0)),
+                        )
+                        .clicked();
+                    later = ui
+                        .add(Button::new(tr!("Later")).min_size(egui::vec2(75.0, 22.0)))
+                        .clicked();
+                });
+            });
+        if !(download || later || !open) {
+            return;
+        }
+        if *skip {
+            self.settings.skipped_update = version.clone();
+            if let Some(dialog) = &mut self.settings_dialog {
+                dialog.draft.skipped_update = version.clone();
+            }
+            actions.push(Action::SaveConfig);
+        }
+        if download && let Err(e) = open_url(&crate::update::releases_page(HOMEPAGE)) {
+            self.status_message = tr!("Could not open the download page: {e}", e = e);
+        }
+        self.update_offer = None;
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         self.iddb_window(ctx, actions);
         self.wait_window(ctx, actions);
+        self.update_window(ctx, actions);
         self.filter_window(ctx, actions);
         self.find_window(ctx, actions);
         self.menu_dialog(ctx, actions);

@@ -612,6 +612,11 @@ pub struct Settings {
     // Startup
     pub startup: StartupSelection,
     pub startup_address: String,
+    /// Ask GitHub at start whether a newer release exists.
+    pub check_updates: bool,
+    /// Release the user does not want to be reminded about ("0.6.0").
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub skipped_update: String,
     // Connecting
     pub on_connect: OnConnect,
     pub connect_apps: Vec<ExecApp>,
@@ -776,6 +781,8 @@ impl Default for Settings {
             iddb_auto_add: true,
             startup: StartupSelection::LastUsed,
             startup_address: String::new(),
+            check_updates: true,
+            skipped_update: String::new(),
             on_connect: OnConnect::Nothing,
             connect_apps: Vec::new(),
             console_cache: 1000,
@@ -1187,6 +1194,9 @@ impl SettingsDialog {
                 });
             },
         );
+        group_box(ui, p, tr!("Updates"), ui.available_width() - 20.0, |ui| {
+            ui.checkbox(&mut d.check_updates, tr!("Check for updates on startup"));
+        });
     }
 
     fn connecting(&mut self, ui: &mut Ui, p: &Palette) {
