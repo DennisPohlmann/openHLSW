@@ -118,6 +118,28 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   openHLSW brings no fonts of its own.
 - Typing in an open dropdown jumps to the matching entry ("de" → Deutsch).
 
+**Console tool `openhlsw-tui`** (in every package, next to `openhlsw`)
+- openHLSW in the terminal, laid out like the GUI so everything is in the same place: menu
+  bar, server list, details with ping graph on the left, players and rules on the right,
+  the tabs Rcon Config, Console, Chat, Ban List and Change Level at the bottom, status bar.
+  Same server list and console history as the GUI (same config file). Works over SSH.
+- Used like htop and Midnight Commander: Tab / Shift+Tab move between the panels, Alt+1…5
+  (or Ctrl+PgUp / PgDn) switch the tabs, F9 opens the menu bar; F1 help, F2 console, F3 /
+  `/` search, F4 / `\` filter (servers, players or rules), F5 refresh, F6 sort column (`<`
+  `>`, `I` inverts), F7 add, F8 remove, F10 / `q` quit; arrows, PgUp / PgDn and the mouse.
+  `y` copies the address to the terminal's clipboard.
+- Rcon Config: password, Test, Disconnect, Hide, Save (stored like in the GUI). Chat sends
+  `say`; Ban List shows `listid` / `listip` with unban, ban and write; Change Level shows
+  the maps (`maps *` plus the stock maps) with search (`*`, `?`). Not in the console tool
+  yet: receiving the server log (Get Log), so the chat shows only what you send.
+- `openhlsw-tui -d 5` refreshes every 5 s (default 10 s); `-c FILE` uses another
+  config file; addresses on the command line are shown too, without saving them.
+- Servers added or removed in the console tool are written to the config file (only the
+  server list, the RCON settings of a server and the console history; everything else is
+  kept). Close the GUI first, it writes its own list when it exits.
+
+![openhlsw-tui](docs/screenshot-tui.png)
+
 **Not included on purpose**: HLSW login, buddy list, HLSW's web / global server lists (those
 services are gone), Metamod plugin management.
 
@@ -176,7 +198,8 @@ Rust (stable, ≥ 1.95, <https://rustup.rs>), then:
 cargo build --release
 ```
 
-This builds `openhlsw` (the GUI) and `openhlsw-cli` in `target/release/`.
+This builds `openhlsw` (the GUI), `openhlsw-tui` (console tool) and `openhlsw-cli` in
+`target/release/`.
 Linux needs the OpenGL, X11 and Wayland development packages, e.g. on Debian / Ubuntu
 `sudo apt install libxkbcommon-dev libgl1-mesa-dev libwayland-dev`; FreeBSD
 `pkg install pkgconf libX11 libxkbcommon`.
@@ -204,6 +227,8 @@ release with all packages and their `.sha256` files. Never tag by hand. Packagin
 openhlsw-cli 203.0.113.10:27015                  # query info, players, rules
 openhlsw-cli 203.0.113.10:27015 RCON_PASSWORD status
 openhlsw-cli 203.0.113.10:23459:34567            # query a GameSpy server
+openhlsw-tui                                     # the server list in the terminal (htop-like)
+openhlsw-tui -d 5 203.0.113.10:27015             # refresh every 5 s, one extra server
 ```
 
 **Testing without a real server**: `tools/fake_srcds.py` simulates SRCDS (A2S, RCON, log),
@@ -220,6 +245,7 @@ cargo run   # then add 127.0.0.1:27015, RCON password "secret"
 ```
 src/
   address.rs, a2s.rs, gamespy2.rs, rcon.rs   addresses, Valve / GameSpy 2 queries, RCON
+  history.rs                                 RCON console history (GUI and console tool)
   upnp.rs                                    port forwarding in the router (UPnP IGD)
   query/                                     the other query protocols (GameSpy 1, Quake,
                                              Unreal, TeamSpeak, Minecraft, SA-MP, …)
@@ -234,6 +260,7 @@ src/
   i18n.rs, config.rs                         languages, settings file
   server_io.rs                               server list export / import (JSON, CSV, text)
   bin/openhlsw-cli.rs                        command line tool
+  bin/openhlsw-tui/                          console tool (htop-like terminal UI, ratatui)
 vendor/      egui's painting crates with sub-pixel text, see vendor/README.md
 assets/      icons, flags, translations (assets/lang/*.json)
 packaging/   packages and installer
@@ -262,6 +289,6 @@ The game icons in `assets/games/` are **not** covered by this license: they show
 artwork of the respective games, all rights belong to their owners, see
 [`assets/games/NOTICE.txt`](assets/games/NOTICE.txt). The country flags are public domain
 (`assets/FLAGS-LICENSE.txt`). The modified egui crates in `vendor/` are under MIT or
-Apache-2.0. openHLSW includes no fonts. openHLSW is not affiliated with the original HLSW or
+Apache-2.0; the console tool uses ratatui and crossterm (MIT). openHLSW includes no fonts. openHLSW is not affiliated with the original HLSW or
 with any game publisher. The license and these notices are also shown in the program under
 **? → License**.

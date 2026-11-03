@@ -1,7 +1,7 @@
 # openHLSW - notes for Claude
 
 Rust (egui/eframe) remake of HLSW: game server browser and RCON admin tool
-(`openhlsw` GUI, `openhlsw-cli`). Code layout: README section Code. egui's
+(`openhlsw` GUI, `openhlsw-tui` console tool, `openhlsw-cli`). Code layout: README section Code. egui's
 painting crates are patched copies in `vendor/` (see `vendor/README.md`).
 
 Build and check: `cargo clippy --all-targets -- -D warnings`, `cargo test`,

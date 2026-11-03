@@ -21,6 +21,7 @@ modules:
     build-commands:
       - install -Dm755 openhlsw /app/bin/openhlsw
       - install -Dm755 openhlsw-cli /app/bin/openhlsw-cli
+      - install -Dm755 openhlsw-tui /app/bin/openhlsw-tui
       - install -Dm644 openhlsw.png /app/share/icons/hicolor/256x256/apps/io.github.openhlsw.openHLSW.png
       - desktop-file-edit --set-icon=io.github.openhlsw.openHLSW --set-key=StartupWMClass --set-value=io.github.openhlsw.openHLSW openhlsw.desktop
       - install -Dm644 openhlsw.desktop /app/share/applications/io.github.openhlsw.openHLSW.desktop

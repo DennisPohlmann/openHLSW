@@ -72,6 +72,9 @@
         <File Source="$(var.BinDir)\openhlsw-cli.exe" />
       </Component>
       <Component>
+        <File Source="$(var.BinDir)\openhlsw-tui.exe" />
+      </Component>
+      <Component>
         <File Source="$(var.RepoDir)\README.md" />
       </Component>
       <Component>
