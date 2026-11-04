@@ -188,6 +188,14 @@ services are gone), Metamod plugin management.
   CGNAT / DS-Lite no forwarding helps. Without UPnP, forward the port by hand. A firewall
   on this computer must let the port in too, e.g. `sudo ufw allow 27500/udp` (Linux with
   ufw) or `sudo firewall-cmd --add-port=27500/udp --permanent` (firewalld).
+- **Counter-Strike 2 log**: CS2 sends its log only over HTTP. For a CS2 server Get Log sends
+  `logaddress_add_http "http://<your IP>:<port>/log/<secret>/<n>"` and `log on`; openHLSW
+  receives it on the same port number over **TCP** (a small HTTP server that only takes
+  `POST` requests of up to 1 MB to that URL, started together with the UDP listener). The
+  secret is new at every start, so only servers openHLSW asked can send it lines. UPnP
+  forwards the TCP port too; without UPnP forward TCP and UDP by hand, and let the TCP port
+  through a local firewall (`sudo ufw allow 27500/tcp`). The lines show up in the Console
+  and Chat tabs and in the saved logs like those of other Source servers.
 - **Settings** are stored in `config.json` in `%APPDATA%\openHLSW` (Windows),
   `~/.config/openHLSW` (Linux, FreeBSD) or `~/Library/Application Support/openHLSW` (macOS).
   Saved RCON passwords are stored there as plain text, as is the console history (without
@@ -235,7 +243,8 @@ openhlsw-tui -d 5 203.0.113.10:27015             # refresh every 5 s, one extra 
 ```
 
 **Testing without a real server**: `tools/fake_srcds.py` simulates SRCDS (A2S, RCON, log),
-with `--goldsrc` HLDS and with `--gamespy2 <queryport>` a GameSpy 2 server. Unit tests:
+with `--goldsrc` HLDS, with `--cs2` Counter-Strike 2 (log only over HTTP) and with
+`--gamespy2 <queryport>` a GameSpy 2 server. Unit tests:
 `cargo test`.
 
 ```sh
@@ -250,6 +259,7 @@ src/
   address.rs, a2s.rs, gamespy2.rs, rcon.rs   addresses, Valve / GameSpy 2 queries, RCON
   history.rs                                 RCON console history (GUI and console tool)
   upnp.rs                                    port forwarding in the router (UPnP IGD)
+  httplog.rs                                 HTTP log receiver (Counter-Strike 2)
   query/                                     the other query protocols (GameSpy 1, Quake,
                                              Unreal, TeamSpeak, Minecraft, SA-MP, …)
   worker.rs                                  background threads (queries, RCON, log listener)

@@ -194,6 +194,8 @@ struct Server {
     chat: Vec<ChatLine>,
     /// Where the server currently sends its log, and whether it was the Internet variant.
     log_target: Option<(SocketAddr, bool)>,
+    /// The log was asked for over HTTP (Counter-Strike 2, TCP port) instead of UDP.
+    log_http: bool,
     /// Get Log succeeded at this time and no log line has arrived since.
     log_waiting: Option<Instant>,
 }
@@ -312,6 +314,7 @@ impl Server {
             log_requested: None,
             chat: Vec::new(),
             log_target: None,
+            log_http: false,
             log_waiting: None,
         }
     }
@@ -745,6 +748,11 @@ impl Server {
 
     fn is_gamespy(&self) -> bool {
         self.info.as_ref().is_some_and(|i| i.gamespy)
+    }
+
+    /// Counter-Strike 2: sends its log only over HTTP (`logaddress_add_http`).
+    fn is_cs2(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.real_app_id() == 730)
     }
 
     /// Half-Life 1 engine server (UDP RCON, `kick #userid`, `logaddress_add ip port`).
@@ -1491,7 +1499,9 @@ pub struct OpenHlswApp {
     legacy_hide_password: bool,
     last_list_refresh: Option<Instant>,
     traffic: Traffic,
-    log_listener: Option<Result<u16, String>>,
+    log_listener: Option<Result<worker::LogListener, String>>,
+    /// Secret in the URL Counter-Strike 2 servers send their log to (see `httplog`).
+    log_token: String,
     /// Keeps the log port forwarded in the router (UPnP) while the listener runs.
     port_mapper: PortMapper,
     /// Last answer of the router to the forwarding (None: not asked / switched off).
@@ -1689,6 +1699,7 @@ impl OpenHlswApp {
             legacy_hide_password: config.hide_rcon_password,
             last_list_refresh: None,
             log_listener: None,
+            log_token: openhlsw::httplog::new_token(),
             port_mapper,
             port_mapping: None,
             chat_input: String::new(),
@@ -2093,38 +2104,61 @@ impl OpenHlswApp {
     /// port chosen by the OS (kept until the program ends).
     fn ensure_log_listener(&mut self) -> Result<u16, String> {
         let wanted = self.settings.fixed_log_port.then_some(self.settings.log_port);
-        if let Some(Ok(port)) = &self.log_listener
-            && wanted.is_none_or(|w| w == *port)
+        if let Some(Ok(listener)) = &self.log_listener
+            && wanted.is_none_or(|w| w == listener.port)
         {
-            return Ok(*port);
+            return Ok(listener.port);
         }
-        let result = worker::spawn_log_listener(&self.notifier, wanted.unwrap_or(0)).map_err(|e| {
-            match wanted {
-                Some(log_port) => tr!(
-                    "Cannot listen on UDP port {log_port}: {e}",
-                    log_port = log_port,
-                    e = e
-                ),
-                None => tr!("Cannot open a UDP port for server logs: {e}", e = e),
-            }
+        let result = worker::spawn_log_listener(
+            &self.notifier,
+            wanted.unwrap_or(0),
+            self.log_token.clone(),
+        )
+        .map_err(|e| match wanted {
+            Some(log_port) => tr!(
+                "Cannot listen on UDP port {log_port}: {e}",
+                log_port = log_port,
+                e = e
+            ),
+            None => tr!("Cannot open a UDP port for server logs: {e}", e = e),
         });
-        self.log_listener = Some(result.clone());
+        let port = result.as_ref().map(|l| l.port).map_err(Clone::clone);
+        self.log_listener = Some(result);
         self.update_port_mapping();
-        result
+        port
     }
 
     /// The port the log listener runs on, if it runs.
     fn log_port(&self) -> Option<u16> {
         match &self.log_listener {
-            Some(Ok(port)) => Some(*port),
+            Some(Ok(listener)) => Some(listener.port),
             _ => None,
+        }
+    }
+
+    /// The path a Counter-Strike 2 server is told to send its log to, if `cs2`
+    /// (`Ok(None)`: not CS2, the UDP log is used); `Err`: the HTTP log does not run.
+    fn log_http_path(&self, id: ServerId, cs2: bool) -> Result<Option<String>, String> {
+        if !cs2 {
+            return Ok(None);
+        }
+        match &self.log_listener {
+            Some(Ok(worker::LogListener { http: Err(e), port })) => Err(tr!(
+                "Cannot receive the log of Counter-Strike 2 (HTTP) on TCP port {port}: {e}",
+                port = port,
+                e = e
+            )),
+            _ => Ok(Some(openhlsw::httplog::log_path(&self.log_token, id))),
         }
     }
 
     /// Forwards the log port in the router while the listener runs and UPnP is on.
     fn update_port_mapping(&mut self) {
         let port = match &self.log_listener {
-            Some(Ok(port)) if self.settings.upnp => Some(*port),
+            Some(Ok(listener)) if self.settings.upnp => Some(worker::MappedPort {
+                port: listener.port,
+                tcp: listener.http.is_ok(),
+            }),
             _ => None,
         };
         if port.is_none() {
@@ -2152,7 +2186,21 @@ impl OpenHlswApp {
         if !self.settings.upnp {
             return None;
         }
-        Some(match &self.port_mapping {
+        let mut text = self.udp_mapping_status();
+        if let Some(Ok(m)) = &self.port_mapping
+            && m.tcp == Some(false)
+        {
+            text.push(' ');
+            text.push_str(&tr!(
+                "TCP port {port} (log of Counter-Strike 2) could not be forwarded: forward it by hand.",
+                port = m.port
+            ));
+        }
+        Some(text)
+    }
+
+    fn udp_mapping_status(&self) -> String {
+        match &self.port_mapping {
             None if matches!(self.log_listener, Some(Ok(_))) => {
                 tr!("Asking the router to forward the port…").into()
             }
@@ -2183,20 +2231,25 @@ impl OpenHlswApp {
                 "Port forwarding via UPnP failed: {e}. Enable UPnP in the router or forward the port by hand.",
                 e = e
             ),
-        })
+        }
     }
 
-    fn handle_log_line(&mut self, from: SocketAddr, line: String) {
-        // Match by address; srcds sends from its game port, fall back to the IP alone.
-        let idx = self
-            .servers
-            .iter()
-            .position(|s| s.resolved == Some(from))
-            .or_else(|| {
-                self.servers
-                    .iter()
-                    .position(|s| s.resolved.map(|a| a.ip()) == Some(from.ip()))
-            });
+    fn handle_log_line(&mut self, from: SocketAddr, server: Option<ServerId>, line: String) {
+        // HTTP (CS2): the server id is in the URL only that server was given (with the
+        // secret token). UDP: match by address; srcds sends from its game port, fall back
+        // to the IP alone.
+        let idx = match server {
+            Some(id) => self.servers.iter().position(|s| s.id == id && s.log_http),
+            None => self
+                .servers
+                .iter()
+                .position(|s| s.resolved == Some(from))
+                .or_else(|| {
+                    self.servers
+                        .iter()
+                        .position(|s| s.resolved.map(|a| a.ip()) == Some(from.ip()))
+                }),
+        };
         let Some(idx) = idx else { return };
         let chat = parse_chat_line(&line);
         let joined = line.contains("\" entered the game");
@@ -2619,6 +2672,7 @@ impl OpenHlswApp {
                 } => {
                     let public_ip = self.public_ip();
                     let log_port = self.log_port();
+                    let http_path = self.log_http_path(id, true);
                     let Some(s) = self.servers.iter_mut().find(|s| s.id == id) else {
                         continue;
                     };
@@ -2639,15 +2693,21 @@ impl OpenHlswApp {
                             if map_changed {
                                 s.last_rules = None; // limits / next map may have changed
                             }
+                            // Asked again the same way (UDP or HTTP) as the first time.
                             if map_changed
                                 && self.settings.log_on_map_change
                                 && let Some((_, internet)) = s.log_target
                                 && let Some(port) = log_port
+                                && (!s.log_http || http_path.is_ok())
                             {
                                 s.rcon.send(RconRequest::StartLog {
                                     internet,
                                     port,
                                     public_ip,
+                                    http_path: s
+                                        .log_http
+                                        .then(|| http_path.clone().ok().flatten())
+                                        .flatten(),
                                 });
                             }
                             let engine_changed = s.is_goldsrc() != info.goldsrc;
@@ -2846,7 +2906,7 @@ impl OpenHlswApp {
                         }
                     }
                 }
-                Event::Log { from, line } => self.handle_log_line(from, line),
+                Event::Log { from, server, line } => self.handle_log_line(from, server, line),
                 Event::PortMap(result) => {
                     // Stale answer after UPnP was switched off.
                     if !self.settings.upnp {
@@ -2858,7 +2918,12 @@ impl OpenHlswApp {
                         self.status_message = text;
                     }
                 }
-                Event::NoLog { id, port, firewall } => self.report_no_log(id, port, firewall),
+                Event::NoLog {
+                    id,
+                    port,
+                    http,
+                    firewall,
+                } => self.report_no_log(id, port, http, firewall),
                 Event::Geo(result) => match result {
                     Ok(list) => {
                         for (ip, info) in list {
@@ -2897,45 +2962,81 @@ impl OpenHlswApp {
         for s in &mut self.servers {
             if s.log_waiting.is_some_and(|t| t.elapsed() >= LOG_WAIT) {
                 s.log_waiting = None;
-                worker::spawn_no_log_check(&self.notifier, s.id, port);
+                worker::spawn_no_log_check(&self.notifier, s.id, port, s.log_http);
             }
         }
     }
 
-    fn report_no_log(&mut self, id: ServerId, port: u16, firewall: Option<firewall::Firewall>) {
-        let forwarded = matches!(&self.port_mapping, Some(Ok(m)) if m.port == port);
+    fn report_no_log(
+        &mut self,
+        id: ServerId,
+        port: u16,
+        http: bool,
+        firewall: Option<firewall::Firewall>,
+    ) {
+        let forwarded = matches!(&self.port_mapping,
+            Some(Ok(m)) if m.port == port && (!http || m.tcp == Some(true)));
         let Some(s) = self.server_mut(id) else { return };
         // A line may have arrived while the firewall was checked.
-        if s.log_target.is_none() || s.log_waiting.is_some() {
+        if s.log_target.is_none() || s.log_waiting.is_some() || s.log_http != http {
             return;
         }
         let internet = s.log_target.is_some_and(|(_, internet)| internet);
-        let mut text = tr!(
-            "No server log arrived on UDP port {port} within {secs} s.",
-            port = port,
-            secs = LOG_WAIT.as_secs()
-        );
+        let mut text = if http {
+            tr!(
+                "No server log (HTTP, Counter-Strike 2) arrived on TCP port {port} within {secs} s.",
+                port = port,
+                secs = LOG_WAIT.as_secs()
+            )
+        } else {
+            tr!(
+                "No server log arrived on UDP port {port} within {secs} s.",
+                port = port,
+                secs = LOG_WAIT.as_secs()
+            )
+        };
         if internet && !forwarded {
             text.push(' ');
-            text.push_str(&tr!(
-                "Check that the router forwards UDP port {port} to this computer.",
-                port = port
-            ));
+            text.push_str(&if http {
+                tr!(
+                    "Check that the router forwards TCP port {port} to this computer.",
+                    port = port
+                )
+            } else {
+                tr!(
+                    "Check that the router forwards UDP port {port} to this computer.",
+                    port = port
+                )
+            });
         }
         match firewall {
             Some(firewall::Firewall::Ufw) => {
                 text.push(' ');
-                text.push_str(&tr!(
-                    "ufw is on and may block it: sudo ufw allow {port}/udp",
-                    port = port
-                ));
+                text.push_str(&if http {
+                    tr!(
+                        "ufw is on and may block it: sudo ufw allow {port}/tcp",
+                        port = port
+                    )
+                } else {
+                    tr!(
+                        "ufw is on and may block it: sudo ufw allow {port}/udp",
+                        port = port
+                    )
+                });
             }
             Some(firewall::Firewall::FirewalldClosed) => {
                 text.push(' ');
-                text.push_str(&tr!(
-                    "firewalld blocks it: sudo firewall-cmd --permanent --add-port={port}/udp && sudo firewall-cmd --reload",
-                    port = port
-                ));
+                text.push_str(&if http {
+                    tr!(
+                        "firewalld blocks it: sudo firewall-cmd --permanent --add-port={port}/tcp && sudo firewall-cmd --reload",
+                        port = port
+                    )
+                } else {
+                    tr!(
+                        "firewalld blocks it: sudo firewall-cmd --permanent --add-port={port}/udp && sudo firewall-cmd --reload",
+                        port = port
+                    )
+                });
             }
             None if cfg!(windows) => {
                 text.push(' ');
@@ -3912,13 +4013,26 @@ impl OpenHlswApp {
                 // Asks the router again if the last forwarding failed (e.g. UPnP was off).
                 self.update_port_mapping();
                 let public_ip = self.public_ip();
+                let cs2 = self.server(id).is_some_and(Server::is_cs2);
+                let http_path = match self.log_http_path(id, cs2) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        if let Some(s) = self.server_mut(id) {
+                            s.append_console(&format!("*** {e}"));
+                        }
+                        self.status_message = e;
+                        return;
+                    }
+                };
                 if let Some(s) = self.server_mut(id) {
                     s.log_target = Some((SocketAddr::from(([0, 0, 0, 0], port)), internet));
+                    s.log_http = http_path.is_some();
                     s.use_typed_rcon_password();
                     s.rcon.send(RconRequest::StartLog {
                         internet,
                         port,
                         public_ip,
+                        http_path,
                     });
                     self.status_message = tr!("Requesting log of {address}…", address = s.address);
                 }

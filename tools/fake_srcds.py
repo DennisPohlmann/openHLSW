@@ -2,7 +2,9 @@
 """Minimal fake SRCDS for testing openHLSW without a real game server.
 
 Answers A2S_INFO / A2S_PLAYER / A2S_RULES on UDP (with challenges and split
-packets, like current srcds builds) and speaks Source RCON on TCP.
+packets, like current srcds builds) and speaks Source RCON on TCP. With --cs2 it
+reports itself as Counter-Strike 2 and sends its log only over HTTP
+(logaddress_add_http), like CS2 does.
 
     python3 tools/fake_srcds.py --port 27015 --password secret
 """
@@ -12,6 +14,7 @@ import socket
 import struct
 import threading
 import time
+import urllib.request
 
 CHALLENGE = struct.pack("<i", random.randint(1, 2**31 - 1))
 START = time.time()
@@ -44,6 +47,7 @@ class Server:
         self.ban_ips = {"10.11.12.13": "permanent"}
         self.maps = ["de_dust2", "de_inferno", "de_nuke", "cs_office", "cs_italy", "de_train", "aim_deagle_forever"]
         self.log_targets = set()
+        self.http_targets = set()
         self.query_times = {}
         self.stats = {"queries": 0, "dropped": 0}
         self.log_enabled = False
@@ -58,14 +62,15 @@ class Server:
             p += cstr("Condition Zero") + bytes([len(self.players), 32, 48, ord("D"), ord("L"),
                                                 1 if a.sv_password else 0, 0, 1, 0])
             return p
-        p = b"I" + bytes([17]) + cstr(a.name) + cstr(self.map) + cstr("cstrike")
-        p += cstr("Counter-Strike: Source") + struct.pack("<H", 240)
+        folder, game, app = ("csgo", "Counter-Strike 2", 730) if a.cs2 else ("cstrike", "Counter-Strike: Source", 240)
+        p = b"I" + bytes([17]) + cstr(a.name) + cstr(self.map) + cstr(folder)
+        p += cstr(game) + struct.pack("<H", app)
         p += bytes([len(self.players), 32, 0, ord("d"), ord("l"), 1 if a.sv_password else 0, 1])
         p += cstr("6630498")
         p += bytes([0x80 | 0x10 | 0x20 | 0x01])
         p += struct.pack("<H", a.port) + struct.pack("<Q", 90000000000000001)
         p += cstr("alltalk,increased_maxplayers,startmoney")
-        p += struct.pack("<Q", 240)
+        p += struct.pack("<Q", app)
         return p
 
     def player_list(self):
@@ -296,6 +301,12 @@ class Server:
             return ""
         if name in ("writeid", "writeip"):
             return ""
+        if name == "logaddress_add_http" and rest:
+            url = " ".join(rest).strip('"')
+            self.http_targets.add(url)
+            return f'logaddress_add_http:  "{url}"\n'
+        if name == "logaddress_add" and rest and self.args.cs2:
+            return ""  # CS2 sends no UDP log
         if name == "logaddress_add" and rest:
             host, port = (rest[0], rest[1]) if len(rest) >= 2 else rest[0].rsplit(":", 1)
             self.log_targets.add((host, int(port)))
@@ -309,12 +320,25 @@ class Server:
         if not self.log_enabled:
             return
         stamp = time.strftime("%m/%d/%Y - %H:%M:%S")
+        if self.args.cs2:
+            ms = int(time.time() * 1000) % 1000
+            body = f"{stamp}.{ms:03d} - {text}\n".encode()
+            for url in list(self.http_targets):
+                threading.Thread(target=self.post_log, args=(url, body), daemon=True).start()
+            return
         pkt = (b"\xff\xff\xff\xfflog L " if self.args.goldsrc else b"\xff\xff\xff\xffRL ") + f"{stamp}: {text}\n".encode() + b"\0"
         for target in list(self.log_targets):
             try:
                 self.log_sock.sendto(pkt, target)
             except OSError:
                 pass
+
+    def post_log(self, url, body):
+        req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "text/plain"})
+        try:
+            urllib.request.urlopen(req, timeout=5).close()
+        except OSError as e:
+            print(f"log POST to {url} failed: {e}")
 
     def chatter(self):
         lines = ["gg", "rush b", "nice shot", "who is coming?", "lol", "noob", "brb"]
@@ -363,6 +387,7 @@ if __name__ == "__main__":
     ap.add_argument("--latency", type=float, default=0, help="simulated ping in ms (randomised 30-100 %%)")
     ap.add_argument("--gamespy2", type=int, default=0, metavar="QUERYPORT", help="also answer GameSpy 2 queries on this UDP port")
     ap.add_argument("--goldsrc", action="store_true", help="behave like HLDS (Condition Zero): 'm' info, UDP rcon")
+    ap.add_argument("--cs2", action="store_true", help="behave like Counter-Strike 2: app 730, log only over HTTP (logaddress_add_http)")
     ap.add_argument("--max-queries-sec", type=float, default=3.0, help="like sv_max_queries_sec (0 = off)")
     ap.add_argument("--max-queries-window", type=float, default=30.0, help="like sv_max_queries_window")
     Server(ap.parse_args()).run()

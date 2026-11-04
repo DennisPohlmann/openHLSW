@@ -1,9 +1,10 @@
 //! Background work for the GUI: A2S queries on short-lived threads, one
-//! long-lived RCON thread per server and one UDP listener for server logs.
+//! long-lived RCON thread per server and one listener for server logs (UDP, and HTTP
+//! on the same TCP port number for Counter-Strike 2).
 //! Results come back as [`Event`]s over a channel; every send also wakes the UI.
 
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -46,9 +47,11 @@ pub enum Event {
     Geo(Result<Vec<(IpAddr, crate::geo::GeoInfo)>, String>),
     /// Tag of the latest openHLSW release (update check), `None` when GitHub gave none.
     LatestRelease(Option<String>),
-    /// One line from a server log stream (`logaddress_add`).
+    /// One line from a server log stream (`logaddress_add`, `logaddress_add_http`).
     Log {
         from: SocketAddr,
+        /// The server the log URL was given to (HTTP); `None`: find it by `from` (UDP).
+        server: Option<ServerId>,
         line: String,
     },
     /// Result of forwarding the log port in the router (UPnP), see [`PortMapper`].
@@ -58,6 +61,8 @@ pub enum Event {
     NoLog {
         id: ServerId,
         port: u16,
+        /// The log was asked for over HTTP (TCP port), not UDP.
+        http: bool,
         firewall: Option<crate::firewall::Firewall>,
     },
 }
@@ -94,6 +99,8 @@ impl From<a2s::QueryError> for QueryFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortMapping {
     pub port: u16,
+    /// The TCP port (HTTP log, Counter-Strike 2) was asked for and is forwarded too.
+    pub tcp: Option<bool>,
     /// The router's Internet address, if it told us.
     pub external_ip: Option<IpAddr>,
 }
@@ -358,11 +365,16 @@ fn other_protocol(
 }
 
 /// Checks the local firewall for the log port after a server's log did not arrive.
-pub fn spawn_no_log_check(notifier: &Notifier, id: ServerId, port: u16) {
+pub fn spawn_no_log_check(notifier: &Notifier, id: ServerId, port: u16, http: bool) {
     let n = notifier.clone();
     thread::spawn(move || {
-        let firewall = crate::firewall::check(port);
-        n.send(Event::NoLog { id, port, firewall });
+        let firewall = crate::firewall::check(port, if http { "tcp" } else { "udp" });
+        n.send(Event::NoLog {
+            id,
+            port,
+            http,
+            firewall,
+        });
     });
 }
 
@@ -391,11 +403,48 @@ pub fn spawn_update_check(notifier: &Notifier, homepage: &'static str) {
 // Server log receiver
 // --------------------------------------------------------------------------
 
-/// Binds the UDP log port (0: a free port chosen by the OS) and forwards every received
-/// log line. Returns the bound port.
-pub fn spawn_log_listener(notifier: &Notifier, port: u16) -> std::io::Result<u16> {
-    let socket = UdpSocket::bind(("0.0.0.0", port))?;
+/// The running log listener.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogListener {
+    /// UDP port of the log, and TCP port of the HTTP log (the same number).
+    pub port: u16,
+    /// Whether the HTTP log (Counter-Strike 2) runs on TCP `port`, or why not.
+    pub http: Result<(), String>,
+}
+
+/// Binds the UDP log port (0: a free port chosen by the OS) and the same TCP port for the
+/// HTTP log of Counter-Strike 2 ([`openhlsw::httplog`], requests must carry `token`), and
+/// forwards every received log line. A random port is one that is free for both.
+pub fn spawn_log_listener(
+    notifier: &Notifier,
+    port: u16,
+    token: String,
+) -> std::io::Result<LogListener> {
+    let (socket, tcp) = if port != 0 {
+        let socket = UdpSocket::bind(("0.0.0.0", port))?;
+        (socket, TcpListener::bind(("0.0.0.0", port)))
+    } else {
+        let mut tries = 0;
+        loop {
+            let socket = UdpSocket::bind(("0.0.0.0", 0))?;
+            let tcp = TcpListener::bind(("0.0.0.0", socket.local_addr()?.port()));
+            tries += 1;
+            if tcp.is_ok() || tries >= 20 {
+                break (socket, tcp);
+            }
+        }
+    };
     let port = socket.local_addr()?.port();
+    let http = tcp.and_then(|listener| {
+        let n = notifier.clone();
+        openhlsw::httplog::serve(listener, token, move |id, from, line| {
+            n.send(Event::Log {
+                from,
+                server: Some(id),
+                line,
+            });
+        })
+    });
     let n = notifier.clone();
     thread::Builder::new()
         .name("log-listener".into())
@@ -407,11 +456,18 @@ pub fn spawn_log_listener(notifier: &Notifier, port: u16) -> std::io::Result<u16
                 };
                 openhlsw::stats::add_received(len + 28);
                 if let Some(line) = parse_log_packet(&buf[..len]) {
-                    n.send(Event::Log { from, line });
+                    n.send(Event::Log {
+                        from,
+                        server: None,
+                        line,
+                    });
                 }
             }
         })?;
-    Ok(port)
+    Ok(LogListener {
+        port,
+        http: http.map_err(|e| e.to_string()),
+    })
 }
 
 // --------------------------------------------------------------------------
@@ -423,10 +479,11 @@ const MAPPING_LEASE: u32 = 3600;
 const MAPPING_RENEW: Duration = Duration::from_secs(MAPPING_LEASE as u64 / 2);
 const MAPPING_RETRY: Duration = Duration::from_secs(120);
 
-/// Thread that keeps the UDP log port forwarded in the router while it is wanted and
-/// removes the forwarding when it is no longer wanted or the program ends.
+/// Thread that keeps the UDP log port (and the TCP port of the HTTP log) forwarded in
+/// the router while it is wanted and removes the forwarding when it is no longer wanted
+/// or the program ends.
 pub struct PortMapper {
-    tx: Option<Sender<Option<u16>>>,
+    tx: Option<Sender<Option<MappedPort>>>,
     done: Receiver<()>,
 }
 
@@ -446,7 +503,7 @@ impl PortMapper {
     }
 
     /// Forward `port` (`None`: remove the forwarding).
-    pub fn set(&self, port: Option<u16>) {
+    pub fn set(&self, port: Option<MappedPort>) {
         if let Some(tx) = &self.tx {
             let _ = tx.send(port);
         }
@@ -459,9 +516,25 @@ impl PortMapper {
     }
 }
 
-fn port_mapper(n: &Notifier, rx: &Receiver<Option<u16>>) {
-    let mut wanted: Option<u16> = None;
-    let mut mapped: Option<(upnp::Gateway, u16)> = None;
+/// The log port to forward, and whether its TCP port (HTTP log) is wanted too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MappedPort {
+    pub port: u16,
+    pub tcp: bool,
+}
+
+impl MappedPort {
+    fn delete(self, gateway: &upnp::Gateway) {
+        let _ = gateway.delete_port_mapping("UDP", self.port);
+        if self.tcp {
+            let _ = gateway.delete_port_mapping("TCP", self.port);
+        }
+    }
+}
+
+fn port_mapper(n: &Notifier, rx: &Receiver<Option<MappedPort>>) {
+    let mut wanted: Option<MappedPort> = None;
+    let mut mapped: Option<(upnp::Gateway, MappedPort)> = None;
     let mut next_try: Option<Instant> = None;
     loop {
         let request = match next_try {
@@ -479,16 +552,17 @@ fn port_mapper(n: &Notifier, rx: &Receiver<Option<u16>>) {
             Err(mpsc::RecvTimeoutError::Timeout) => {} // renew or retry
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if let Some((gateway, port)) = mapped.take() {
-                    let _ = gateway.delete_port_mapping("UDP", port);
+                    port.delete(&gateway);
                 }
                 return;
             }
         }
         if let Some((gateway, port)) = mapped.take_if(|(_, port)| Some(*port) != wanted) {
-            let _ = gateway.delete_port_mapping("UDP", port);
+            port.delete(&gateway);
         }
         next_try = None;
-        let Some(port) = wanted else { continue };
+        let Some(want) = wanted else { continue };
+        let port = want.port;
         let gateway = match mapped.take() {
             Some((gateway, _)) => Ok(gateway),
             None => upnp::discover(Duration::from_secs(2)),
@@ -502,15 +576,31 @@ fn port_mapper(n: &Notifier, rx: &Receiver<Option<u16>>) {
                 MAPPING_LEASE,
                 "openHLSW server log",
             )?;
-            Ok(gateway)
+            // The UDP log works without it: a refused TCP forwarding is only reported.
+            let tcp = want.tcp.then(|| {
+                gateway
+                    .add_port_mapping(
+                        "TCP",
+                        port,
+                        SocketAddr::new(local, port),
+                        MAPPING_LEASE,
+                        "openHLSW server log (HTTP)",
+                    )
+                    .is_ok()
+            });
+            Ok((gateway, tcp))
         });
         match result {
-            Ok(gateway) => {
+            Ok((gateway, tcp)) => {
                 let external_ip = gateway.external_ip().ok();
                 // Permanent mappings (lease 0) are refreshed too, e.g. after a router restart.
                 next_try = Some(Instant::now() + MAPPING_RENEW);
-                mapped = Some((gateway, port));
-                n.send(Event::PortMap(Ok(PortMapping { port, external_ip })));
+                mapped = Some((gateway, want));
+                n.send(Event::PortMap(Ok(PortMapping {
+                    port,
+                    tcp,
+                    external_ip,
+                })));
             }
             Err(e) => {
                 next_try = Some(Instant::now() + MAPPING_RETRY);
@@ -550,11 +640,13 @@ pub enum RconRequest {
         command: String,
         tag: RconTag,
     },
-    /// `logaddress_add <our ip>:<port>` + `log on`.
+    /// `logaddress_add <our ip>:<port>` + `log on`; with `http_path` (Counter-Strike 2)
+    /// `logaddress_add_http "http://<our ip>:<port><http_path>"` instead.
     StartLog {
         internet: bool,
         port: u16,
         public_ip: Option<IpAddr>,
+        http_path: Option<String>,
     },
     Disconnect,
 }
@@ -663,8 +755,9 @@ impl RconWorker {
                     internet,
                     port,
                     public_ip,
+                    http_path,
                 } => {
-                    let result = self.start_log(internet, port, public_ip);
+                    let result = self.start_log(internet, port, public_ip, http_path.as_deref());
                     self.emit(RconEvent::LogStarted(result));
                 }
             }
@@ -785,6 +878,7 @@ impl RconWorker {
         internet: bool,
         port: u16,
         public_ip: Option<IpAddr>,
+        http_path: Option<&str>,
     ) -> Result<SocketAddr, String> {
         let (address, _) = self.target.clone().ok_or(tr!("No RCON password set"))?;
         let server = address.resolve().map_err(|e| format!("DNS: {e}"))?;
@@ -798,8 +892,10 @@ impl RconWorker {
             local_ip_towards(server).map_err(|e| tr!("Could not determine LAN IP: {e}", e = e))?
         };
         let target = SocketAddr::new(ip, port);
-        // HLDS wants "ip port", srcds "ip:port".
-        let cmd = if self.goldsrc {
+        // HLDS wants "ip port", srcds "ip:port", CS2 an URL (HTTP only).
+        let cmd = if let Some(path) = http_path {
+            format!("logaddress_add_http \"http://{target}{path}\"")
+        } else if self.goldsrc {
             format!("logaddress_add {ip} {port}")
         } else {
             format!("logaddress_add {target}")

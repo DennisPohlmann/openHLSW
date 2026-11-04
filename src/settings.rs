@@ -1403,6 +1403,7 @@ impl SettingsDialog {
             }));
                 ui.label(tr!("Port the server log is received on (Get Log). Must be forwarded for Get Log (Internet)."));
                 ui.label(tr!("Without a fixed port openHLSW listens on a free port chosen at start."));
+                ui.label(tr!("Counter-Strike 2 sends its log over HTTP: it arrives on the same port number over TCP (forwarded via UPnP too)."));
                 if let Some(msg) = port_test.as_ref() {
                     ui.label(RichText::new(msg).color(p.link));
                 }

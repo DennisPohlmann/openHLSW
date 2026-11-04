@@ -13,14 +13,14 @@ pub enum Firewall {
     FirewalldClosed,
 }
 
-/// Checks the firewalls this program knows for UDP `port`. Runs `firewall-cmd`, so call it
-/// off the UI thread.
-pub fn check(port: u16) -> Option<Firewall> {
+/// Checks the firewalls this program knows for `port` of `proto` ("udp" or "tcp"). Runs
+/// `firewall-cmd`, so call it off the UI thread.
+pub fn check(port: u16, proto: &str) -> Option<Firewall> {
     if cfg!(target_os = "linux") {
         if std::fs::read_to_string("/etc/ufw/ufw.conf").is_ok_and(|conf| ufw_enabled(&conf)) {
             return Some(Firewall::Ufw);
         }
-        if firewalld_port_closed(port) {
+        if firewalld_port_closed(port, proto) {
             return Some(Firewall::FirewalldClosed);
         }
     }
@@ -44,9 +44,9 @@ fn ufw_enabled(conf: &str) -> bool {
 
 /// firewalld answers "no" for a port that is not open; "yes", an error or a missing
 /// `firewall-cmd` (firewalld not installed or not running) count as not closed.
-fn firewalld_port_closed(port: u16) -> bool {
+fn firewalld_port_closed(port: u16, proto: &str) -> bool {
     Command::new("firewall-cmd")
-        .arg(format!("--query-port={port}/udp"))
+        .arg(format!("--query-port={port}/{proto}"))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
