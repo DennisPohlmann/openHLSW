@@ -2448,13 +2448,8 @@ impl OpenHlswApp {
             .iter()
             .filter(|a| a.enabled && !a.command.trim().is_empty())
         {
-            let command = app
-                .command
-                .replace("%addr%", addr)
-                .replace("%ip%", host)
-                .replace("%port%", port);
-            if let Err(e) = run_shell(&command) {
-                self.status_message = tr!("Could not run {command}: {e}", command = command, e = e);
+            if let Err(e) = run_command(&app.command, addr, host, port) {
+                self.status_message = tr!("Could not run {command}: {e}", command = app.command, e = e);
             }
         }
         match self.settings.on_connect {
@@ -10732,7 +10727,11 @@ fn parse_status_players(text: &str) -> Vec<StatusPlayer> {
         } else if trimmed.ends_with('\'') && trimmed.contains(" '") {
             // CS2: id time ping loss state rate adr 'name'
             let start = trimmed.find(" '").unwrap_or(0);
-            let name = trimmed[start + 2..trimmed.len() - 1].to_string();
+            // A line like "x '" has no room for a name: skip it, never panic.
+            let Some(name) = trimmed.get(start + 2..trimmed.len() - 1) else {
+                continue;
+            };
+            let name = name.to_string();
             let t: Vec<&str> = trimmed[..start].split_whitespace().collect();
             let Some(userid) = t.first().and_then(|x| x.parse::<u32>().ok()) else {
                 continue;
@@ -12015,21 +12014,33 @@ fn play_sound(file: &str) {
     });
 }
 
-fn run_shell(command: &str) -> std::io::Result<()> {
-    use std::process::Command;
+/// Starts an "Execute applications on connect" command line without a shell: split like
+/// [`split_args`], then `%addr%`, `%ip%` and `%port%` replaced in each argument, so a
+/// server address can never add commands or arguments.
+fn run_command(template: &str, addr: &str, host: &str, port: &str) -> std::io::Result<()> {
+    let args = command_args(template, addr, host, port);
+    let Some((program, rest)) = args.split_first() else {
+        return Ok(());
+    };
+    let mut command = std::process::Command::new(program);
+    command.args(rest);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        Command::new("cmd")
-            .args(["/C", command])
-            .creation_flags(0x0800_0000)
-            .spawn()?;
+        command.creation_flags(0x0800_0000);
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new("sh").args(["-c", command]).spawn()?;
-    }
-    Ok(())
+    command.spawn().map(drop)
+}
+
+fn command_args(template: &str, addr: &str, host: &str, port: &str) -> Vec<String> {
+    split_args(template)
+        .into_iter()
+        .map(|a| {
+            a.replace("%addr%", addr)
+                .replace("%ip%", host)
+                .replace("%port%", port)
+        })
+        .collect()
 }
 
 /// Common srcds console commands and cvars for Tab completion.
@@ -12221,6 +12232,19 @@ fn status_line(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_commands_keep_the_address_in_one_argument() {
+        assert_eq!(
+            command_args(r#"ts3 "--server=%ip%" %port% %addr%"#, "h:1", "h;id", "1"),
+            ["ts3", "--server=h;id", "1", "h:1"]
+        );
+    }
+
+    #[test]
+    fn status_line_without_room_for_a_name_does_not_panic() {
+        assert!(parse_status_players("x '\n  '\n").is_empty());
+    }
 
     #[test]
     fn host_budget_slows_down_after_icmp_errors() {

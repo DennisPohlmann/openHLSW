@@ -14,6 +14,16 @@ pub struct ServerAddress {
     pub query_port: Option<u16>,
 }
 
+/// A hostname, IPv4 or IPv6 address (with `%zone`): letters, digits and `.-_:%` only.
+/// The host ends up in commands, URLs and game arguments; an imported server list must
+/// not smuggle shell or URL syntax in.
+fn valid_host(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_alphanumeric() || ".-_:%".contains(c))
+}
+
 impl ServerAddress {
     pub fn parse(text: &str) -> Option<Self> {
         let mut s = text.trim();
@@ -27,7 +37,7 @@ impl ServerAddress {
 
         // host:gameport:queryport (GameSpy 2)
         let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() == 3 && !parts[0].is_empty() && !s.starts_with('[') {
+        if parts.len() == 3 && valid_host(parts[0]) && !s.starts_with('[') {
             let port = |p: &str| p.parse::<u16>().ok().filter(|&p| p != 0);
             if let (Some(port), Some(query)) = (port(parts[1]), port(parts[2])) {
                 return Some(Self {
@@ -54,7 +64,7 @@ impl ServerAddress {
             (s, None) // plain host or bare IPv6 without port
         };
 
-        if host.is_empty() {
+        if !valid_host(host) {
             return None;
         }
         let port = match port {
@@ -134,6 +144,17 @@ mod tests {
         assert!(ServerAddress::parse("host:99999").is_none());
         assert!(ServerAddress::parse("").is_none());
         assert!(ServerAddress::parse("a b").is_none());
+        for bad in [
+            "x;id;#:27015",
+            "x&calc&:27015",
+            "$(id):27015",
+            "a|b",
+            "[::1;x]:1",
+            "`id`:1:2",
+        ] {
+            assert!(ServerAddress::parse(bad).is_none(), "{bad}");
+        }
+        assert!(ServerAddress::parse("[fe80::1%eth0]:27015").is_some());
         let a = ServerAddress::parse("203.0.113.232:23459:34567").unwrap();
         assert_eq!((a.port, a.query_port), (23459, Some(34567)));
         assert_eq!(a.to_string(), "203.0.113.232:23459:34567");
