@@ -36,7 +36,10 @@ Ready-made packages are on the [releases page](https://github.com/DennisPohlmann
 - **Windows**: the `.msi` lets you choose the folder and adds a Start menu entry; updates
   keep your settings. The portable `.zip` runs from any folder.
 - **Linux**: `.deb` / `.rpm` add a desktop entry; the binaries also run on older
-  distributions. Flatpak: `flatpak install --user openhlsw-…flatpak`.
+  distributions. For servers and machines without a display there is
+  `openhlsw-headless` (`.deb` / `.rpm`): only the console tool `openhlsw-tui` and
+  `openhlsw-cli`, no GUI and no X11 / Wayland / OpenGL libraries needed. Install either
+  `openhlsw` or `openhlsw-headless`; the full package already contains both tools. Flatpak: `flatpak install --user openhlsw-…flatpak`.
 - **macOS**: drag openHLSW to Applications. The app is only ad-hoc signed: on the first
   start, right-click → Open (or `xattr -dr com.apple.quarantine /Applications/openHLSW.app`).
 - **FreeBSD**: unpack the `.tar.gz` and start `openhlsw`.

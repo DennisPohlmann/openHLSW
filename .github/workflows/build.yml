@@ -138,10 +138,14 @@ jobs:
           rm -rf "dist/$name"
 
       - name: Package .deb
-        run: cargo deb --no-build --no-strip --target ${{ matrix.target }} --output dist/
+        run: |
+          cargo deb --no-build --no-strip --target ${{ matrix.target }} --output dist/
+          cargo deb --no-build --no-strip --target ${{ matrix.target }} --variant headless --output dist/
 
       - name: Package .rpm
-        run: cargo generate-rpm --target ${{ matrix.target }} --output dist/
+        run: |
+          cargo generate-rpm --target ${{ matrix.target }} --output dist/
+          cargo generate-rpm --target ${{ matrix.target }} --variant headless --output dist/
 
       - run: ls -l dist
       - uses: actions/upload-artifact@v7

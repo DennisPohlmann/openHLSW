@@ -66,6 +66,30 @@ assets = [
     ["assets/games/NOTICE.txt", "usr/share/doc/openhlsw/GAME-ICONS-NOTICE.txt", "644"],
 ]
 
+# Only one of openhlsw and openhlsw-headless can be installed: both ship the console tools.
+conflicts = "openhlsw-headless"
+replaces = "openhlsw-headless"
+
+# openhlsw-headless: only the console tool and the command line tool, for servers and
+# machines without a display (no X11 / Wayland / GL). `cargo deb --variant headless`
+[package.metadata.deb.variants.headless]
+name = "openhlsw-headless"
+extended-description = """\
+openHLSW without the graphical program: the console tool openhlsw-tui (laid out like \
+the GUI, used like htop / Midnight Commander) and the command line tool openhlsw-cli, \
+for servers and machines without a display or over SSH."""
+depends = "libc6"
+section = "net"
+conflicts = "openhlsw"
+replaces = "openhlsw"
+assets = [
+    ["target/release/openhlsw-cli", "usr/bin/", "755"],
+    ["target/release/openhlsw-tui", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/openhlsw-headless/", "644"],
+    ["CHANGELOG.md", "usr/share/doc/openhlsw-headless/", "644"],
+    ["LICENSE", "usr/share/doc/openhlsw-headless/", "644"],
+]
+
 [package.metadata.generate-rpm]
 summary = "Game server browser and RCON admin tool (HLSW remake)"
 assets = [
@@ -78,6 +102,21 @@ assets = [
     { source = "CHANGELOG.md", dest = "/usr/share/doc/openhlsw/CHANGELOG.md", mode = "644", doc = true },
     { source = "LICENSE", dest = "/usr/share/licenses/openhlsw/LICENSE", mode = "644", doc = true },
     { source = "assets/games/NOTICE.txt", dest = "/usr/share/doc/openhlsw/GAME-ICONS-NOTICE.txt", mode = "644", doc = true },
+]
+
+conflicts = { openhlsw-headless = "*" }
+
+# `cargo generate-rpm --variant headless`, see the deb variant above.
+[package.metadata.generate-rpm.variants.headless]
+name = "openhlsw-headless"
+summary = "Console and command line tools of openHLSW (no GUI)"
+conflicts = { openhlsw = "*" }
+assets = [
+    { source = "target/release/openhlsw-cli", dest = "/usr/bin/openhlsw-cli", mode = "755" },
+    { source = "target/release/openhlsw-tui", dest = "/usr/bin/openhlsw-tui", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/openhlsw-headless/README.md", mode = "644", doc = true },
+    { source = "CHANGELOG.md", dest = "/usr/share/doc/openhlsw-headless/CHANGELOG.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/openhlsw-headless/LICENSE", mode = "644", doc = true },
 ]
 
 # Patched copies of egui's painting crates for sharper text (RGB sub-pixel text rendering,
