@@ -3,6 +3,7 @@
 //! Console, Chat, Ban List and Change Level at the bottom); it is used like htop and
 //! Midnight Commander: Tab moves between the panels, F9 opens the menu bar, F keys below.
 
+use openhlsw::clean_terminal_text as clean;
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -125,15 +126,6 @@ fn push_lines(
     while lines.len() > CONSOLE_LINES {
         lines.pop_front();
     }
-}
-
-/// Text from a server, safe for the terminal: control characters (escape sequences!)
-/// become spaces, tabs four spaces.
-pub fn clean(text: &str) -> String {
-    text.replace('\t', "    ")
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
 }
 
 impl Server {

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use openhlsw::a2s;
 use openhlsw::address::ServerAddress;
+use openhlsw::clean_terminal_text as clean;
 use openhlsw::rcon::{GoldSrcRcon, RconClient};
 
 const TIMEOUT: Duration = Duration::from_secs(3);
@@ -46,11 +47,16 @@ fn main() -> ExitCode {
         };
         return match result {
             Ok(out) => {
-                print!("{out}");
+                // Server text must not reach the terminal as escape sequences.
+                let lines: Vec<String> = out
+                    .split('\n')
+                    .map(|line| clean(line.trim_end_matches('\r')))
+                    .collect();
+                print!("{}", lines.join("\n"));
                 ExitCode::SUCCESS
             }
             Err(e) => {
-                eprintln!("rcon: {e}");
+                eprintln!("rcon: {}", clean(&e.to_string()));
                 ExitCode::FAILURE
             }
         };
@@ -63,33 +69,38 @@ fn main() -> ExitCode {
     };
     match info {
         Ok((info, ping)) => {
-            println!("{} ({}) ping {} ms", info.name, address, ping.as_millis());
+            println!(
+                "{} ({}) ping {} ms",
+                clean(&info.name),
+                address,
+                ping.as_millis()
+            );
             println!(
                 "  game    {} [{}], appid {}{}",
-                info.game,
-                info.folder,
+                clean(&info.game),
+                clean(&info.folder),
                 info.app_id,
                 if info.goldsrc { " (GoldSrc)" } else { "" }
             );
-            println!("  map     {}", info.map);
+            println!("  map     {}", clean(&info.map));
             println!(
                 "  players {}/{} ({} bots)",
                 info.players, info.max_players, info.bots
             );
             println!(
                 "  version {} {} {} vac={} pw={}",
-                info.version,
+                clean(&info.version),
                 info.os_name(),
                 info.server_type_name(),
                 info.vac,
                 info.passworded
             );
             if let Some(k) = &info.keywords {
-                println!("  tags    {k}");
+                println!("  tags    {}", clean(k));
             }
         }
         Err(e) => {
-            eprintln!("info: {e}");
+            eprintln!("info: {}", clean(&e.to_string()));
             return ExitCode::FAILURE;
         }
     }
@@ -102,10 +113,10 @@ fn main() -> ExitCode {
         Ok(players) => {
             println!("players ({}):", players.len());
             for p in players {
-                println!("  {:<32} {:>5} {:>8.0}s", p.name, p.score, p.duration);
+                println!("  {:<32} {:>5} {:>8.0}s", clean(&p.name), p.score, p.duration);
             }
         }
-        Err(e) => eprintln!("players: {e}"),
+        Err(e) => eprintln!("players: {}", clean(&e.to_string())),
     }
     let rules = if gamespy {
         openhlsw::gamespy2::query_rules(addr, TIMEOUT).map(|(r, _)| r)
@@ -116,13 +127,13 @@ fn main() -> ExitCode {
         Ok(rules) => {
             println!("rules ({}):", rules.len());
             for r in rules.iter().take(15) {
-                println!("  {} = {}", r.key, r.value);
+                println!("  {} = {}", clean(&r.key), clean(&r.value));
             }
             if rules.len() > 15 {
                 println!("  ...");
             }
         }
-        Err(e) => eprintln!("rules: {e}"),
+        Err(e) => eprintln!("rules: {}", clean(&e.to_string())),
     }
     ExitCode::SUCCESS
 }

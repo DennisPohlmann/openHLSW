@@ -16,6 +16,15 @@ pub mod stats;
 pub mod steamid;
 pub mod upnp;
 
+/// Text from a server, safe for the terminal: control characters (escape sequences!)
+/// become spaces, tabs four spaces.
+pub fn clean_terminal_text(text: &str) -> String {
+    text.replace('\t', "    ")
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 /// Writes `data` to `path` readable only by the owner on Unix (mode 0600, also when the
 /// file already exists): for files that hold RCON passwords.
 pub fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
