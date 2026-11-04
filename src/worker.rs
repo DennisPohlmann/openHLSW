@@ -50,8 +50,9 @@ pub enum Event {
     /// One line from a server log stream (`logaddress_add`, `logaddress_add_http`).
     Log {
         from: SocketAddr,
-        /// The server the log URL was given to (HTTP); `None`: find it by `from` (UDP).
-        server: Option<ServerId>,
+        /// The secret key from the log URL of the server it was given to (HTTP, see the
+        /// app's `log_key`); `None`: find the server by `from` (UDP).
+        server: Option<u64>,
         line: String,
     },
     /// Result of forwarding the log port in the router (UPnP), see [`PortMapper`].

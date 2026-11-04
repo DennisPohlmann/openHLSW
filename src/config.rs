@@ -116,7 +116,7 @@ pub fn save(config: &Config) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
     // Write to a temp file first so a crash never leaves a truncated config behind.
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
+    openhlsw::write_private(&tmp, json.as_bytes())?;
     std::fs::rename(tmp, path)
 }
 

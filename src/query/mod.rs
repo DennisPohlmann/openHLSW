@@ -473,18 +473,35 @@ pub(crate) fn tcp_send(stream: &mut TcpStream, data: &[u8]) -> Result<(), QueryE
     Ok(())
 }
 
-/// Reads until `complete` finds the answer complete (returns its length).
+/// Most bytes one TCP answer may take (like `http.rs`).
+const TCP_MAX_ANSWER: usize = 8 << 20;
+/// Longest one TCP answer may take in all (the read timeout only bounds each read).
+const TCP_ANSWER_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Reads until `complete` finds the answer complete (returns its length). At most
+/// [`TCP_MAX_ANSWER`] bytes and [`TCP_ANSWER_DEADLINE`]: the server is untrusted.
 pub(crate) fn tcp_read_until(
     stream: &mut TcpStream,
     buf: &mut Vec<u8>,
     mut complete: impl FnMut(&[u8]) -> Option<usize>,
 ) -> Result<Vec<u8>, QueryError> {
+    let deadline = Instant::now() + TCP_ANSWER_DEADLINE;
     let mut chunk = [0u8; 8192];
     loop {
         if let Some(len) = complete(buf) {
-            let answer = buf[..len].to_vec();
+            // A length from a lossy UTF-8 view can be past the raw bytes: no panic.
+            let answer = buf
+                .get(..len)
+                .ok_or_else(|| QueryError::Protocol("Bad answer".into()))?
+                .to_vec();
             buf.drain(..len);
             return Ok(answer);
+        }
+        if buf.len() > TCP_MAX_ANSWER {
+            return Err(QueryError::Protocol("Answer too large".into()));
+        }
+        if Instant::now() > deadline {
+            return Err(QueryError::Protocol("Answer too slow".into()));
         }
         let n = stream.read(&mut chunk)?;
         if n == 0 {
@@ -603,6 +620,32 @@ pub(crate) fn truthy(v: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A local server that sends `data` and then keeps the connection open.
+    fn serve_once(data: Vec<u8>) -> TcpStream {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut c, _) = listener.accept().unwrap();
+            let _ = c.write_all(&data);
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        tcp_connect(addr, Duration::from_secs(2)).unwrap()
+    }
+
+    #[test]
+    fn tcp_answers_are_bounded() {
+        // No terminator in 9 MB: refused, not read for ever.
+        let mut s = serve_once(vec![b'x'; TCP_MAX_ANSWER + (1 << 20)]);
+        let r = tcp_read_until(&mut s, &mut Vec::new(), |_| None);
+        assert!(matches!(r, Err(QueryError::Protocol(m)) if m == "Answer too large"));
+        // A length from a lossy UTF-8 view past the raw bytes: an error, no panic.
+        let mut s = serve_once(b"\xff\xff\xff</tsqp>".to_vec());
+        let r = tcp_read_until(&mut s, &mut Vec::new(), |b| {
+            String::from_utf8_lossy(b).find("</tsqp>").map(|e| e + 7)
+        });
+        assert!(r.is_err());
+    }
 
     #[test]
     fn strips_colors() {

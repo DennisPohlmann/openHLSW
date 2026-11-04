@@ -1502,6 +1502,9 @@ pub struct OpenHlswApp {
     log_listener: Option<Result<worker::LogListener, String>>,
     /// Secret in the URL Counter-Strike 2 servers send their log to (see `httplog`).
     log_token: String,
+    /// Secret key for the number in each server's log URL: a CS2 server that knows its own
+    /// URL cannot guess another server's (the ids only count up).
+    log_keys: std::collections::hash_map::RandomState,
     /// Keeps the log port forwarded in the router (UPnP) while the listener runs.
     port_mapper: PortMapper,
     /// Last answer of the router to the forwarding (None: not asked / switched off).
@@ -1700,6 +1703,7 @@ impl OpenHlswApp {
             last_list_refresh: None,
             log_listener: None,
             log_token: openhlsw::httplog::new_token(),
+            log_keys: Default::default(),
             port_mapper,
             port_mapping: None,
             chat_input: String::new(),
@@ -2138,6 +2142,11 @@ impl OpenHlswApp {
 
     /// The path a Counter-Strike 2 server is told to send its log to, if `cs2`
     /// (`Ok(None)`: not CS2, the UDP log is used); `Err`: the HTTP log does not run.
+    /// The number in the log URL of server `id` (see `log_keys`).
+    fn log_key(&self, id: ServerId) -> u64 {
+        std::hash::BuildHasher::hash_one(&self.log_keys, id)
+    }
+
     fn log_http_path(&self, id: ServerId, cs2: bool) -> Result<Option<String>, String> {
         if !cs2 {
             return Ok(None);
@@ -2148,7 +2157,10 @@ impl OpenHlswApp {
                 port = port,
                 e = e
             )),
-            _ => Ok(Some(openhlsw::httplog::log_path(&self.log_token, id))),
+            _ => Ok(Some(openhlsw::httplog::log_path(
+                &self.log_token,
+                self.log_key(id),
+            ))),
         }
     }
 
@@ -2234,12 +2246,16 @@ impl OpenHlswApp {
         }
     }
 
-    fn handle_log_line(&mut self, from: SocketAddr, server: Option<ServerId>, line: String) {
-        // HTTP (CS2): the server id is in the URL only that server was given (with the
-        // secret token). UDP: match by address; srcds sends from its game port, fall back
-        // to the IP alone.
+    fn handle_log_line(&mut self, from: SocketAddr, server: Option<u64>, line: String) {
+        let line = mask_rcon_password(line);
+        // HTTP (CS2): the URL carries the secret token and the server's own secret key
+        // (`log_key`) only that server was given. UDP: match by address; srcds sends from
+        // its game port, fall back to the IP alone.
         let idx = match server {
-            Some(id) => self.servers.iter().position(|s| s.id == id && s.log_http),
+            Some(key) => self
+                .servers
+                .iter()
+                .position(|s| s.log_http && self.log_key(s.id) == key),
             None => self
                 .servers
                 .iter()
@@ -2643,14 +2659,7 @@ impl OpenHlswApp {
                     .replace("<PASSWORD>", self.join_password.trim())
                     .replace("<RCONPASSWORD>", &s.rcon_password)
                     .replace("<PLAYERNAME>", name);
-                while let Some(start) = arg.find("<RULE(") {
-                    let Some(end) = arg[start..].find(")>") else {
-                        break;
-                    };
-                    let key = arg[start + 6..start + end].to_string();
-                    let value = s.rule(&key).unwrap_or_default().to_string();
-                    arg.replace_range(start..start + end + 2, &value);
-                }
+                expand_rules(&mut arg, |key| s.rule(key));
                 arg
             })
             .collect()
@@ -11949,6 +11958,52 @@ fn parse_chat_line(line: &str) -> Option<ChatLine> {
 }
 
 /// Appends a log line to `<config dir>/logs/<server>/<YYYY-MM-DD>.<ext>`.
+/// Replaces every `<RULE(key)>` in `arg` with that server rule ("" if unknown). Searches
+/// on after each inserted value: a rule value (from the server) that holds `<RULE(` again
+/// is not expanded, or it could loop for ever.
+fn expand_rules<'a>(arg: &mut String, rule: impl Fn(&str) -> Option<&'a str>) {
+    let mut from = 0;
+    while let Some(start) = arg[from..].find("<RULE(").map(|i| from + i) {
+        let Some(end) = arg[start..].find(")>") else {
+            break;
+        };
+        let value = rule(&arg[start + 6..start + end]).unwrap_or_default().to_string();
+        arg.replace_range(start..start + end + 2, &value);
+        from = start + value.len();
+    }
+}
+
+/// HLDS logs every RCON command with its password: `Rcon: "rcon <challenge> "<password>"
+/// <command>" from ...` (also `Bad Rcon: ...`). The password becomes `***` before the line
+/// is shown or saved.
+fn mask_rcon_password(line: String) -> String {
+    let Some(at) = line.find("Rcon: \"rcon ") else {
+        return line;
+    };
+    let rest = at + "Rcon: \"rcon ".len();
+    let Some(open) = line[rest..].find(" \"").map(|i| rest + i + 2) else {
+        return line;
+    };
+    let Some(close) = line[open..].find('"').map(|i| open + i) else {
+        return line;
+    };
+    format!("{}***{}", &line[..open], &line[close..])
+}
+
+/// `MM/DD/YYYY` at the start of a log line → `YYYY-MM-DD`, else `log`. Digits only: the
+/// line comes from the network and must not put `..`, `\\` or `C:` into the file name.
+fn log_file_date(line: &str) -> String {
+    let b = line.as_bytes();
+    let digits =
+        |r: std::ops::Range<usize>| b.get(r).is_some_and(|d| d.iter().all(u8::is_ascii_digit));
+    let slash = |i: usize| b.get(i) == Some(&b'/');
+    if digits(0..2) && slash(2) && digits(3..5) && slash(5) && digits(6..10) {
+        format!("{}-{}-{}", &line[6..10], &line[..2], &line[3..5])
+    } else {
+        "log".into()
+    }
+}
+
 fn append_log_file(server: &str, line: &str, ext: &str) {
     use std::io::Write as _;
     let Some(base) = config::path().and_then(|p| p.parent().map(|d| d.join("logs"))) else {
@@ -11956,13 +12011,7 @@ fn append_log_file(server: &str, line: &str, ext: &str) {
     };
     let dir = base.join(server.replace([':', '[', ']', '/', '\\'], "_"));
     // Log lines start with "MM/DD/YYYY - hh:mm:ss: ".
-    let date = line
-        .get(..10)
-        .and_then(|d| {
-            let mut it = d.split('/');
-            Some(format!("{}-{}-{}", it.nth(2)?, d.get(..2)?, d.get(3..5)?))
-        })
-        .unwrap_or_else(|| "log".into());
+    let date = log_file_date(line);
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -12232,6 +12281,39 @@ fn status_line(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rule_values_are_not_expanded_again() {
+        let rule = |k: &str| match k {
+            "k" => Some("<RULE(k)>x"),
+            "rate" => Some("25000"),
+            _ => None,
+        };
+        let mut arg = "+rate <RULE(rate)> <RULE(k)> <RULE(none)>".to_string();
+        expand_rules(&mut arg, rule);
+        assert_eq!(arg, "+rate 25000 <RULE(k)>x ");
+    }
+
+    #[test]
+    fn rcon_passwords_are_masked_in_log_lines() {
+        assert_eq!(
+            mask_rcon_password(
+                r#"11/04/2026 - 05:49:02: Rcon: "rcon 1234 "s3cret" status" from "192.0.2.1:27005""#
+                    .into()
+            ),
+            r#"11/04/2026 - 05:49:02: Rcon: "rcon 1234 "***" status" from "192.0.2.1:27005""#
+        );
+        let other = r#"11/04/2026 - 05:49:02: "Ann<2><STEAM_0:1:1><>" say "hi""#;
+        assert_eq!(mask_rcon_password(other.into()), other);
+    }
+
+    #[test]
+    fn log_file_date_takes_digits_only() {
+        assert_eq!(log_file_date("11/04/2026 - 05:49:02: x"), "2026-11-04");
+        for bad in ["AB/CD/D:\\a x", "11/04/..\\x", "11/04/\\\\h\\ x", "short", "ä1/04/2026"] {
+            assert_eq!(log_file_date(bad), "log", "{bad}");
+        }
+    }
 
     #[test]
     fn connect_commands_keep_the_address_in_one_argument() {

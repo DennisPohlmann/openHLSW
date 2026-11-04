@@ -578,6 +578,11 @@ fn update_saved(old: &mut SavedServer, new: &SavedServer) {
             match f {
                 Field::Game => old.game.clone_from(&new.game),
                 Field::Comment => old.comment.clone_from(&new.comment),
+                // Parameters from a file must not put the RCON password the user saved
+                // into game arguments chosen by someone else.
+                Field::Params
+                    if new.params.contains("<RCONPASSWORD>")
+                        && !Field::RconPassword.present(new) => {}
                 Field::Params => old.params.clone_from(&new.params),
                 Field::RconPassword => old.rcon_password.clone_from(&new.rcon_password),
                 Field::HideRconPassword => old.hide_rcon_password = new.hide_rcon_password,
@@ -751,6 +756,19 @@ mod tests {
         assert_eq!(s.game, None);
         assert_eq!(s.hide_rcon_password, None);
         assert!(!s.comment.is_empty());
+    }
+
+    #[test]
+    fn imported_params_do_not_get_the_saved_rcon_password() {
+        let mut old = server("192.0.2.1:27015");
+        let mut new = server("192.0.2.1:27015");
+        new.rcon_password = None;
+        new.params = "+exec <RCONPASSWORD>".into();
+        update_saved(&mut old, &new);
+        assert!(!old.params.contains("<RCONPASSWORD>"));
+        new.rcon_password = Some("theirs".into());
+        update_saved(&mut old, &new);
+        assert_eq!(old.params, "+exec <RCONPASSWORD>");
     }
 
     #[test]

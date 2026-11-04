@@ -56,7 +56,8 @@ fn command(
     words: &[&str],
 ) -> Result<Vec<String>, QueryError> {
     super::tcp_send(stream, &packet(words))?;
-    loop {
+    // Events the server sends on its own are skipped, but not for ever.
+    for _ in 0..1000 {
         let raw = super::tcp_read_until(stream, buf, |b| {
             let size = u32::from_le_bytes(b.get(4..8)?.try_into().ok()?) as usize;
             (size >= 12 && b.len() >= size).then_some(size)
@@ -76,6 +77,7 @@ fn command(
         words.remove(0);
         return Ok(words);
     }
+    Err(bad("no answer"))
 }
 
 pub fn decode(raw: &[u8]) -> Option<Vec<String>> {

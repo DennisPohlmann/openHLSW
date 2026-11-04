@@ -8,12 +8,14 @@
 //! The URL carries a random secret ([`new_token`]) and the id of the server that was
 //! asked for its log, so a request is only taken from a server we gave the URL to.
 
+use std::cell::Cell;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Largest request body taken (CS2 sends a few KB per request).
 pub const MAX_BODY: usize = 1 << 20;
@@ -25,7 +27,9 @@ const MAX_HEADERS: usize = 64;
 const MAX_CONNECTIONS: usize = 32;
 /// Most requests on one keep-alive connection before it is closed.
 const MAX_REQUESTS: usize = 10_000;
-/// A connection that sends nothing for this long is closed.
+/// A request must have arrived in full this long after the connection was opened or the
+/// last answer was sent; else the connection is closed. A total, not per read, so 32
+/// senders trickling one byte at a time cannot hold every connection slot.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A random secret for the log URL (32 hex digits). From the OS-seeded keys of std's
@@ -97,14 +101,50 @@ fn handle_connection(
     on_line: &dyn Fn(u64, SocketAddr, String),
 ) -> std::io::Result<()> {
     let peer = stream.peer_addr()?;
-    stream.set_read_timeout(Some(IDLE_TIMEOUT))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    let deadline = Rc::new(Cell::new(Instant::now() + IDLE_TIMEOUT));
+    let mut writer = Timed {
+        stream: stream.try_clone()?,
+        deadline: deadline.clone(),
+    };
+    let mut reader = BufReader::new(Timed { stream, deadline });
     serve_requests(&mut reader, &mut writer, token, &mut |id, line| {
         crate::stats::add_received(line.len() + 1);
         on_line(id, peer, line);
     })
+}
+
+/// The connection with the [`IDLE_TIMEOUT`] deadline: reads fail once it has passed, an
+/// answer sent (flush) starts it again.
+struct Timed {
+    stream: TcpStream,
+    deadline: Rc<Cell<Instant>>,
+}
+
+impl Read for Timed {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self
+            .deadline
+            .get()
+            .saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
+impl Write for Timed {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()?;
+        self.deadline.set(Instant::now() + IDLE_TIMEOUT);
+        Ok(())
+    }
 }
 
 /// Answers the requests on one connection until it is closed, an error occurs or a
@@ -460,6 +500,36 @@ mod tests {
         assert!(run(many.as_bytes()).0.starts_with("HTTP/1.1 431 "));
         // Closed right away: no answer at all.
         assert_eq!(run(b"").0, "");
+    }
+
+    #[test]
+    fn trickling_sender_hits_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let mut c = TcpStream::connect(addr).unwrap();
+            // One byte every 50 ms: each read is quick, the request never ends.
+            while c.write_all(b"x").is_ok() {
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let (stream, _) = listener.accept().unwrap();
+        let start = Instant::now();
+        let mut timed = Timed {
+            stream,
+            deadline: Rc::new(Cell::new(start + Duration::from_millis(300))),
+        };
+        let mut buf = [0u8; 16];
+        let err = loop {
+            if let Err(e) = timed.read(&mut buf) {
+                break e;
+            }
+        };
+        assert!(matches!(
+            err.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

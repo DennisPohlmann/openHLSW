@@ -15,6 +15,11 @@ const SERVERDATA_AUTH_RESPONSE: i32 = 2;
 const SERVERDATA_EXECCOMMAND: i32 = 2;
 const SERVERDATA_RESPONSE_VALUE: i32 = 0;
 const MAX_PACKET_SIZE: i32 = 1 << 20;
+/// Most bytes one command may receive in all (cvarlist is a few 100 KB): the server is
+/// untrusted and could otherwise stream packets for ever.
+const MAX_OUTPUT: usize = 16 << 20;
+/// Most packets skipped while waiting for the login answer.
+const MAX_LOGIN_PACKETS: usize = 64;
 /// How long the server may stay silent after sending output before we consider
 /// the response complete (for servers that do not mirror the terminator packet).
 const QUIET_AFTER_OUTPUT: std::time::Duration = std::time::Duration::from_millis(1500);
@@ -88,7 +93,7 @@ impl RconClient {
         let auth_id = client.next_id();
         client.send(auth_id, SERVERDATA_AUTH, password.as_bytes())?;
 
-        loop {
+        for _ in 0..MAX_LOGIN_PACKETS {
             // srcds sends an empty RESPONSE_VALUE before the AUTH_RESPONSE; skip it.
             let packet = client.read_packet().map_err(|e| match e {
                 RconError::Closed => RconError::Protocol(
@@ -106,6 +111,7 @@ impl RconClient {
                 return Ok(client);
             }
         }
+        Err(RconError::Protocol("No login answer".into()))
     }
 
     /// Sets how long `exec` waits for output (long commands like `cvarlist` may need more).
@@ -122,6 +128,7 @@ impl RconClient {
         self.send(terminator, SERVERDATA_RESPONSE_VALUE, b"")?;
 
         let mut output = Vec::new();
+        let mut received = 0usize;
         let full_timeout = self.stream.read_timeout().ok().flatten();
         let result = loop {
             let packet = match self.read_packet() {
@@ -131,6 +138,10 @@ impl RconClient {
                 Err(RconError::Timeout) if !output.is_empty() => break Ok(()),
                 Err(e) => break Err(e),
             };
+            received += 10 + packet.body.len();
+            if received > MAX_OUTPUT {
+                break Err(RconError::Protocol("Answer too large".into()));
+            }
             if packet.kind != SERVERDATA_RESPONSE_VALUE {
                 continue;
             }
@@ -335,6 +346,7 @@ impl GoldSrcRcon {
         let mut splits: std::collections::HashMap<u32, Vec<(u8, u8, Vec<u8>)>> =
             std::collections::HashMap::new();
         let mut got_any = false;
+        let mut received = 0usize;
         let started = std::time::Instant::now();
         let mut last = started;
         loop {
@@ -352,12 +364,19 @@ impl GoldSrcRcon {
             let Some(n) = self.recv(&mut buf, wait)? else {
                 break;
             };
+            received += n;
+            if received > MAX_OUTPUT {
+                return Err(RconError::Protocol("Answer too large".into()));
+            }
             let data = &buf[..n];
             let payload = if data.starts_with(&[0xFF; 4]) {
                 Some(data[4..].to_vec())
             } else if data.len() > 9 && data.starts_with(&(-2i32).to_le_bytes()) {
                 let id = u32::from_le_bytes(data[4..8].try_into().unwrap());
                 let (num, total) = (data[8] >> 4, data[8] & 0x0F);
+                if splits.len() >= 64 && !splits.contains_key(&id) {
+                    splits.clear(); // incomplete answers that never finish
+                }
                 let parts = splits.entry(id).or_default();
                 parts.push((num, total, data[9..].to_vec()));
                 if total > 0 && parts.len() >= total as usize {
@@ -387,6 +406,44 @@ impl GoldSrcRcon {
 mod tests {
     use super::*;
     use std::net::UdpSocket;
+
+    fn source_packet(id: i32, kind: i32, body: &[u8]) -> Vec<u8> {
+        let mut p = ((body.len() + 10) as i32).to_le_bytes().to_vec();
+        p.extend(id.to_le_bytes());
+        p.extend(kind.to_le_bytes());
+        p.extend(body);
+        p.extend([0, 0]);
+        p
+    }
+
+    #[test]
+    fn source_output_is_bounded() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut c, _) = listener.accept().unwrap();
+            let _ = c.write_all(&source_packet(1, SERVERDATA_AUTH_RESPONSE, b""));
+            // Output for the command (id 2) for ever, never the terminator.
+            let chunk = source_packet(2, SERVERDATA_RESPONSE_VALUE, &[b'x'; 1 << 19]);
+            while c.write_all(&chunk).is_ok() {}
+        });
+        let mut client = RconClient::connect(addr, "pw", Duration::from_secs(2)).unwrap();
+        assert!(
+            matches!(client.exec("cvarlist"), Err(RconError::Protocol(m)) if m == "Answer too large")
+        );
+    }
+
+    #[test]
+    fn source_login_does_not_wait_for_ever() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut c, _) = listener.accept().unwrap();
+            let junk = source_packet(9, SERVERDATA_RESPONSE_VALUE, b"");
+            while c.write_all(&junk).is_ok() {}
+        });
+        assert!(RconClient::connect(addr, "pw", Duration::from_secs(2)).is_err());
+    }
 
     #[test]
     fn goldsrc_login_survives_one_icmp_error() {

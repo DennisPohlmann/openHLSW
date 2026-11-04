@@ -3,6 +3,8 @@
 //!   openhlsw-cli <host:port>                       query info, players and rules
 //!   openhlsw-cli <host:port:queryport>             same for a GameSpy 2 server
 //!   openhlsw-cli <host:port> <rcon-password> <cmd> run an RCON command
+//!   openhlsw-cli <host:port> - <cmd>               same, password from $OPENHLSW_RCON_PASSWORD
+//!                                                  (an argument is visible to others in `ps`)
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -30,12 +32,17 @@ fn main() -> ExitCode {
 
     if args.len() >= 3 {
         let command = args[2..].join(" ");
+        let password = if args[1] == "-" {
+            std::env::var("OPENHLSW_RCON_PASSWORD").unwrap_or_default()
+        } else {
+            args[1].clone()
+        };
         // GoldSrc (Half-Life 1) servers use UDP RCON.
         let goldsrc = a2s::query_info(addr, TIMEOUT).is_ok_and(|(i, _)| i.goldsrc);
         let result = if goldsrc {
-            GoldSrcRcon::connect(addr, &args[1], TIMEOUT).and_then(|mut c| c.exec(&command))
+            GoldSrcRcon::connect(addr, &password, TIMEOUT).and_then(|mut c| c.exec(&command))
         } else {
-            RconClient::connect(addr, &args[1], TIMEOUT).and_then(|mut c| c.exec(&command))
+            RconClient::connect(addr, &password, TIMEOUT).and_then(|mut c| c.exec(&command))
         };
         return match result {
             Ok(out) => {

@@ -237,6 +237,7 @@ release with all packages and their `.sha256` files. Never tag by hand. Packagin
 ```sh
 openhlsw-cli 203.0.113.10:27015                  # query info, players, rules
 openhlsw-cli 203.0.113.10:27015 RCON_PASSWORD status
+OPENHLSW_RCON_PASSWORD=RCON_PASSWORD openhlsw-cli 203.0.113.10:27015 - status   # not visible in ps
 openhlsw-cli 203.0.113.10:23459:34567            # query a GameSpy server
 openhlsw-tui                                     # the server list in the terminal (htop-like)
 openhlsw-tui -d 5 203.0.113.10:27015             # refresh every 5 s, one extra server

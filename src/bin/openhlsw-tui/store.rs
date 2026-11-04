@@ -128,7 +128,7 @@ impl Store {
         let json = serde_json::to_string_pretty(&Value::Object(self.doc.clone()))
             .map_err(io::Error::other)?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
+        openhlsw::write_private(&tmp, json.as_bytes())?;
         std::fs::rename(tmp, path)
     }
 
