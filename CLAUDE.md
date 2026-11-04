@@ -21,7 +21,8 @@ since the last tag, set the
 version (`tools/set-version.sh`), write `CHANGELOG.md`, commit
 `chore(release): vX.Y.Z [skip ci]`, tag `vX.Y.Z` and publish the GitHub
 release, to which the packages built from that tag are added. There is no
-tag-triggered workflow. Dependabot (`.github/dependabot.yml`) suggests
+tag-triggered workflow. A macOS job without a runner is re-run automatically
+(`retry-macos.yml`); re-running a release run uploads only missing packages. Dependabot (`.github/dependabot.yml`) suggests
 crate and GitHub Actions updates; egui updates stay manual.
 
 ## Security is part of every change (mandatory)

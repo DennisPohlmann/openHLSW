@@ -15,6 +15,8 @@ name: build
 # creates the GitHub release; the packages are then built from that tag and added to the
 # release, each with a .sha256 file. Without a feat/fix/breaking commit since the last
 # tag no release is made. A manual run without "release" only builds.
+# The packages are added once every package job has succeeded; "Re-run failed jobs" of a
+# release run adds what the release still lacks.
 # Workflow artifacts are kept 7 days; release packages stay in the GitHub release.
 on:
   push:
@@ -309,7 +311,10 @@ jobs:
     name: macos universal
     needs: [check, release]
     if: ${{ !cancelled() && needs.check.result == 'success' && needs.release.result != 'failure' }}
-    runs-on: macos-26
+    # The arm64 pool often has no capacity and GitHub cancels the job after 15 minutes without
+    # a runner. retry-macos.yml then re-runs it, and a re-run takes the Intel pool, which
+    # builds the same universal packages.
+    runs-on: ${{ github.run_attempt == 1 && 'macos-26' || 'macos-26-intel' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -437,7 +442,8 @@ jobs:
   upload:
     name: add the packages to the release
     needs: [release, linux, flatpak, windows, macos, freebsd]
-    if: ${{ !cancelled() && needs.release.outputs.version != '' }}
+    # All or nothing: a release never shows only some of its packages.
+    if: ${{ !cancelled() && needs.release.outputs.version != '' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
     runs-on: ubuntu-26.04
     permissions:
       contents: write
@@ -458,7 +464,19 @@ jobs:
             cat "$f.sha256"
           done
       - run: ls -l dist
+      # Only what the release lacks, so a re-run adds the missing packages and never touches
+      # published ones. --clobber replaces an upload that broke off half way.
       - name: upload
+        working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "v$RELEASE" dist/* --repo "$GITHUB_REPOSITORY"
+        run: |
+          have=$(gh release view "v$RELEASE" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | select(.state == "uploaded") | .name')
+          missing=$(ls | grep -vxF -- "$have" || true)
+          if [ -z "$missing" ]; then
+            echo "The release already has every package."
+            exit 0
+          fi
+          echo "$missing"
+          gh release upload "v$RELEASE" $missing --clobber --repo "$GITHUB_REPOSITORY"

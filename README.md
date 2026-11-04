@@ -231,6 +231,9 @@ kept 7 days). Releases are made on demand only: run the workflow manually on `ma
 `Cargo.toml` and `Cargo.lock`, writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
 release with all packages and their `.sha256` files. Never tag by hand. Packaging files are in `packaging/`
 (Linux desktop entry and Flatpak, WiX installer, macOS `Info.plist`).
+A macOS job that gets no runner is re-run automatically (`retry-macos.yml`, from the second
+attempt on the Intel runners). The packages are added to the release once every package
+job has succeeded; re-running a release run adds only what the release still lacks.
 
 **Command line**:
 
