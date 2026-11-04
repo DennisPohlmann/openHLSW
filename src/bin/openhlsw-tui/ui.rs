@@ -639,7 +639,7 @@ fn draw_tab_labels(f: &mut Frame, app: &mut App, area: Rect) {
         ));
     }
     spans.push(Span::styled(
-        "   Alt+1…5 / Ctrl+PgUp/PgDn",
+        "   Alt+1…5 / Shift+←→ / Esc",
         Style::new().fg(Color::DarkGray),
     ));
     f.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -1081,7 +1081,7 @@ fn fkeys(keys: &[(&str, &str)]) -> Vec<Span<'static>> {
             k.to_string(),
             Style::new().fg(Color::White).bg(Color::Black),
         ));
-        spans.push(Span::styled(format!("{label:<6}"), bar()));
+        spans.push(Span::styled(format!("{label:<6} "), bar()));
     }
     spans
 }
@@ -1146,6 +1146,9 @@ fn draw_keys(f: &mut Frame, app: &App, area: Rect) {
                     Tab::ChangeLevel => keys.extend([("F5", "Update"), ("Enter", "Change")]),
                     _ => keys.push(("F5", "Refrsh")),
                 },
+            }
+            if app.focus == Pane::Tabs {
+                keys.push(("Esc", "Back"));
             }
             keys.extend([("F9", "Menu"), ("F10", "Quit"), ("Tab", "Panel")]);
             fkeys(&keys)
@@ -1241,7 +1244,10 @@ const HELP: &[(&str, &str)] = &[
         "Alt+1 … Alt+5",
         "tabs Rcon Config, Console, Chat, Ban List, Change Level",
     ),
-    ("Ctrl+PgUp/PgDn", "previous / next tab (in the tabs)"),
+    (
+        "Shift+←→, Ctrl+PgUp/PgDn",
+        "previous / next tab (in the tabs)",
+    ),
     ("F9", "menu bar (arrows, Enter; first letter opens a menu)"),
     ("Esc", "back to the server list, clears a filter"),
     ("", ""),

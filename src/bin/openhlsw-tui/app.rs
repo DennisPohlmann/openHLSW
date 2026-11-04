@@ -756,8 +756,9 @@ impl App {
     // Background work
     // ----------------------------------------------------------------------
 
-    /// Queries every idle server when the refresh time has come (or `force`); the selected
-    /// server also gets players and rules, and right after it got selected.
+    /// Queries every idle server, with players and rules, when the refresh time has come
+    /// (or `force`), so every server stays current; the selected one also right after it got
+    /// selected.
     pub fn tick(&mut self, force: bool) {
         while let Ok(event) = self.rx.try_recv() {
             self.handle_event(event);
@@ -779,15 +780,13 @@ impl App {
                 continue;
             }
             s.busy = true;
-            if is_selected {
-                s.details_at = Some(Instant::now());
-            }
+            s.details_at = Some(Instant::now());
             jobs.push(QueryJob {
                 id: s.id,
                 address: s.address.clone(),
                 protocol: s.protocol(),
                 game: s.game.map_or("", |g| g.key),
-                details: is_selected,
+                details: true,
                 challenge: s.challenge,
             });
         }
@@ -1151,10 +1150,17 @@ impl App {
 
     fn tabs_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        // Ctrl+PgUp / Ctrl+PgDn switch tabs, like in many terminal programs.
-        if ctrl && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        // Ctrl+PgUp / Ctrl+PgDn or Shift+← / Shift+→ switch tabs, like in many terminal programs.
+        if (ctrl && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown))
+            || (shift && matches!(key.code, KeyCode::Left | KeyCode::Right))
+        {
             let i = TABS.iter().position(|(t, _)| *t == self.tab).unwrap_or(0) as isize;
-            let step = if key.code == KeyCode::PageUp { -1 } else { 1 };
+            let step = if matches!(key.code, KeyCode::PageUp | KeyCode::Left) {
+                -1
+            } else {
+                1
+            };
             return self.open_tab(TABS[(i + step).rem_euclid(TABS.len() as isize) as usize].0);
         }
         if self.current().is_none() {

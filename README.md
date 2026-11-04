@@ -127,8 +127,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   the tabs Rcon Config, Console, Chat, Ban List and Change Level at the bottom, status bar.
   Same server list and console history as the GUI (same config file). Works over SSH.
 - Used like htop and Midnight Commander: Tab / Shift+Tab move between the panels, Alt+1…5
-  (or Ctrl+PgUp / PgDn) switch the tabs, F9 opens the menu bar; F1 help, F2 console, F3 /
-  `/` search, F4 / `\` filter (servers, players or rules), F5 refresh, F6 sort column (`<`
+  (or Shift+← / →, Ctrl+PgUp / PgDn, Esc and then 1…5) switch the tabs, F9 opens the menu
+  bar; F1 help, F2 console, F3 / `/` search, F4 / `\` filter (servers, players or rules), F5 refresh, F6 sort column (`<`
   `>`, `I` inverts), F7 add, F8 remove, F10 / `q` quit; arrows, PgUp / PgDn and the mouse.
   `y` copies the address to the terminal's clipboard.
 - Rcon Config: password, Test, Disconnect, Hide, Save (stored like in the GUI). Chat sends
