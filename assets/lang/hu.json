@@ -101,6 +101,7 @@
  "Check for updates...": "Frissítések keresése...",
  "Check that the router forwards TCP port {port} to this computer.": "Ellenőrizze, hogy a router továbbítja-e a(z) {port} TCP-portot erre a számítógépre.",
  "Check that the router forwards UDP port {port} to this computer.": "Ellenőrizze, hogy a router továbbítja-e a(z) {port} UDP-portot erre a számítógépre.",
+ "Checking for updates...": "Frissítések keresése folyamatban...",
  "Clear": "Törlés",
  "Clear chat": "Chat törlése",
  "Clear console": "Konzol törlése",

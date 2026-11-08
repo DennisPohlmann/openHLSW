@@ -101,6 +101,7 @@
  "Check for updates...": "Sprawdź aktualizacje...",
  "Check that the router forwards TCP port {port} to this computer.": "Sprawdź, czy router przekierowuje port TCP {port} na ten komputer.",
  "Check that the router forwards UDP port {port} to this computer.": "Sprawdź, czy router przekierowuje port UDP {port} na ten komputer.",
+ "Checking for updates...": "Sprawdzanie aktualizacji...",
  "Clear": "Wyczyść",
  "Clear chat": "Wyczyść czat",
  "Clear console": "Wyczyść konsolę",

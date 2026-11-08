@@ -1171,11 +1171,15 @@ fn unwrap_paragraphs(text: &str) -> String {
 /// third-party parts.
 /// "About openHLSW", laid out like HLSW's About window: a banner, the program details in a
 /// white box, the homepage link and Close.
+#[allow(clippy::too_many_arguments)]
 fn about_view(
     ui: &mut Ui,
     icon: Option<&egui::TextureHandle>,
     close: &mut bool,
     open_license: &mut bool,
+    update: UpdateStatus,
+    check_updates: &mut bool,
+    download: &mut bool,
     actions: &mut Vec<Action>,
 ) {
     let width = 400.0;
@@ -1248,7 +1252,7 @@ fn about_view(
             // Tall enough for all of it at the default text size; scrolls only when larger.
             ScrollArea::vertical()
                 .min_scrolled_height(170.0)
-                .max_height(300.0)
+                .max_height(360.0)
                 .show(ui, |ui| {
                 egui::Grid::new("about_grid")
                     .num_columns(2)
@@ -1269,6 +1273,8 @@ fn about_view(
                         }
                         ui.end_row();
                     });
+                ui.add_space(8.0);
+                update_status_view(ui, update, check_updates, download);
                 ui.add_space(8.0);
                 ui.label(tr!("Free game server browser and RCON admin tool."));
                 ui.label(tr!(
@@ -1303,6 +1309,114 @@ fn about_view(
         });
     });
     ui.add_space(8.0);
+}
+
+/// What the About window says about updates ("? → Check for updates..." opens it).
+#[derive(Clone, Copy)]
+enum UpdateStatus<'a> {
+    NotChecked,
+    Checking,
+    Done(&'a crate::update::Outcome),
+}
+
+/// The update box of the About window: a link to check, the running check, or its answer
+/// with "Download latest release" for a newer version. Tinted green, orange or red with a
+/// painted mark, so it needs no symbol font.
+fn update_status_view(ui: &mut Ui, update: UpdateStatus, check: &mut bool, download: &mut bool) {
+    use crate::update::Outcome;
+    let current = crate::update::CURRENT;
+    let accent = match update {
+        UpdateStatus::Done(Outcome::UpToDate) => Color32::from_rgb(60, 170, 90),
+        UpdateStatus::Done(Outcome::Offer(_)) => Color32::from_rgb(232, 110, 40),
+        UpdateStatus::Done(Outcome::Failed) => Color32::from_rgb(210, 70, 60),
+        _ => ui.visuals().weak_text_color(),
+    };
+    Frame::new()
+        .fill(accent.gamma_multiply(0.12))
+        .stroke(Stroke::new(1.0, accent.gamma_multiply(0.6)))
+        .corner_radius(4)
+        .inner_margin(Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::hover());
+                let p = ui.painter();
+                let c = rect.center();
+                let mark = Stroke::new(2.0, Color32::WHITE);
+                match update {
+                    UpdateStatus::Checking => {
+                        ui.put(rect, egui::Spinner::new().size(16.0));
+                    }
+                    UpdateStatus::NotChecked => {
+                        p.circle_stroke(c, 7.0, Stroke::new(1.5, accent));
+                        p.line_segment([c + egui::vec2(0.0, -4.0), c + egui::vec2(0.0, 3.0)], Stroke::new(1.5, accent));
+                        p.line_segment([c + egui::vec2(-3.0, 0.0), c + egui::vec2(0.0, 3.0)], Stroke::new(1.5, accent));
+                        p.line_segment([c + egui::vec2(3.0, 0.0), c + egui::vec2(0.0, 3.0)], Stroke::new(1.5, accent));
+                    }
+                    UpdateStatus::Done(Outcome::UpToDate) => {
+                        p.circle_filled(c, 8.0, accent);
+                        p.line_segment([c + egui::vec2(-4.0, 0.0), c + egui::vec2(-1.0, 3.0)], mark);
+                        p.line_segment([c + egui::vec2(-1.0, 3.0), c + egui::vec2(4.0, -3.0)], mark);
+                    }
+                    UpdateStatus::Done(Outcome::Offer(_)) => {
+                        p.circle_filled(c, 8.0, accent);
+                        p.line_segment([c + egui::vec2(0.0, -4.0), c + egui::vec2(0.0, 4.0)], mark);
+                        p.line_segment([c + egui::vec2(-4.0, 0.0), c + egui::vec2(0.0, 4.0)], mark);
+                        p.line_segment([c + egui::vec2(4.0, 0.0), c + egui::vec2(0.0, 4.0)], mark);
+                    }
+                    UpdateStatus::Done(Outcome::Failed) => {
+                        p.circle_filled(c, 8.0, accent);
+                        p.line_segment([c + egui::vec2(0.0, -4.5), c + egui::vec2(0.0, 1.0)], mark);
+                        p.circle_filled(c + egui::vec2(0.0, 4.0), 1.2, Color32::WHITE);
+                    }
+                }
+                ui.vertical(|ui| match update {
+                    UpdateStatus::NotChecked => {
+                        *check = ui.link(tr!("Check for updates")).clicked();
+                    }
+                    UpdateStatus::Checking => {
+                        ui.label(tr!("Checking for updates..."));
+                    }
+                    UpdateStatus::Done(Outcome::UpToDate) => {
+                        ui.add(
+                            Label::new(tr!(
+                                "You are using the latest version (v{current}).",
+                                current = current
+                            ))
+                            .wrap(),
+                        );
+                    }
+                    UpdateStatus::Done(Outcome::Failed) => {
+                        ui.add(
+                            Label::new(tr!("Could not check for updates. Please try again later."))
+                                .wrap(),
+                        );
+                        *check = ui.link(tr!("Check for updates")).clicked();
+                    }
+                    UpdateStatus::Done(Outcome::Offer(new)) => {
+                        ui.add(
+                            Label::new(
+                                RichText::new(tr!(
+                                    "A new version of openHLSW is available (v{new}). You are using v{current}.",
+                                    new = new,
+                                    current = current
+                                ))
+                                .strong(),
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(4.0);
+                        *download = ui
+                            .add(
+                                Button::new(tr!("Download latest release"))
+                                    .min_size(egui::vec2(90.0, 22.0)),
+                            )
+                            .clicked();
+                    }
+                });
+            });
+        });
 }
 
 fn license_view(ui: &mut Ui) {
@@ -1538,6 +1652,8 @@ pub struct OpenHlswApp {
     update_offer: Option<(crate::update::Outcome, bool)>,
     /// An update check is running; `true` when it was asked for from the menu.
     update_checking: Option<bool>,
+    /// Answer of the check from the menu, shown in the About window.
+    about_update: Option<crate::update::Outcome>,
     editing_comment: Option<(ServerId, String)>,
     /// "Connecting..." window: server we wait on for a free slot, since when.
     waiting: Option<(ServerId, Instant)>,
@@ -1733,6 +1849,7 @@ impl OpenHlswApp {
             show_license: false,
             update_offer: None,
             update_checking: None,
+            about_update: None,
             editing_comment: None,
             waiting: None,
             show_filter: false,
@@ -2942,12 +3059,15 @@ impl OpenHlswApp {
                 },
                 Event::LatestRelease(tag) => {
                     let manual = self.update_checking.take() == Some(true);
-                    if let Some(outcome) = crate::update::outcome(
+                    let outcome = crate::update::outcome(
                         tag.as_deref(),
                         crate::update::CURRENT,
                         &self.settings.skipped_update,
                         manual,
-                    ) {
+                    );
+                    if manual {
+                        self.about_update = outcome;
+                    } else if let Some(outcome) = outcome {
                         self.update_offer = Some((outcome, false));
                     }
                 }
@@ -4777,10 +4897,8 @@ impl OpenHlswApp {
                     )
                     .clicked()
                 {
-                    // A check still running from the start answers this click.
-                    if self.update_checking.replace(true).is_none() {
-                        worker::spawn_update_check(&self.notifier, HOMEPAGE);
-                    }
+                    self.show_about = true;
+                    self.check_updates();
                     ui.close();
                 }
                 if ui.button(tr!("Visit openHLSW homepage")).clicked() {
@@ -7756,45 +7874,28 @@ impl OpenHlswApp {
         ctx.request_repaint_after(Duration::from_millis(500));
     }
 
-    /// Result of the update check: "A new version of openHLSW is available", or for the
-    /// check from the menu also "latest version" / "could not check". The download page is
-    /// opened without showing its address anywhere.
+    /// "A new version of openHLSW is available" after the check at start. The download page
+    /// is opened without showing its address anywhere.
+    /// "? → Check for updates..." and the link in About. A check still running from the
+    /// start answers it.
+    fn check_updates(&mut self) {
+        self.about_update = None;
+        if self.update_checking.replace(true).is_none() {
+            worker::spawn_update_check(&self.notifier, HOMEPAGE);
+        }
+    }
+
     fn update_window(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         use crate::update::Outcome;
         let Some((outcome, skip)) = &mut self.update_offer else {
             return;
         };
-        let version = match outcome {
-            Outcome::Offer(version) => version.clone(),
-            Outcome::UpToDate | Outcome::Failed => {
-                let text = if *outcome == Outcome::UpToDate {
-                    tr!(
-                        "You are using the latest version (v{current}).",
-                        current = crate::update::CURRENT
-                    )
-                } else {
-                    tr!("Could not check for updates. Please try again later.").to_string()
-                };
-                let mut open = true;
-                let mut ok = false;
-                NativeWindow::new("update", tr!("Check for updates"))
-                    .open(&mut open)
-                    .collapsible(false)
-                    .resizable(false)
-                    .default_width(380.0)
-                    .show(ctx, |ui| {
-                        ui.add(Label::new(text).wrap());
-                        ui.add_space(6.0);
-                        ok = ui
-                            .add(Button::new(tr!("OK")).min_size(egui::vec2(75.0, 22.0)))
-                            .clicked();
-                    });
-                if ok || !open {
-                    self.update_offer = None;
-                }
-                return;
-            }
+        // Only the check at start comes here; the one from the menu answers in About.
+        let Outcome::Offer(version) = outcome else {
+            self.update_offer = None;
+            return;
         };
+        let version = version.clone();
         let mut open = true;
         let mut download = false;
         let mut later = false;
@@ -7886,6 +7987,12 @@ impl OpenHlswApp {
         let icon = self.about_icon.clone();
         let mut close = false;
         let mut open_license = false;
+        let (mut check_updates, mut download) = (false, false);
+        let update = match (&self.about_update, self.update_checking) {
+            (_, Some(true)) => UpdateStatus::Checking,
+            (Some(outcome), _) => UpdateStatus::Done(outcome),
+            (None, _) => UpdateStatus::NotChecked,
+        };
         NativeWindow::new("about", tr!("About openHLSW"))
             .open(&mut show_about)
             .collapsible(false)
@@ -7893,10 +8000,28 @@ impl OpenHlswApp {
             .default_width(400.0)
             .margin(0)
             .show(ctx, |ui| {
-                about_view(ui, icon.as_ref(), &mut close, &mut open_license, actions);
+                about_view(
+                    ui,
+                    icon.as_ref(),
+                    &mut close,
+                    &mut open_license,
+                    update,
+                    &mut check_updates,
+                    &mut download,
+                    actions,
+                );
             });
         if close {
             show_about = false;
+        }
+        if !show_about {
+            self.about_update = None;
+        }
+        if check_updates {
+            self.check_updates();
+        }
+        if download && let Err(e) = open_url(&crate::update::releases_page(HOMEPAGE)) {
+            self.status_message = tr!("Could not open the download page: {e}", e = e);
         }
         if open_license {
             self.show_license = true;

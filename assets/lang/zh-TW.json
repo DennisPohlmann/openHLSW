@@ -101,6 +101,7 @@
  "Check for updates...": "檢查更新...",
  "Check that the router forwards TCP port {port} to this computer.": "請檢查路由器是否將 TCP 連接埠 {port} 轉送到這台電腦。",
  "Check that the router forwards UDP port {port} to this computer.": "請檢查路由器是否將 UDP 連接埠 {port} 轉送到這台電腦。",
+ "Checking for updates...": "正在檢查更新...",
  "Clear": "清除",
  "Clear chat": "清除聊天",
  "Clear console": "清除主控台",

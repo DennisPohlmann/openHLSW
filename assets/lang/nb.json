@@ -98,6 +98,7 @@
  "Check for updates...": "Se etter oppdateringer...",
  "Check that the router forwards TCP port {port} to this computer.": "Sjekk at ruteren videresender TCP-port {port} til denne datamaskinen.",
  "Check that the router forwards UDP port {port} to this computer.": "Sjekk at ruteren videresender UDP-port {port} til denne datamaskinen.",
+ "Checking for updates...": "Ser etter oppdateringer...",
  "Clear": "Tøm",
  "Clear chat": "Tøm chatten",
  "Clear console": "Tøm konsollen",

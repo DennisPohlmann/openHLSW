@@ -96,6 +96,7 @@
  "Check for updates...": "Søg efter opdateringer...",
  "Check that the router forwards TCP port {port} to this computer.": "Kontrollér, at routeren videresender TCP-port {port} til denne computer.",
  "Check that the router forwards UDP port {port} to this computer.": "Kontrollér, at routeren videresender UDP-port {port} til denne computer.",
+ "Checking for updates...": "Søger efter opdateringer...",
  "Clear": "Ryd",
  "Clear chat": "Ryd chat",
  "Clear console": "Ryd konsol",

@@ -100,6 +100,7 @@
  "Check for updates...": "Tarkista päivitykset...",
  "Check that the router forwards TCP port {port} to this computer.": "Tarkista, että reititin ohjaa TCP-portin {port} tälle tietokoneelle.",
  "Check that the router forwards UDP port {port} to this computer.": "Tarkista, että reititin ohjaa UDP-portin {port} tälle tietokoneelle.",
+ "Checking for updates...": "Tarkistetaan päivityksiä...",
  "Clear": "Tyhjennä",
  "Clear chat": "Tyhjennä chat",
  "Clear console": "Tyhjennä konsoli",

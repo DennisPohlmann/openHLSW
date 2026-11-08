@@ -100,6 +100,7 @@
  "Check for updates...": "Vyhledat aktualizace...",
  "Check that the router forwards TCP port {port} to this computer.": "Zkontrolujte, zda router přesměrovává TCP port {port} na tento počítač.",
  "Check that the router forwards UDP port {port} to this computer.": "Zkontrolujte, zda router přesměrovává UDP port {port} na tento počítač.",
+ "Checking for updates...": "Hledají se aktualizace...",
  "Clear": "Vymazat",
  "Clear chat": "Vymazat chat",
  "Clear console": "Vymazat konzoli",

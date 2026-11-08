@@ -101,6 +101,7 @@
  "Check for updates...": "Проверить обновления...",
  "Check that the router forwards TCP port {port} to this computer.": "Проверьте, пробрасывает ли роутер TCP-порт {port} на этот компьютер.",
  "Check that the router forwards UDP port {port} to this computer.": "Проверьте, пробрасывает ли роутер UDP-порт {port} на этот компьютер.",
+ "Checking for updates...": "Поиск обновлений...",
  "Clear": "Очистить",
  "Clear chat": "Очистить чат",
  "Clear console": "Очистить консоль",

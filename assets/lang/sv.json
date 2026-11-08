@@ -99,6 +99,7 @@
  "Check for updates...": "Sök efter uppdateringar...",
  "Check that the router forwards TCP port {port} to this computer.": "Kontrollera att routern vidarebefordrar TCP-port {port} till den här datorn.",
  "Check that the router forwards UDP port {port} to this computer.": "Kontrollera att routern vidarebefordrar UDP-port {port} till den här datorn.",
+ "Checking for updates...": "Söker efter uppdateringar...",
  "Clear": "Rensa",
  "Clear chat": "Rensa chatten",
  "Clear console": "Rensa konsolen",

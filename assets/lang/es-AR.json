@@ -98,6 +98,7 @@
  "Check for updates...": "Buscar actualizaciones...",
  "Check that the router forwards TCP port {port} to this computer.": "Revisá que el router redirija el puerto TCP {port} a esta computadora.",
  "Check that the router forwards UDP port {port} to this computer.": "Revisá que el router redirija el puerto UDP {port} a esta computadora.",
+ "Checking for updates...": "Buscando actualizaciones...",
  "Clear": "Borrar",
  "Clear chat": "Limpiar chat",
  "Clear console": "Limpiar consola",

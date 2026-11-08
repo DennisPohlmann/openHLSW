@@ -96,6 +96,7 @@
  "Check for updates...": "Op updates controleren...",
  "Check that the router forwards TCP port {port} to this computer.": "Controleer of de router TCP-poort {port} naar deze computer doorstuurt.",
  "Check that the router forwards UDP port {port} to this computer.": "Controleer of de router UDP-poort {port} naar deze computer doorstuurt.",
+ "Checking for updates...": "Zoeken naar updates...",
  "Clear": "Wissen",
  "Clear chat": "Chat wissen",
  "Clear console": "Console wissen",

@@ -101,6 +101,7 @@
  "Check for updates...": "Güncellemeleri denetle...",
  "Check that the router forwards TCP port {port} to this computer.": "Yönlendiricinin TCP portu {port} bu bilgisayara yönlendirdiğini kontrol edin.",
  "Check that the router forwards UDP port {port} to this computer.": "Yönlendiricinin UDP portu {port} bu bilgisayara yönlendirdiğini kontrol edin.",
+ "Checking for updates...": "Güncellemeler denetleniyor...",
  "Clear": "Temizle",
  "Clear chat": "Sohbeti temizle",
  "Clear console": "Konsolu temizle",
