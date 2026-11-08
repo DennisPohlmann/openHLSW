@@ -4,9 +4,10 @@ name: build
 # as workflow artifacts, without publishing anything:
 #   Linux   x86_64, aarch64: .tar.gz, .deb, .rpm, .flatpak
 #   Linux   riscv64:         .tar.gz, .deb, .rpm
+#   (.tar.gz, .deb and .rpm also as openhlsw-headless: only openhlsw-tui and openhlsw-cli)
 #   Windows x64, x86, arm64: .msi, -portable.zip
 #   macOS   universal:       .dmg, .zip (Apple silicon + Intel)
-#   FreeBSD x86_64:          .tar.gz
+#   FreeBSD x86_64:          .tar.gz (also openhlsw-headless)
 # Releases are made on demand only: run this workflow manually on main with "release"
 # ticked (Actions -> build -> Run workflow, or `gh workflow run build.yml -f release=true`).
 # semantic-release then reads the Conventional Commits since the last tag: for a feat,
@@ -136,6 +137,15 @@ jobs:
              packaging/linux/openhlsw.desktop packaging/linux/openhlsw.png \
              "dist/$name/"
           cp assets/games/NOTICE.txt "dist/$name/GAME-ICONS-NOTICE.txt"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -rf "dist/$name"
+          # Without the GUI, like the openhlsw-headless .deb / .rpm.
+          name="openhlsw-headless-v${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          cp target/${{ matrix.target }}/release/openhlsw-cli \
+             target/${{ matrix.target }}/release/openhlsw-tui \
+             README.md CHANGELOG.md LICENSE \
+             "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -rf "dist/$name"
 
@@ -429,6 +439,12 @@ jobs:
                packaging/linux/openhlsw.desktop packaging/linux/openhlsw.png \
                "dist/$name/"
             cp assets/games/NOTICE.txt "dist/$name/GAME-ICONS-NOTICE.txt"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+            rm -rf "dist/$name"
+            name="openhlsw-headless-v${VERSION}-freebsd-x86_64"
+            mkdir -p "dist/$name"
+            cp target/release/openhlsw-cli target/release/openhlsw-tui \
+               README.md CHANGELOG.md LICENSE "dist/$name/"
             tar -C dist -czf "dist/$name.tar.gz" "$name"
             rm -rf "dist/$name"
 

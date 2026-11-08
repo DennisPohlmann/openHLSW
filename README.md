@@ -37,12 +37,14 @@ Ready-made packages are on the [releases page](https://github.com/DennisPohlmann
   keep your settings. The portable `.zip` runs from any folder.
 - **Linux**: `.deb` / `.rpm` add a desktop entry; the binaries also run on older
   distributions. For servers and machines without a display there is
-  `openhlsw-headless` (`.deb` / `.rpm`): only the console tool `openhlsw-tui` and
-  `openhlsw-cli`, no GUI and no X11 / Wayland / OpenGL libraries needed. Install either
-  `openhlsw` or `openhlsw-headless`; the full package already contains both tools. Flatpak: `flatpak install --user openhlsw-…flatpak`.
+  `openhlsw-headless` (`.deb` / `.rpm`, and `openhlsw-headless-v…-linux-….tar.gz`): only
+  the console tool `openhlsw-tui` and `openhlsw-cli`, no GUI and no X11 / Wayland / OpenGL
+  libraries needed. Install either `openhlsw` or `openhlsw-headless`; the full package
+  already contains both tools. Flatpak: `flatpak install --user openhlsw-…flatpak`.
 - **macOS**: drag openHLSW to Applications. The app is only ad-hoc signed: on the first
   start, right-click → Open (or `xattr -dr com.apple.quarantine /Applications/openHLSW.app`).
-- **FreeBSD**: unpack the `.tar.gz` and start `openhlsw`.
+- **FreeBSD**: unpack the `.tar.gz` and start `openhlsw`; without a display use
+  `openhlsw-headless-v…-freebsd-x86_64.tar.gz` (only `openhlsw-tui` and `openhlsw-cli`).
 - **Checksums**: every package has a `.sha256` file next to it with its SHA-256 checksum;
   download both and check with `sha256sum --check <package>.sha256`.
 
