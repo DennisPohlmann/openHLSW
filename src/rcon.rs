@@ -145,13 +145,17 @@ impl RconClient {
             if packet.kind != SERVERDATA_RESPONSE_VALUE {
                 continue;
             }
-            if packet.id == id {
+            // CS2 tags its output with the id of the last packet it received, i.e. the
+            // terminator, so only an empty (or srcds 0x0100) body ends the answer.
+            let end_marker = packet.body.is_empty() || packet.body == [0, 1];
+            if packet.id == terminator && end_marker {
+                break Ok(());
+            }
+            if (packet.id == id || packet.id == terminator) && !end_marker {
                 if output.is_empty() {
                     let _ = self.stream.set_read_timeout(Some(QUIET_AFTER_OUTPUT));
                 }
                 output.extend_from_slice(&packet.body);
-            } else if packet.id == terminator {
-                break Ok(());
             }
             // Anything else (e.g. the trailing 0x00000100 packet srcds sends after
             // a mirrored terminator of an earlier command) is ignored.
@@ -431,6 +435,28 @@ mod tests {
         assert!(
             matches!(client.exec("cvarlist"), Err(RconError::Protocol(m)) if m == "Answer too large")
         );
+    }
+
+    #[test]
+    fn cs2_output_tagged_with_terminator_id() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut c, _) = listener.accept().unwrap();
+            let _ = c.write_all(&source_packet(1, SERVERDATA_AUTH_RESPONSE, b""));
+            let mut buf = [0u8; 256];
+            let _ = c.read(&mut buf);
+            // Command id 2, terminator id 3: CS2 answers both with id 3.
+            let _ = c.write_all(&source_packet(
+                3,
+                SERVERDATA_RESPONSE_VALUE,
+                b"hostname: cs2\n",
+            ));
+            let _ = c.write_all(&source_packet(3, SERVERDATA_RESPONSE_VALUE, b""));
+            std::thread::sleep(Duration::from_secs(1));
+        });
+        let mut client = RconClient::connect(addr, "pw", Duration::from_secs(2)).unwrap();
+        assert_eq!(client.exec("hostname").unwrap(), "hostname: cs2\n");
     }
 
     #[test]
