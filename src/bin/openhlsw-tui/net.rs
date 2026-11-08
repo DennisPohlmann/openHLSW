@@ -53,8 +53,10 @@ pub struct QueryJob {
     pub protocol: Option<Protocol>,
     /// HLSW key of the game ("" = none), picks the usual query ports.
     pub game: &'static str,
-    /// Also ask for players and rules.
-    pub details: bool,
+    /// Also ask for the players / the rules (Valve and GameSpy 2; the other protocols
+    /// answer everything at once).
+    pub players: bool,
+    pub rules: bool,
     pub challenge: Option<[u8; 4]>,
 }
 
@@ -115,15 +117,17 @@ fn valve(job: &QueryJob) -> Result<Snapshot, String> {
         a2s::query_info_with(addr, QUERY_TIMEOUT, job.challenge).map_err(|e| e.to_string())?;
     let mut challenge = meta.challenge.or(job.challenge);
     let (mut players, mut rules) = (None, None);
-    if job.details {
-        if let Ok((p, m)) = a2s::query_players_with(addr, QUERY_TIMEOUT, challenge) {
-            challenge = m.challenge.or(challenge);
-            players = Some(p);
-        }
-        if let Ok((r, m)) = a2s::query_rules_with(addr, QUERY_TIMEOUT, challenge) {
-            challenge = m.challenge.or(challenge);
-            rules = Some(r);
-        }
+    if job.players
+        && let Ok((p, m)) = a2s::query_players_with(addr, QUERY_TIMEOUT, challenge)
+    {
+        challenge = m.challenge.or(challenge);
+        players = Some(p);
+    }
+    if job.rules
+        && let Ok((r, m)) = a2s::query_rules_with(addr, QUERY_TIMEOUT, challenge)
+    {
+        challenge = m.challenge.or(challenge);
+        rules = Some(r);
     }
     Ok(Snapshot {
         info,
@@ -142,10 +146,12 @@ fn gamespy(job: &QueryJob) -> Result<Snapshot, String> {
         .map_err(|e| format!("DNS: {e}"))?;
     let (info, meta) = gamespy2::query_info(addr, QUERY_TIMEOUT).map_err(|e| e.to_string())?;
     let (mut players, mut rules) = (None, None);
-    if job.details {
+    if job.players {
         players = gamespy2::query_players(addr, QUERY_TIMEOUT)
             .ok()
             .map(|(p, _)| p);
+    }
+    if job.rules {
         rules = gamespy2::query_rules(addr, QUERY_TIMEOUT)
             .ok()
             .map(|(r, _)| r);

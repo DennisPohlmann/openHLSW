@@ -135,7 +135,10 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   `say`; Ban List shows `listid` / `listip` with unban, ban and write; Change Level shows
   the maps (`maps *` plus the stock maps) with search (`*`, `?`). Not in the console tool
   yet: receiving the server log (Get Log), so the chat shows only what you send.
-- `openhlsw-tui -d 5` refreshes every 5 s (default 10 s); `-c FILE` uses another
+- Every panel stays current, whichever has the focus: like the GUI, each refresh asks
+  every server for its info (ping, map, players count) and the selected one for its
+  players; players and rules of all servers every 10 s. `openhlsw-tui -d 5` refreshes every
+  5 s (default: the GUI's refresh interval, 1 s); `-c FILE` uses another
   config file; addresses on the command line are shown too, without saving them.
 - Servers added or removed in the console tool are written to the config file (only the
   server list, the RCON settings of a server and the console history; everything else is

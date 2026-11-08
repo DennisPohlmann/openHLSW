@@ -29,7 +29,8 @@ openhlsw-tui: openHLSW in the terminal, laid out like the GUI (F1 shows the keys
 
 usage: openhlsw-tui [options] [host:port ...]
 
-  -d, --delay SECONDS   refresh every SECONDS (default 10, at least 2)
+  -d, --delay SECONDS   refresh every SECONDS (default: the GUI's refresh interval,
+                        1 s unless changed there; at least 1)
   -c, --config FILE     server list from FILE instead of openHLSW's config.json
   -h, --help            this text
   -V, --version         version
@@ -38,14 +39,15 @@ Without options the servers of the openHLSW GUI are shown (same config file).
 Addresses given here are shown too, but not saved.";
 
 struct Args {
-    delay: Duration,
+    /// `None`: the refresh interval of the GUI.
+    delay: Option<Duration>,
     config: Option<PathBuf>,
     servers: Vec<ServerAddress>,
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
-        delay: Duration::from_secs(10),
+        delay: None,
         config: store::default_path(),
         servers: Vec::new(),
     };
@@ -59,8 +61,8 @@ fn parse_args() -> Result<Args, String> {
             }
             "-d" | "--delay" => {
                 let v = it.next().ok_or("-d needs a number of seconds")?;
-                let secs: u64 = v.parse().map_err(|_| format!("not a number: {v}"))?;
-                args.delay = Duration::from_secs(secs.clamp(2, 3600));
+                let secs: f64 = v.parse().map_err(|_| format!("not a number: {v}"))?;
+                args.delay = Some(delay(secs).ok_or(format!("not a number: {v}"))?);
             }
             "-c" | "--config" => {
                 args.config = Some(it.next().ok_or("-c needs a file")?.into());
@@ -72,6 +74,12 @@ fn parse_args() -> Result<Args, String> {
         }
     }
     Ok(args)
+}
+
+/// The refresh interval: 1 s … 1 h.
+fn delay(secs: f64) -> Option<Duration> {
+    secs.is_finite()
+        .then(|| Duration::from_secs_f64(secs.clamp(1.0, 3600.0)))
 }
 
 /// Copies `text` to the terminal's clipboard (OSC 52; most terminals, also over SSH).
@@ -110,7 +118,13 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut app = app::App::new(store::Store::load(args.config), args.servers, args.delay);
+    let store = store::Store::load(args.config);
+    // Same interval as the GUI (Settings → Misc), so both refresh alike.
+    let delay = args
+        .delay
+        .or_else(|| store.setting_f64("refresh_interval").and_then(delay))
+        .unwrap_or(Duration::from_secs(1));
+    let mut app = app::App::new(store, args.servers, delay);
 
     // ratatui::init also restores the terminal when the program panics.
     let mut terminal = ratatui::init();

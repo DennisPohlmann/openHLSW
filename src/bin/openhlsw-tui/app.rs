@@ -25,6 +25,11 @@ use crate::store::Store;
 const CONSOLE_LINES: usize = 5000;
 /// Pings kept per server for the graph in the details.
 const PING_HISTORY: usize = 300;
+/// Players and rules of the servers that are not selected: as often as the GUI asks for rules.
+const DETAILS_REFRESH: Duration = Duration::from_secs(10);
+/// Queries per second to one host, for all servers on it together, like the GUI: hosters'
+/// firewalls drop senders that ask their many servers on one address too often.
+const HOST_QUERY_RATE: f64 = 10.0;
 
 // --------------------------------------------------------------------------
 // Data
@@ -51,6 +56,8 @@ pub struct Server {
     pub rules: Vec<Rule>,
     pub last_seen: Option<Instant>,
     busy: bool,
+    /// When the last query was sent (servers on one host take turns, oldest first).
+    asked_at: Option<Instant>,
     details_at: Option<Instant>,
     challenge: Option<[u8; 4]>,
     /// Given on the command line, not in the saved list.
@@ -612,6 +619,7 @@ impl App {
             rules: Vec::new(),
             last_seen: None,
             busy: false,
+            asked_at: None,
             details_at: None,
             challenge: None,
             temporary,
@@ -748,13 +756,22 @@ impl App {
     // Background work
     // ----------------------------------------------------------------------
 
-    /// Queries every idle server, with players and rules, when the refresh time has come
-    /// (or `force`), so every server stays current; the selected one also right after it got
-    /// selected.
+    /// Handles what the background threads sent and starts the queries that are due.
     pub fn tick(&mut self, force: bool) {
         while let Ok(event) = self.rx.try_recv() {
             self.handle_event(event);
         }
+        for job in self.due_queries(force) {
+            net::spawn_query(&self.tx, job);
+        }
+    }
+
+    /// Like the GUI: every refresh (default 1 s) asks every idle server for its info (ping,
+    /// map, player count) and the selected one also for its players; players and rules of
+    /// every server every [`DETAILS_REFRESH`], so all panels stay current whichever has the
+    /// focus, without going over the servers' query limit (sv_max_queries_sec). The
+    /// selected server is asked for everything right after it got selected.
+    fn due_queries(&mut self, force: bool) -> Vec<QueryJob> {
         let due = self.last_refresh.is_none_or(|t| t.elapsed() >= self.delay) || force;
         if due {
             self.last_refresh = Some(Instant::now());
@@ -763,28 +780,51 @@ impl App {
         // Wait a moment after the selection moved, so scrolling through the list does not
         // ask every server on the way.
         let settled = self.selected_at.elapsed() >= Duration::from_millis(300);
+        // The selected server first, then the one asked longest ago: servers on one host
+        // take turns when they share its budget.
+        let mut order: Vec<usize> = (0..self.servers.len())
+            .filter(|&i| !self.servers[i].busy)
+            .collect();
+        order.sort_by_key(|&i| {
+            let s = &self.servers[i];
+            (selected != Some(s.id), s.asked_at)
+        });
+        let budget = (HOST_QUERY_RATE * self.delay.as_secs_f64()).max(1.0);
+        let mut used: std::collections::HashMap<String, f64> = Default::default();
         let mut jobs = Vec::new();
-        for s in self.servers.iter_mut().filter(|s| !s.busy) {
+        for i in order {
+            let s = &mut self.servers[i];
             let is_selected = selected == Some(s.id);
             let details_missing =
                 is_selected && settled && s.details_at.is_none_or(|t| t < self.selected_at);
             if !(due || details_missing) {
                 continue;
             }
+            let rules =
+                details_missing || s.details_at.is_none_or(|t| t.elapsed() >= DETAILS_REFRESH);
+            let players = rules || is_selected;
+            let cost = 1.0 + f64::from(u8::from(players)) + f64::from(u8::from(rules));
+            let host = used.entry(s.address.host.to_ascii_lowercase()).or_default();
+            if *host + cost > budget && *host > 0.0 {
+                continue;
+            }
+            *host += cost;
+            if rules {
+                s.details_at = Some(Instant::now());
+            }
+            s.asked_at = Some(Instant::now());
             s.busy = true;
-            s.details_at = Some(Instant::now());
             jobs.push(QueryJob {
                 id: s.id,
                 address: s.address.clone(),
                 protocol: s.protocol(),
                 game: s.game.map_or("", |g| g.key),
-                details: true,
+                players,
+                rules,
                 challenge: s.challenge,
             });
         }
-        for job in jobs {
-            net::spawn_query(&self.tx, job);
-        }
+        jobs
     }
 
     /// Seconds until the next automatic refresh.
@@ -1882,5 +1922,77 @@ mod tests {
         assert_eq!(move_in(4, 5, KeyCode::Down, 3), 4);
         assert_eq!(move_in(1, 5, KeyCode::PageDown, 3), 4);
         assert_eq!(move_in(3, 0, KeyCode::Down, 3), 0);
+    }
+
+    fn test_app(servers: &[&str]) -> App {
+        let list = servers
+            .iter()
+            .map(|a| ServerAddress::parse(a).unwrap())
+            .collect();
+        App::new(Store::load(None), list, Duration::from_secs(1))
+    }
+
+    /// Answers the jobs as if the servers had replied.
+    fn finish(app: &mut App, jobs: &[QueryJob]) {
+        for j in jobs {
+            app.server_mut(j.id).unwrap().busy = false;
+        }
+    }
+
+    #[test]
+    fn every_server_is_refreshed_whichever_panel_has_the_focus() {
+        let mut app = test_app(&["192.0.2.1:27015", "192.0.2.2:27015"]);
+        app.selected_at -= Duration::from_secs(1);
+        let first = app.due_queries(false);
+        assert_eq!(first.len(), 2);
+        assert!(first.iter().all(|j| j.players && j.rules));
+        finish(&mut app, &first);
+        for focus in [Pane::Players, Pane::Rules, Pane::Tabs, Pane::Servers] {
+            app.focus = focus;
+            // Not due yet: nothing is asked twice within the refresh interval.
+            assert!(app.due_queries(false).is_empty());
+            app.last_refresh = Some(Instant::now() - app.delay);
+            let jobs = app.due_queries(false);
+            // Info (ping) of every server; players only of the selected one; rules later.
+            assert_eq!(jobs.len(), 2, "{focus:?}");
+            let selected = app.selected_id;
+            for j in &jobs {
+                assert_eq!(j.players, Some(j.id) == selected, "{focus:?}");
+                assert!(!j.rules);
+            }
+            finish(&mut app, &jobs);
+        }
+        // Players and rules of every server once DETAILS_REFRESH has passed.
+        for s in &mut app.servers {
+            s.details_at = Some(Instant::now() - DETAILS_REFRESH);
+        }
+        app.last_refresh = Some(Instant::now() - app.delay);
+        let jobs = app.due_queries(false);
+        assert!(jobs.iter().all(|j| j.players && j.rules));
+    }
+
+    #[test]
+    fn servers_on_one_host_share_its_query_budget_and_take_turns() {
+        let list: Vec<String> = (0..30)
+            .map(|i| format!("192.0.2.1:{}", 27015 + i))
+            .collect();
+        let list: Vec<&str> = list.iter().map(String::as_str).collect();
+        let mut app = test_app(&list);
+        let mut asked = std::collections::HashSet::new();
+        for _ in 0..20 {
+            app.last_refresh = None;
+            let jobs = app.due_queries(false);
+            let queries: usize = jobs
+                .iter()
+                .map(|j| 1 + usize::from(j.players) + usize::from(j.rules))
+                .sum();
+            assert!(
+                queries as f64 <= HOST_QUERY_RATE,
+                "{queries} queries in 1 s"
+            );
+            asked.extend(jobs.iter().map(|j| j.id));
+            finish(&mut app, &jobs);
+        }
+        assert_eq!(asked.len(), 30, "every server gets its turn");
     }
 }

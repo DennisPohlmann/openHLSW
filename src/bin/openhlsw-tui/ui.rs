@@ -158,7 +158,7 @@ fn draw_list_header(f: &mut Frame, app: &App, area: Rect) {
     }
     let right = format!(
         "refresh {}s ({}s)   {shown} of {} servers ",
-        app.delay.as_secs(),
+        app.delay.as_secs_f64(),
         app.next_refresh_in(),
         app.servers.len()
     );

@@ -97,6 +97,11 @@ impl Store {
             .collect()
     }
 
+    /// A number from the GUI's settings (top-level keys of config.json).
+    pub fn setting_f64(&self, key: &str) -> Option<f64> {
+        self.doc.get(key).and_then(Value::as_f64)
+    }
+
     pub fn history(&self) -> Vec<String> {
         match self.doc.get("console_history") {
             Some(Value::Array(h)) => h
