@@ -651,5 +651,10 @@
  "{added} servers added, {updated} updated.": "Dodano serwery: {added}, zaktualizowano: {updated}.",
  "{n} entries could not be read": "Nie udało się odczytać wpisów: {n}",
  "{n} entries of the file could not be read.": "Nie udało się odczytać wpisów z pliku: {n}.",
- "{n} servers were already in the list and left unchanged.": "Serwery już obecne na liście i pozostawione bez zmian: {n}."
+ "{n} servers were already in the list and left unchanged.": "Serwery już obecne na liście i pozostawione bez zmian: {n}.",
+ "Game servers: ports and RCON": "Serwery gier: porty i RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Jak dodać serwery gier: porty, port zapytań, RCON i log serwera",
+ "Game port: {port}": "Port gry: {port}",
+ "Query port: {port}": "Port zapytań: {port}",
+ "Query port: game port + {offset}": "Port zapytań: port gry + {offset}"
 }

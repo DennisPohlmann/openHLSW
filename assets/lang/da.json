@@ -627,5 +627,10 @@
  "{added} servers added, {updated} updated.": "{added} servere tilføjet, {updated} opdateret.",
  "{n} entries could not be read": "{n} poster kunne ikke læses",
  "{n} entries of the file could not be read.": "{n} poster i filen kunne ikke læses.",
- "{n} servers were already in the list and left unchanged.": "{n} servere var allerede på listen og blev ikke ændret."
+ "{n} servers were already in the list and left unchanged.": "{n} servere var allerede på listen og blev ikke ændret.",
+ "Game servers: ports and RCON": "Spilservere: porte og RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Sådan tilføjer du spilservere: porte, forespørgselsport, RCON og serverlog",
+ "Game port: {port}": "Spilport: {port}",
+ "Query port: {port}": "Forespørgselsport: {port}",
+ "Query port: game port + {offset}": "Forespørgselsport: spilport + {offset}"
 }

@@ -657,5 +657,10 @@
  "{added} servers added, {updated} updated.": "{added} szerver hozzáadva, {updated} frissítve.",
  "{n} entries could not be read": "{n} bejegyzést nem sikerült beolvasni",
  "{n} entries of the file could not be read.": "A fájl {n} bejegyzését nem sikerült beolvasni.",
- "{n} servers were already in the list and left unchanged.": "{n} szerver már szerepelt a listában, és változatlan maradt."
+ "{n} servers were already in the list and left unchanged.": "{n} szerver már szerepelt a listában, és változatlan maradt.",
+ "Game servers: ports and RCON": "Játékszerverek: portok és RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Játékszerverek hozzáadása: portok, lekérdezési port, RCON és szervernapló",
+ "Game port: {port}": "Játékport: {port}",
+ "Query port: {port}": "Lekérdezési port: {port}",
+ "Query port: game port + {offset}": "Lekérdezési port: játékport + {offset}"
 }

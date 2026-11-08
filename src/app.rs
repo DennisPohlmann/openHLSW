@@ -1118,6 +1118,23 @@ fn add_game_hint(game: AddGame) -> String {
     }
 }
 
+/// Tooltip of a game in the game list: how it is queried and its usual ports.
+fn game_ports_text(g: &games::Game) -> String {
+    let mut text = tr!("Server query: {protocol}", protocol = g.protocol.name());
+    if g.default_port > 0 {
+        text += "\n";
+        text += &tr!("Game port: {port}", port = g.default_port);
+    }
+    if g.default_query_port > 0 {
+        text += "\n";
+        text += &tr!("Query port: {port}", port = g.default_query_port);
+    } else if g.port_diff != 0 {
+        text += "\n";
+        text += &tr!("Query port: game port + {offset}", offset = g.port_diff);
+    }
+    text
+}
+
 /// Whether the address input names a port (`host:port`, `[v6]:port`, `host:port:query`).
 fn has_port(input: &str) -> bool {
     let s = input.trim().trim_end_matches('/');
@@ -1143,6 +1160,8 @@ fn add_game_of(info: &ServerInfo) -> AddGame {
 
 const COPYRIGHT_HOLDER: &str = "the openHLSW contributors";
 const HOMEPAGE: &str = "https://github.com/DennisPohlmann/openHLSW";
+/// Ports, query ports, RCON and server log of every game (docs/games.md).
+const GAMES_DOC: &str = "https://github.com/DennisPohlmann/openHLSW/blob/main/docs/games.md";
 const LICENSE_TEXT: &str = include_str!("../LICENSE");
 const GAME_ICONS_NOTICE: &str = include_str!("../assets/games/NOTICE.txt");
 const FLAGS_NOTICE: &str = include_str!("../assets/FLAGS-LICENSE.txt");
@@ -4874,6 +4893,10 @@ impl OpenHlswApp {
                     )));
                     ui.close();
                 }
+                if ui.button(tr!("Game servers: ports and RCON")).clicked() {
+                    actions.push(Action::OpenUrl(GAMES_DOC.into()));
+                    ui.close();
+                }
                 if ui.button(tr!("License...")).clicked() {
                     self.show_license = true;
                     ui.close();
@@ -5152,7 +5175,8 @@ impl OpenHlswApp {
             };
             let room = ui.available_width()
                 - text_width(ui, tr!("Add"))
-                - ui.spacing().button_padding.x * 2.0
+                - text_width(ui, "?")
+                - ui.spacing().button_padding.x * 4.0
                 - icon_w
                 - 4.0 * item
                 - MIN_FIELD;
@@ -5217,10 +5241,8 @@ impl OpenHlswApp {
                     }
                     let mut row = |ui: &mut Ui, g: &'static games::Game| {
                         let selected = add_game.is_some_and(|a| std::ptr::eq(a, g));
-                        let r = entry(ui, selected, g.icon, g.name).on_hover_text(tr!(
-                            "Server query: {protocol}",
-                            protocol = g.protocol.name()
-                        ));
+                        let r =
+                            entry(ui, selected, g.icon, g.name).on_hover_text(game_ports_text(g));
                         find.item(&r, g.name);
                         if r.clicked() {
                             *add_game = Some(g);
@@ -5248,6 +5270,15 @@ impl OpenHlswApp {
             // rest: the field can never cover the button, whatever the font or scaling.
             let address_input = &mut self.address_input;
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .button("?")
+                    .on_hover_text(tr!(
+                        "How to add game servers: ports, query port, RCON and server log"
+                    ))
+                    .clicked()
+                {
+                    actions.push(Action::OpenUrl(GAMES_DOC.into()));
+                }
                 if ui.button(tr!("Add")).clicked() {
                     actions.push(Action::Add);
                 }

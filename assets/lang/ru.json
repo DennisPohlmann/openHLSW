@@ -667,5 +667,10 @@
  "{added} servers added, {updated} updated.": "Добавлено серверов: {added}, обновлено: {updated}.",
  "{n} entries could not be read": "Не удалось прочитать записей: {n}",
  "{n} entries of the file could not be read.": "Не удалось прочитать записей из файла: {n}.",
- "{n} servers were already in the list and left unchanged.": "Серверов уже было в списке и осталось без изменений: {n}."
+ "{n} servers were already in the list and left unchanged.": "Серверов уже было в списке и осталось без изменений: {n}.",
+ "Game servers: ports and RCON": "Игровые серверы: порты и RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Как добавить игровые серверы: порты, порт запросов, RCON и лог сервера",
+ "Game port: {port}": "Игровой порт: {port}",
+ "Query port: {port}": "Порт запросов: {port}",
+ "Query port: game port + {offset}": "Порт запросов: игровой порт + {offset}"
 }

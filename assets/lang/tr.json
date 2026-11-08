@@ -655,5 +655,10 @@
  "{added} servers added, {updated} updated.": "{added} sunucu eklendi, {updated} güncellendi.",
  "{n} entries could not be read": "{n} giriş okunamadı",
  "{n} entries of the file could not be read.": "Dosyadaki {n} giriş okunamadı.",
- "{n} servers were already in the list and left unchanged.": "{n} sunucu zaten listedeydi ve değiştirilmedi."
+ "{n} servers were already in the list and left unchanged.": "{n} sunucu zaten listedeydi ve değiştirilmedi.",
+ "Game servers: ports and RCON": "Oyun sunucuları: portlar ve RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Oyun sunucuları nasıl eklenir: portlar, sorgu portu, RCON ve sunucu günlüğü",
+ "Game port: {port}": "Oyun portu: {port}",
+ "Query port: {port}": "Sorgu portu: {port}",
+ "Query port: game port + {offset}": "Sorgu portu: oyun portu + {offset}"
 }

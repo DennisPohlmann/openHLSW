@@ -642,5 +642,10 @@
  "{added} servers added, {updated} updated.": "{added} servrar tillagda, {updated} uppdaterade.",
  "{n} entries could not be read": "{n} poster kunde inte läsas",
  "{n} entries of the file could not be read.": "{n} poster i filen kunde inte läsas.",
- "{n} servers were already in the list and left unchanged.": "{n} servrar fanns redan i listan och lämnades oförändrade."
+ "{n} servers were already in the list and left unchanged.": "{n} servrar fanns redan i listan och lämnades oförändrade.",
+ "Game servers: ports and RCON": "Spelservrar: portar och RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Så lägger du till spelservrar: portar, frågeport, RCON och serverlogg",
+ "Game port: {port}": "Spelport: {port}",
+ "Query port: {port}": "Frågeport: {port}",
+ "Query port: game port + {offset}": "Frågeport: spelport + {offset}"
 }

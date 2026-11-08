@@ -646,5 +646,10 @@
  "{added} servers added, {updated} updated.": "Pridané servery: {added}, aktualizované: {updated}.",
  "{n} entries could not be read": "Nepodarilo sa načítať položiek: {n}",
  "{n} entries of the file could not be read.": "Nepodarilo sa načítať položiek zo súboru: {n}.",
- "{n} servers were already in the list and left unchanged.": "Serverov, ktoré už v zozname boli a zostali bez zmeny: {n}."
+ "{n} servers were already in the list and left unchanged.": "Serverov, ktoré už v zozname boli a zostali bez zmeny: {n}.",
+ "Game servers: ports and RCON": "Herné servery: porty a RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Ako pridať herné servery: porty, dopytovací port, RCON a log servera",
+ "Game port: {port}": "Herný port: {port}",
+ "Query port: {port}": "Dopytovací port: {port}",
+ "Query port: game port + {offset}": "Dopytovací port: herný port + {offset}"
 }

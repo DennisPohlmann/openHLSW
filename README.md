@@ -169,7 +169,9 @@ services are gone), Metamod plugin management.
   other games choose the game in the game list next to the address field before adding: its
   usual port and query port are filled in. After adding or deleting a server the list goes
   back to "Auto detect". These servers have no RCON; Battlefield 2 / 2142 are joined
-  directly on Connect.
+  directly on Connect. Ports, query ports, RCON and server log of every game:
+  [docs/games.md](docs/games.md) (also **? → Game servers: ports and RCON** and the **?**
+  button next to **Add**).
 - **RCON password**: the server is only asked with it when you click Test (or press Enter)
   or send a command, never while typing; after "Bad password" openHLSW does not try again by
   itself (servers ban addresses after a few failed logins).
@@ -292,7 +294,9 @@ src/
 vendor/      egui's painting crates with sub-pixel text, see vendor/README.md
 assets/      icons, flags, translations (assets/lang/*.json)
 packaging/   packages and installer
-tools/       test server, version script for releases, checks before a push
+tools/       test server, version script for releases, checks before a push, gen-games-doc.py
+             (writes the game table of docs/games.md from games.rs)
+docs/        screenshots, docs/games.md (ports, RCON and server log per game)
 ```
 
 **Translations**: the English text in the code is the key (`tr!("Refresh")`,

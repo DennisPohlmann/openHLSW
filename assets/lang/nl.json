@@ -630,5 +630,10 @@
  "{added} servers added, {updated} updated.": "{added} servers toegevoegd, {updated} bijgewerkt.",
  "{n} entries could not be read": "{n} items konden niet worden gelezen",
  "{n} entries of the file could not be read.": "{n} items uit het bestand konden niet worden gelezen.",
- "{n} servers were already in the list and left unchanged.": "{n} servers stonden al in de lijst en zijn ongewijzigd gebleven."
+ "{n} servers were already in the list and left unchanged.": "{n} servers stonden al in de lijst en zijn ongewijzigd gebleven.",
+ "Game servers: ports and RCON": "Gameservers: poorten en RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Gameservers toevoegen: poorten, querypoort, RCON en serverlog",
+ "Game port: {port}": "Spelpoort: {port}",
+ "Query port: {port}": "Querypoort: {port}",
+ "Query port: game port + {offset}": "Querypoort: spelpoort + {offset}"
 }

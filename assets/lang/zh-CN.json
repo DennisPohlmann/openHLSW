@@ -667,5 +667,10 @@
  "{added} servers added, {updated} updated.": "已添加 {added} 个服务器，已更新 {updated} 个。",
  "{n} entries could not be read": "{n} 个条目无法读取",
  "{n} entries of the file could not be read.": "文件中有 {n} 个条目无法读取。",
- "{n} servers were already in the list and left unchanged.": "{n} 个服务器已在列表中，未作更改。"
+ "{n} servers were already in the list and left unchanged.": "{n} 个服务器已在列表中，未作更改。",
+ "Game servers: ports and RCON": "游戏服务器：端口和 RCON",
+ "How to add game servers: ports, query port, RCON and server log": "如何添加游戏服务器：端口、查询端口、RCON 和服务器日志",
+ "Game port: {port}": "游戏端口：{port}",
+ "Query port: {port}": "查询端口：{port}",
+ "Query port: game port + {offset}": "查询端口：游戏端口 + {offset}"
 }

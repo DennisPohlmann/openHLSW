@@ -662,5 +662,10 @@
  "{added} servers added, {updated} updated.": "{added} palvelinta lisätty, {updated} päivitetty.",
  "{n} entries could not be read": "{n} merkintää ei voitu lukea",
  "{n} entries of the file could not be read.": "{n} tiedoston merkintää ei voitu lukea.",
- "{n} servers were already in the list and left unchanged.": "{n} palvelinta oli jo luettelossa, eikä niitä muutettu."
+ "{n} servers were already in the list and left unchanged.": "{n} palvelinta oli jo luettelossa, eikä niitä muutettu.",
+ "Game servers: ports and RCON": "Pelipalvelimet: portit ja RCON",
+ "How to add game servers: ports, query port, RCON and server log": "Pelipalvelimien lisääminen: portit, kyselyportti, RCON ja palvelinloki",
+ "Game port: {port}": "Peliportti: {port}",
+ "Query port: {port}": "Kyselyportti: {port}",
+ "Query port: game port + {offset}": "Kyselyportti: peliportti + {offset}"
 }

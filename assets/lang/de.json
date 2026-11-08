@@ -630,5 +630,10 @@
  "{name} (port {port})": "{name} (Port {port})",
  "{server}: {name} wrote: {text}": "{server}: {name} schrieb: {text}",
  "{shown} of {count} maps": "{shown} von {count} Maps",
- "{total} total": "{total} gesamt"
+ "{total} total": "{total} gesamt",
+ "Game servers: ports and RCON": "Gameserver: Ports und RCON",
+ "How to add game servers: ports, query port, RCON and server log": "So fügst du Gameserver hinzu: Ports, Query-Port, RCON und Server-Log",
+ "Game port: {port}": "Spielport: {port}",
+ "Query port: {port}": "Query-Port: {port}",
+ "Query port: game port + {offset}": "Query-Port: Spielport + {offset}"
 }

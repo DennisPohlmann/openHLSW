@@ -1883,4 +1883,28 @@ mod tests {
         assert_eq!(keys.len(), GAMES.len());
         assert!(by_key("ArmA").is_some_and(|g| g.not_detectable));
     }
+
+    /// docs/games.md lists every game: run `python3 tools/gen-games-doc.py` after changing GAMES.
+    #[test]
+    fn games_doc_is_current() {
+        let doc = include_str!("../docs/games.md");
+        let doc = doc.split_once("<!-- games:begin").map_or("", |(_, t)| t);
+        for g in GAMES {
+            let port = if g.default_port > 0 {
+                g.default_port.to_string()
+            } else if g.protocol == Protocol::A2s {
+                "27015".into()
+            } else {
+                "(enter it)".into()
+            };
+            let row = doc
+                .lines()
+                .find(|l| l.starts_with(&format!("| {} | ", g.name)));
+            assert!(
+                row.is_some_and(|r| r.contains(&format!(" | {port} | "))),
+                "docs/games.md is out of date for {} (run tools/gen-games-doc.py)",
+                g.name
+            );
+        }
+    }
 }
