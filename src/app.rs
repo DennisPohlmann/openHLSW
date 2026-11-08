@@ -77,7 +77,8 @@ struct HostBudget {
 impl Default for HostBudget {
     fn default() -> Self {
         Self {
-            budget: 1.0,
+            // Full at the start, so all servers on one address are asked in the first round.
+            budget: HOST_QUERY_RATE,
             at: Instant::now(),
             factor: 1.0,
         }
@@ -1472,7 +1473,8 @@ pub struct OpenHlswApp {
     geo_pending: HashSet<IpAddr>,
     /// Query budgets per server IP address (see [`HOST_QUERY_RATE`]).
     hosts: HashMap<String, HostBudget>,
-    last_geo_request: Option<Instant>,
+    /// Batch requests to ip-api.com in the last minute (see [`geo_request_allowed`]).
+    geo_requests: VecDeque<Instant>,
     /// Row order shown last frame (kept while hovering if keep_order_on_hover).
     list_order: Vec<ServerId>,
     /// Queries paused because we minimized for a game (OnConnect::MinimizeNoTraffic).
@@ -1683,7 +1685,7 @@ impl OpenHlswApp {
             geo: geo::load_cache(),
             geo_pending: HashSet::new(),
             hosts: HashMap::new(),
-            last_geo_request: None,
+            geo_requests: VecDeque::new(),
             list_order: Vec::new(),
             paused_for_game: false,
             console_input_id: None,
@@ -2050,13 +2052,10 @@ impl OpenHlswApp {
         }
     }
 
-    /// Asks ip-api.com for the location of server IPs we do not know yet
-    /// (one batch request at most every 5 s; the free API allows 15 per minute).
+    /// Asks ip-api.com for the location of server IPs we do not know yet, as soon as
+    /// they are known (see [`geo_request_allowed`] for the limit).
     fn lookup_locations(&mut self) {
-        if !self.settings.geo_lookup
-            || self
-                .last_geo_request
-                .is_some_and(|t| t.elapsed() < Duration::from_secs(5))
+        if !self.settings.geo_lookup || !geo_request_allowed(&mut self.geo_requests, Instant::now())
         {
             return;
         }
@@ -2091,7 +2090,7 @@ impl OpenHlswApp {
             return;
         }
         self.geo_pending.extend(ips.iter().copied());
-        self.last_geo_request = Some(Instant::now());
+        self.geo_requests.push_back(Instant::now());
         worker::spawn_geo_lookup(&self.notifier, ips);
     }
 
@@ -8561,6 +8560,9 @@ fn server_table(
         .collect();
     let autosize = take_autosize(ui, "servers");
     let fit_all = fit_all_pending(ui, "servers");
+    // One width for every number (as many digits as the highest), so the stars behind
+    // them line up at 9, 10 and 100.
+    let num_width = text_width(ui, &"0".repeat(servers.len().max(1).to_string().len()));
     // Double click on a header / separator: fit the column to all servers in the list;
     // "Fit all columns": every column.
     let fit_widths: Vec<Option<f32>> = columns
@@ -8582,7 +8584,7 @@ fn server_table(
                                 } else {
                                     12.0 + spacing
                                 };
-                                ((idx + 1).to_string(), 16.5 + spacing + star)
+                                (String::new(), 16.5 + spacing + num_width + star)
                             }
                             Col::Address => (s.address.to_string(), 0.0),
                             Col::Name => (
@@ -8699,7 +8701,11 @@ fn server_table(
                                 if let (Some(c), false) = (red, sel) {
                                     num = num.color(c);
                                 }
-                                ui.add(Label::new(num).selectable(false));
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(num_width, ui.available_height()),
+                                    egui::Layout::right_to_left(Align::Center),
+                                    |ui| ui.add(Label::new(num).selectable(false)),
+                                );
                                 if !s.rcon_password.is_empty() {
                                     star(ui, 12.0).on_hover_text(tr!("RCON password set"));
                                 }
@@ -11167,6 +11173,22 @@ fn status_wait(interval: u32, error: bool) -> u32 {
     }
 }
 
+/// ip-api.com allows 15 batch requests per minute. They go out at most one per second
+/// (servers answering a moment later share a batch), 14 per minute, so the flags of a
+/// new list arrive within seconds instead of one batch every 5 s.
+fn geo_request_allowed(sent: &mut VecDeque<Instant>, now: Instant) -> bool {
+    while sent
+        .front()
+        .is_some_and(|&t| now.duration_since(t) >= Duration::from_secs(60))
+    {
+        sent.pop_front();
+    }
+    sent.len() < 14
+        && sent
+            .back()
+            .is_none_or(|&t| now.duration_since(t) >= Duration::from_secs(1))
+}
+
 fn sanitize_interval(secs: f32, max_queries_per_sec: f32) -> f32 {
     let min = min_interval(max_queries_per_sec);
     if secs.is_finite() {
@@ -12281,6 +12303,22 @@ fn status_line(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geo_requests_one_per_second_14_per_minute() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut sent = VecDeque::new();
+        assert!(geo_request_allowed(&mut sent, t0));
+        sent.push_back(t0);
+        assert!(!geo_request_allowed(&mut sent, t0 + Duration::from_millis(500)));
+        for s in 1..14 {
+            assert!(geo_request_allowed(&mut sent, at(s)));
+            sent.push_back(at(s));
+        }
+        assert!(!geo_request_allowed(&mut sent, at(30))); // 14 in the last minute
+        assert!(geo_request_allowed(&mut sent, at(60))); // the first one is a minute old
+    }
 
     #[test]
     fn rule_values_are_not_expanded_again() {
