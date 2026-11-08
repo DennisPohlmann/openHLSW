@@ -16,6 +16,9 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 
 mod app;
+// Which firewall may drop the server log (Get Log); the GUI's check.
+#[path = "../../firewall.rs"]
+mod firewall;
 // The game list of the GUI (which protocol a chosen game speaks); plain data.
 #[path = "../../games.rs"]
 #[allow(dead_code)]
@@ -133,6 +136,10 @@ fn main() -> ExitCode {
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     app.save();
+    // Removes the port forwarding in the router (Get Log), as the GUI does on exit.
+    if let Some(mapper) = &mut app.log.mapper {
+        mapper.shutdown(Duration::from_secs(3));
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

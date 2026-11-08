@@ -27,6 +27,7 @@ use egui_extras::{Column, TableBuilder, TableRow};
 use openhlsw::a2s::{Player, QueryMeta, Rule, ServerInfo};
 use openhlsw::address::ServerAddress;
 use openhlsw::rcon_text::{BanEntry, map_matches, parse_ban_list, parse_map_list, stock_maps};
+use openhlsw::serverlog::{ChatLine, LogListener, mask_rcon_password, parse_chat_line, parse_log_stamp};
 use openhlsw::steamid::SteamId;
 
 use crate::config::{self, Config, SavedList, SavedServer};
@@ -250,18 +251,6 @@ struct LogPlayer {
     damage_armor: u32,
     /// Health and armor after the last hit taken.
     health: Option<(i32, i32)>,
-}
-
-#[derive(Clone)]
-struct ChatLine {
-    /// From the server log's own stamp (when it has one), else when it arrived.
-    time: chrono::NaiveDateTime,
-    name: String,
-    team: String,
-    team_only: bool,
-    text: String,
-    /// Sent from openHLSW (Message to all players) and not yet echoed by the server log.
-    own: bool,
 }
 
 impl Server {
@@ -1615,7 +1604,7 @@ pub struct OpenHlswApp {
     legacy_hide_password: bool,
     last_list_refresh: Option<Instant>,
     traffic: Traffic,
-    log_listener: Option<Result<worker::LogListener, String>>,
+    log_listener: Option<Result<LogListener, String>>,
     /// Secret in the URL Counter-Strike 2 servers send their log to (see `httplog`).
     log_token: String,
     /// Secret key for the number in each server's log URL: a CS2 server that knows its own
@@ -1749,7 +1738,7 @@ impl Find {
 impl OpenHlswApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (notifier, events) = Notifier::new(cc.egui_ctx.clone());
-        let port_mapper = PortMapper::spawn(&notifier);
+        let port_mapper = worker::spawn_port_mapper(&notifier);
         let mut config = config::load();
         crate::i18n::set_language(config.settings.language);
         // Old configs: switch once to the current default look (system font, 12 px).
@@ -2268,7 +2257,7 @@ impl OpenHlswApp {
             return Ok(None);
         }
         match &self.log_listener {
-            Some(Ok(worker::LogListener { http: Err(e), port })) => Err(tr!(
+            Some(Ok(LogListener { http: Err(e), port })) => Err(tr!(
                 "Cannot receive the log of Counter-Strike 2 (HTTP) on TCP port {port}: {e}",
                 port = port,
                 e = e
@@ -11663,16 +11652,6 @@ fn translate_log(line: &str) -> String {
     out
 }
 
-/// Splits a server log line into its date/time prefix and the rest:
-/// "[L ]MM/DD/YYYY - HH:MM:SS: rest". None if the line has no valid prefix.
-fn parse_log_stamp(line: &str) -> Option<(chrono::NaiveDateTime, &str)> {
-    let line = line.strip_prefix("L ").unwrap_or(line);
-    // The prefix has a fixed width: "10/29/2026 - 09:19:46" is 21 bytes, then ": ".
-    let stamp = line.get(..21)?;
-    let rest = line.get(21..)?.strip_prefix(": ")?;
-    let time = chrono::NaiveDateTime::parse_from_str(stamp, "%m/%d/%Y - %H:%M:%S").ok()?;
-    Some((time, rest))
-}
 
 /// Drops the date/time prefix of a log line when it says the same as the console's own
 /// time column (within a minute), so date and time show only once. A server clock in
@@ -12063,46 +12042,6 @@ fn apply_log_stats(players: &mut HashMap<String, LogPlayer>, line: &str) {
     }
 }
 
-/// `10/18/2026 - 19:22:33: "Bob<2><STEAM_1:0:1><CT>" say "hi"` → chat line.
-fn parse_chat_line(line: &str) -> Option<ChatLine> {
-    let (time, rest) = match parse_log_stamp(line) {
-        Some(stamped) => stamped,
-        None => (chrono::Local::now().naive_local(), line.split_once(": ")?.1),
-    };
-    // HLDS logs `rcon say` as: Server say "text"
-    if let Some(text) = rest.strip_prefix("Server say \"") {
-        return Some(ChatLine {
-            time,
-            name: "Console".into(),
-            team: String::new(),
-            team_only: false,
-            text: text.strip_suffix('"').unwrap_or(text).to_string(),
-            own: false,
-        });
-    }
-    let (player, team_only, text) = if let Some((p, t)) = rest.split_once("\" say_team \"") {
-        (p, true, t)
-    } else {
-        let (p, t) = rest.split_once("\" say \"")?;
-        (p, false, t)
-    };
-    let player = player.strip_prefix('"')?;
-    // name<userid><steamid><team> — the name itself may contain '<', so split from the right.
-    let mut parts = player.rsplitn(4, '<');
-    let team = parts.next()?.trim_end_matches('>').to_string();
-    parts.next()?;
-    parts.next()?;
-    let name = parts.next()?.to_string();
-    let text = text.strip_suffix('"').unwrap_or(text).to_string();
-    Some(ChatLine {
-        time,
-        name,
-        team,
-        team_only,
-        text,
-        own: false,
-    })
-}
 
 /// Appends a log line to `<config dir>/logs/<server>/<YYYY-MM-DD>.<ext>`.
 /// Replaces every `<RULE(key)>` in `arg` with that server rule ("" if unknown). Searches
@@ -12120,22 +12059,6 @@ fn expand_rules<'a>(arg: &mut String, rule: impl Fn(&str) -> Option<&'a str>) {
     }
 }
 
-/// HLDS logs every RCON command with its password: `Rcon: "rcon <challenge> "<password>"
-/// <command>" from ...` (also `Bad Rcon: ...`). The password becomes `***` before the line
-/// is shown or saved.
-fn mask_rcon_password(line: String) -> String {
-    let Some(at) = line.find("Rcon: \"rcon ") else {
-        return line;
-    };
-    let rest = at + "Rcon: \"rcon ".len();
-    let Some(open) = line[rest..].find(" \"").map(|i| rest + i + 2) else {
-        return line;
-    };
-    let Some(close) = line[open..].find('"').map(|i| open + i) else {
-        return line;
-    };
-    format!("{}***{}", &line[..open], &line[close..])
-}
 
 /// `MM/DD/YYYY` at the start of a log line → `YYYY-MM-DD`, else `log`. Digits only: the
 /// line comes from the network and must not put `..`, `\\` or `C:` into the file name.

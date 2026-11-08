@@ -5,6 +5,7 @@
 
 use openhlsw::clean_terminal_text as clean;
 use std::collections::VecDeque;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -12,11 +13,13 @@ use openhlsw::a2s::{Player, Rule, ServerInfo};
 use openhlsw::address::ServerAddress;
 use openhlsw::query::Protocol;
 use openhlsw::rcon_text::{self, BanEntry};
+use openhlsw::serverlog::{self, LogListener, MappedPort, PortMapper, PortMapping};
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
 
+use crate::firewall;
 use crate::games::{self, Game};
 use crate::net::{self, Event, Id, QueryJob, RconState, Request, Tag};
 use crate::store::Store;
@@ -30,6 +33,8 @@ const DETAILS_REFRESH: Duration = Duration::from_secs(10);
 /// Queries per second to one host, for all servers on it together, like the GUI: hosters'
 /// firewalls drop senders that ask their many servers on one address too often.
 const HOST_QUERY_RATE: f64 = 10.0;
+/// Time for the first log line after Get Log (`log on` and every RCON command are logged).
+const LOG_WAIT: Duration = Duration::from_secs(15);
 
 // --------------------------------------------------------------------------
 // Data
@@ -63,6 +68,16 @@ pub struct Server {
     /// Given on the command line, not in the saved list.
     pub temporary: bool,
     pub rcon: Rcon,
+    /// Get Log: where the server sends its log (None: not asked).
+    pub log_target: Option<SocketAddr>,
+    /// Get Log (Internet) rather than (LAN).
+    log_internet: bool,
+    /// Counter-Strike 2: the log comes over HTTP.
+    log_http: bool,
+    /// The server's address, which its UDP log lines come from.
+    log_from: Option<SocketAddr>,
+    /// Get Log was answered, no line has arrived yet.
+    log_waiting: Option<Instant>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -109,6 +124,20 @@ pub struct ChatLine {
     pub time: String,
     pub name: String,
     pub text: String,
+    /// Sent from here and not yet repeated by the server log.
+    own: bool,
+}
+
+/// Get Log, as in the GUI: one listener (UDP, HTTP for CS2) for all servers, started on
+/// the first Get Log and kept until the program ends.
+pub struct LogReceiver {
+    pub listener: Option<Result<LogListener, String>>,
+    /// Secret in the HTTP log URL.
+    token: String,
+    /// Each server's own number in its HTTP log URL, so one server cannot post for another.
+    keys: std::collections::hash_map::RandomState,
+    pub mapper: Option<PortMapper>,
+    pub mapping: Option<Result<PortMapping, String>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -116,6 +145,44 @@ pub enum LineKind {
     Command,
     Output,
     Error,
+    /// A line of the server log (Get Log).
+    Log,
+}
+
+/// What to check when no server log arrived (the GUI's hint, in English).
+fn no_log_text(
+    port: u16,
+    http: bool,
+    check_router: bool,
+    firewall: Option<firewall::Firewall>,
+) -> String {
+    let (proto, secs) = (if http { "tcp" } else { "udp" }, LOG_WAIT.as_secs());
+    let mut text = if http {
+        format!(
+            "No server log (HTTP, Counter-Strike 2) arrived on TCP port {port} within {secs} s."
+        )
+    } else {
+        format!("No server log arrived on UDP port {port} within {secs} s.")
+    };
+    if check_router {
+        let p = proto.to_uppercase();
+        text.push_str(&format!(
+            " Check that the router forwards {p} port {port} to this computer."
+        ));
+    }
+    match firewall {
+        Some(firewall::Firewall::Ufw) => text.push_str(&format!(
+            " ufw is on and may block it: sudo ufw allow {port}/{proto}"
+        )),
+        Some(firewall::Firewall::FirewalldClosed) => text.push_str(&format!(
+            " firewalld blocks it: sudo firewall-cmd --permanent --add-port={port}/{proto} && sudo firewall-cmd --reload"
+        )),
+        None if cfg!(windows) => {
+            text.push_str(" Windows Firewall: allow openhlsw-tui for incoming connections.")
+        }
+        None => {}
+    }
+    text
 }
 
 fn push_lines(
@@ -291,14 +358,18 @@ pub enum Field {
     Disconnect,
     Hide,
     Save,
+    LogInternet,
+    LogLan,
 }
 
-pub const FIELDS: [Field; 5] = [
+pub const FIELDS: [Field; 7] = [
     Field::Password,
     Field::Test,
     Field::Disconnect,
     Field::Hide,
     Field::Save,
+    Field::LogInternet,
+    Field::LogLan,
 ];
 
 #[derive(Clone, PartialEq)]
@@ -523,6 +594,7 @@ pub struct App {
     pub areas: Areas,
     /// Text waiting for the terminal's clipboard (OSC 52), written after the next frame.
     pub clipboard: Option<String>,
+    pub log: LogReceiver,
 }
 
 impl App {
@@ -566,6 +638,13 @@ impl App {
             rx,
             areas: Areas::default(),
             clipboard: None,
+            log: LogReceiver {
+                listener: None,
+                token: openhlsw::httplog::new_token(),
+                keys: Default::default(),
+                mapper: None,
+                mapping: None,
+            },
             store,
         };
         for e in app.store.servers() {
@@ -624,6 +703,11 @@ impl App {
             challenge: None,
             temporary,
             rcon: Rcon::default(),
+            log_target: None,
+            log_internet: false,
+            log_http: false,
+            log_from: None,
+            log_waiting: None,
         });
         id
     }
@@ -761,6 +845,7 @@ impl App {
         while let Ok(event) = self.rx.try_recv() {
             self.handle_event(event);
         }
+        self.check_log_arrival();
         for job in self.due_queries(force) {
             net::spawn_query(&self.tx, job);
         }
@@ -836,6 +921,7 @@ impl App {
     fn handle_event(&mut self, event: Event) {
         match event {
             Event::Query { id, result } => {
+                let mut relog = None;
                 let Some(s) = self.server_mut(id) else { return };
                 s.busy = false;
                 match result.map(|b| *b) {
@@ -852,6 +938,14 @@ impl App {
                             s.detected = snap.detected;
                         }
                         let mut info = snap.info;
+                        // Asked again the same way as the first time, if wanted (as in the GUI).
+                        if s.log_target.is_some()
+                            && s.info
+                                .as_ref()
+                                .is_some_and(|old| old.map != clean(&info.map))
+                        {
+                            relog = Some((id, s.log_internet));
+                        }
                         info.name = clean(&info.name);
                         info.map = clean(&info.map);
                         info.game = clean(&info.game);
@@ -881,6 +975,74 @@ impl App {
                         s.ping_ms = None;
                     }
                 }
+                if let Some((id, internet)) = relog
+                    && self.store.setting_bool("log_on_map_change", true)
+                {
+                    self.start_log(id, internet);
+                }
+            }
+            Event::LogStarted { id, sent, result } => {
+                let addr = self.server(id).map(|s| s.address_text.clone());
+                let Some(s) = self.server_mut(id) else { return };
+                let r = &mut s.rcon;
+                for (command, answer) in sent {
+                    let (c, scroll) = (&mut r.console, &mut r.console_scroll);
+                    push_lines(c, scroll, &format!("] {command}"), LineKind::Command);
+                    if !answer.trim().is_empty() {
+                        push_lines(c, scroll, &answer, LineKind::Output);
+                    }
+                }
+                let text = match result {
+                    Ok((target, from)) => {
+                        s.log_target = Some(target);
+                        s.log_from = Some(from);
+                        s.log_waiting = Some(Instant::now());
+                        let (c, scroll) = (&mut s.rcon.console, &mut s.rcon.console_scroll);
+                        let line = format!("*** Server log is now sent to {target}");
+                        push_lines(c, scroll, &line, LineKind::Output);
+                        format!("Receiving log of {} on {target}", addr.unwrap_or_default())
+                    }
+                    Err(e) => {
+                        s.log_target = None;
+                        let e = clean(&e);
+                        let (c, scroll) = (&mut s.rcon.console, &mut s.rcon.console_scroll);
+                        push_lines(
+                            c,
+                            scroll,
+                            &format!("*** Get Log failed: {e}"),
+                            LineKind::Error,
+                        );
+                        format!("Get Log failed: {e}")
+                    }
+                };
+                self.say(text);
+            }
+            Event::Log { from, server, line } => self.log_line(from, server, &line),
+            Event::NoLog { id, text } => {
+                // Get Log may have failed or been asked again meanwhile.
+                if let Some(s) = self.server_mut(id)
+                    && s.log_target.is_some()
+                    && s.log_waiting.is_none()
+                {
+                    let r = &mut s.rcon;
+                    let line = format!("*** {text}");
+                    push_lines(
+                        &mut r.console,
+                        &mut r.console_scroll,
+                        &line,
+                        LineKind::Error,
+                    );
+                    self.say(text);
+                }
+            }
+            Event::PortMap(result) => {
+                if let Err(e) = &result {
+                    self.say(format!(
+                        "Port forwarding via UPnP failed: {}. Enable UPnP in the router or forward the port by hand.",
+                        clean(e)
+                    ));
+                }
+                self.log.mapping = Some(result);
             }
             Event::Rcon { id, tag, result } => {
                 let Some(s) = self.server_mut(id) else { return };
@@ -956,7 +1118,11 @@ impl App {
     /// The RCON session of the selected server, opened with its password. Without a
     /// password the Rcon Config tab is shown with the password field.
     fn session(&mut self) -> Option<Sender<Request>> {
-        let s = self.current()?;
+        self.session_of(self.selected_id?)
+    }
+
+    fn session_of(&mut self, id: Id) -> Option<Sender<Request>> {
+        let s = self.server(id)?;
         if let Some(tx) = &s.rcon.session {
             return Some(tx.clone());
         }
@@ -1002,6 +1168,209 @@ impl App {
         }
         if let Some(tx) = self.session() {
             let _ = tx.send(Request::Test);
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Get Log
+    // ----------------------------------------------------------------------
+
+    /// Starts the log listener on the first Get Log: on the fixed port from the GUI's
+    /// settings, otherwise on a free port chosen by the OS (kept until the program ends).
+    fn ensure_log_listener(&mut self) -> Result<u16, String> {
+        if let Some(Ok(listener)) = &self.log.listener {
+            return Ok(listener.port);
+        }
+        let wanted = self
+            .store
+            .setting_bool("fixed_log_port", false)
+            .then(|| self.store.setting_f64("log_port").unwrap_or(27500.0))
+            .map(|p| p.clamp(1024.0, 65535.0) as u16);
+        let result = net::spawn_log_listener(&self.tx, wanted.unwrap_or(0), self.log.token.clone())
+            .map_err(|e| match wanted {
+                Some(port) => format!("Cannot listen on UDP port {port}: {e}"),
+                None => format!("Cannot open a UDP port for server logs: {e}"),
+            });
+        let port = result.as_ref().map(|l| l.port).map_err(Clone::clone);
+        self.log.listener = Some(result);
+        port
+    }
+
+    /// Forwards the log port in the router (UPnP, on unless switched off in the GUI); asks
+    /// again on every Get Log, so a failed forwarding is retried.
+    fn update_port_mapping(&mut self) {
+        let Some(Ok(listener)) = &self.log.listener else {
+            return;
+        };
+        if !self.store.setting_bool("upnp", true) {
+            return;
+        }
+        let port = MappedPort {
+            port: listener.port,
+            tcp: listener.http.is_ok(),
+        };
+        self.log
+            .mapper
+            .get_or_insert_with(|| net::spawn_port_mapper(&self.tx))
+            .set(Some(port));
+    }
+
+    /// The address servers on the Internet send their log to: the one from the GUI's
+    /// settings, otherwise the router's (UPnP); `None` = ask api.ipify.org.
+    fn public_ip(&self) -> Option<IpAddr> {
+        self.store
+            .setting_str("public_ip")
+            .and_then(|ip| ip.trim().parse().ok())
+            .or_else(|| match &self.log.mapping {
+                Some(Ok(m)) => m.external_ip.filter(|ip| serverlog::is_public(*ip)),
+                _ => None,
+            })
+    }
+
+    fn log_key(&self, id: Id) -> u64 {
+        std::hash::BuildHasher::hash_one(&self.log.keys, id)
+    }
+
+    /// Get Log (Internet / LAN): the server sends its log to us, shown in Console and Chat.
+    fn start_log(&mut self, id: Id, internet: bool) {
+        let port = match self.ensure_log_listener() {
+            Ok(port) => port,
+            Err(e) => return self.say(e),
+        };
+        self.update_port_mapping();
+        let public_ip = self.public_ip();
+        let Some(s) = self.server(id) else { return };
+        // Counter-Strike 2 sends its log only over HTTP (logaddress_add_http).
+        let http_path = if s.info.as_ref().is_some_and(|i| i.real_app_id() == 730) {
+            if let Some(Ok(LogListener { http: Err(e), port })) = &self.log.listener {
+                let e = format!(
+                    "Cannot receive the log of Counter-Strike 2 (HTTP) on TCP port {port}: {e}"
+                );
+                return self.say(e);
+            }
+            Some(openhlsw::httplog::log_path(
+                &self.log.token,
+                self.log_key(id),
+            ))
+        } else {
+            None
+        };
+        let Some(tx) = self.session_of(id) else {
+            return;
+        };
+        let Some(s) = self.server_mut(id) else { return };
+        s.log_internet = internet;
+        s.log_http = http_path.is_some();
+        let text = format!("Requesting log of {}…", s.address_text);
+        let _ = tx.send(Request::StartLog {
+            internet,
+            port,
+            public_ip,
+            http_path,
+        });
+        self.say(text);
+    }
+
+    /// A line of a server log. HTTP (CS2): the URL carries the secret token and the key only
+    /// that server was given. UDP: from the server's address (srcds sends from its game
+    /// port), else from its IP. Only servers asked with Get Log are taken.
+    fn log_line(&mut self, from: SocketAddr, server: Option<u64>, line: &str) {
+        let line = clean(&serverlog::mask_rcon_password(line.to_string()));
+        let asked = |s: &&Server| s.log_target.is_some();
+        let id = match server {
+            Some(key) => self
+                .servers
+                .iter()
+                .filter(asked)
+                .find(|s| s.log_http && self.log_key(s.id) == key),
+            None => self
+                .servers
+                .iter()
+                .filter(asked)
+                .find(|s| s.log_from == Some(from))
+                .or_else(|| {
+                    self.servers
+                        .iter()
+                        .filter(asked)
+                        .find(|s| s.log_from.map(|a| a.ip()) == Some(from.ip()))
+                }),
+        }
+        .map(|s| s.id);
+        let Some(s) = id.and_then(|id| self.server_mut(id)) else {
+            return;
+        };
+        s.log_waiting = None;
+        let r = &mut s.rcon;
+        push_lines(
+            &mut r.console,
+            &mut r.console_scroll,
+            &format!("L {line}"),
+            LineKind::Log,
+        );
+        let Some(chat) = serverlog::parse_chat_line(&line) else {
+            return;
+        };
+        let time = chat.time.format("%H:%M:%S").to_string();
+        // Our own message is shown right away when sent; the log repeats it as "Console".
+        if chat.name == "Console"
+            && let Some(own) = r
+                .chat
+                .iter_mut()
+                .rev()
+                .take(20)
+                .find(|c| c.own && c.text == chat.text)
+        {
+            own.own = false;
+            own.time = time;
+            return;
+        }
+        let name = if chat.team_only {
+            format!("{} (Team)", chat.name)
+        } else {
+            chat.name
+        };
+        r.chat.push_back(ChatLine {
+            time,
+            name,
+            text: chat.text,
+            own: false,
+        });
+        if r.chat.len() > CONSOLE_LINES {
+            r.chat.pop_front();
+        }
+        if r.chat_scroll > 0 {
+            r.chat_scroll += 1;
+        }
+    }
+
+    /// No log line within [`LOG_WAIT`] after Get Log: say what to check, as the GUI does.
+    fn check_log_arrival(&mut self) {
+        let Some(Ok(listener)) = &self.log.listener else {
+            return;
+        };
+        let port = listener.port;
+        let mapping = self.log.mapping.clone();
+        for s in &mut self.servers {
+            if !s.log_waiting.is_some_and(|t| t.elapsed() >= LOG_WAIT) {
+                continue;
+            }
+            s.log_waiting = None;
+            let (http, internet) = (s.log_http, s.log_internet);
+            let forwarded = matches!(&mapping,
+                Some(Ok(m)) if m.port == port && (!http || m.tcp == Some(true)));
+            let tx = self.tx.clone();
+            let id = s.id;
+            // firewall-cmd may take a moment: off the UI thread.
+            std::thread::spawn(move || {
+                let proto = if http { "tcp" } else { "udp" };
+                let text = no_log_text(
+                    port,
+                    http,
+                    internet && !forwarded,
+                    firewall::check(port, proto),
+                );
+                let _ = tx.send(Event::NoLog { id, text });
+            });
         }
     }
 
@@ -1238,6 +1607,11 @@ impl App {
                         }
                         self.save_rcon();
                     }
+                    Field::LogInternet | Field::LogLan => {
+                        if let Some(id) = self.selected_id {
+                            self.start_log(id, self.field == Field::LogInternet);
+                        }
+                    }
                     Field::Password => {}
                 }
             }
@@ -1335,6 +1709,7 @@ impl App {
                         time: chrono::Local::now().format("%H:%M:%S").to_string(),
                         name: "Console".into(),
                         text: clean(&text),
+                        own: true,
                     });
                     if s.rcon.chat.len() > CONSOLE_LINES {
                         s.rcon.chat.pop_front();
@@ -1969,6 +2344,76 @@ mod tests {
         app.last_refresh = Some(Instant::now() - app.delay);
         let jobs = app.due_queries(false);
         assert!(jobs.iter().all(|j| j.players && j.rules));
+    }
+
+    #[test]
+    fn log_lines_reach_only_the_server_that_was_asked() {
+        let mut app = test_app(&["192.0.2.1:27015", "192.0.2.2:27015"]);
+        let (a, b) = (app.servers[0].id, app.servers[1].id);
+        let from: SocketAddr = "192.0.2.1:27015".parse().unwrap();
+        let say = r#"11/08/2026 - 20:00:00: "Bob<2><STEAM_1:0:1><CT>" say "hi""#;
+        // Not asked with Get Log: ignored.
+        app.log_line(from, None, say);
+        assert!(app.servers[0].rcon.console.is_empty());
+        let s = app.server_mut(a).unwrap();
+        s.log_target = Some("198.51.100.1:40000".parse().unwrap());
+        s.log_from = Some(from);
+        s.log_waiting = Some(Instant::now());
+        app.log_line(from, None, say);
+        // A forged sender and an HTTP key of no server change nothing.
+        app.log_line("203.0.113.9:27015".parse().unwrap(), None, say);
+        app.log_line(from, Some(app.log_key(b)), say);
+        let s = app.server(a).unwrap();
+        assert_eq!(s.rcon.console.len(), 1);
+        assert!(s.log_waiting.is_none());
+        let chat = &s.rcon.chat[0];
+        assert_eq!(
+            (chat.time.as_str(), chat.name.as_str(), chat.text.as_str()),
+            ("20:00:00", "Bob", "hi")
+        );
+        assert!(app.server(b).unwrap().rcon.console.is_empty());
+        // HLDS logs the RCON password: it is masked.
+        app.log_line(
+            from,
+            None,
+            r#"11/08/2026 - 20:00:01: Rcon: "rcon 123 "hunter2" status" from "198.51.100.1:5000""#,
+        );
+        let last = &app.server(a).unwrap().rcon.console.back().unwrap().0;
+        assert!(!last.contains("hunter2"), "{last}");
+    }
+
+    #[test]
+    fn own_chat_is_not_shown_twice_when_the_log_repeats_it() {
+        let mut app = test_app(&["192.0.2.1:27015"]);
+        let from: SocketAddr = "192.0.2.1:27015".parse().unwrap();
+        let s = &mut app.servers[0];
+        s.log_target = Some("198.51.100.1:40000".parse().unwrap());
+        s.log_from = Some(from);
+        s.rcon.chat.push_back(ChatLine {
+            time: "19:59:59".into(),
+            name: "Console".into(),
+            text: "hello".into(),
+            own: true,
+        });
+        app.log_line(
+            from,
+            None,
+            r#"11/08/2026 - 20:00:00: "Console<0><Console><Console>" say "hello""#,
+        );
+        let chat = &app.servers[0].rcon.chat;
+        assert_eq!(chat.len(), 1);
+        assert!(!chat[0].own);
+        assert_eq!(chat[0].time, "20:00:00");
+    }
+
+    #[test]
+    fn no_log_hint_names_router_and_firewall() {
+        let t = no_log_text(27500, false, true, Some(firewall::Firewall::Ufw));
+        assert!(t.contains("UDP port 27500"), "{t}");
+        assert!(t.contains("router forwards UDP port 27500"), "{t}");
+        assert!(t.contains("sudo ufw allow 27500/udp"), "{t}");
+        let t = no_log_text(27500, true, false, None);
+        assert!(t.contains("TCP port 27500") && !t.contains("router"), "{t}");
     }
 
     #[test]

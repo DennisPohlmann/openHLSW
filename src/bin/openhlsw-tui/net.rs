@@ -1,6 +1,7 @@
-//! Background work: server queries and RCON sessions, each on its own thread. Results come
-//! back to the UI thread as [`Event`]s.
+//! Background work: server queries, RCON sessions and the server log listener, each on its
+//! own thread. Results come back to the UI thread as [`Event`]s.
 
+use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -10,6 +11,7 @@ use openhlsw::address::ServerAddress;
 use openhlsw::gamespy2;
 use openhlsw::query::{self, Protocol};
 use openhlsw::rcon::{GoldSrcRcon, RconClient, RconError};
+use openhlsw::serverlog::{self, LogListener, PortMapper, PortMapping};
 
 const QUERY_TIMEOUT: Duration = Duration::from_millis(1500);
 /// The other protocols may try several query ports.
@@ -44,6 +46,46 @@ pub enum Event {
         id: Id,
         state: RconState,
     },
+    /// Get Log: the commands sent with their answers, then where the log goes to and the
+    /// server's address it comes from.
+    LogStarted {
+        id: Id,
+        sent: Vec<(String, String)>,
+        result: Result<(SocketAddr, SocketAddr), String>,
+    },
+    /// A line of a server log; `server` is the key from the HTTP log URL (CS2).
+    Log {
+        from: SocketAddr,
+        server: Option<u64>,
+        line: String,
+    },
+    /// No log line arrived after Get Log: what to check.
+    NoLog {
+        id: Id,
+        text: String,
+    },
+    /// Result of forwarding the log port in the router (UPnP).
+    PortMap(Result<PortMapping, String>),
+}
+
+/// The log listener (UDP, and HTTP for Counter-Strike 2 on the same TCP port), as in the GUI.
+pub fn spawn_log_listener(
+    tx: &Sender<Event>,
+    port: u16,
+    token: String,
+) -> std::io::Result<LogListener> {
+    let tx = tx.clone();
+    serverlog::spawn_listener(port, token, move |from, server, line| {
+        let _ = tx.send(Event::Log { from, server, line });
+    })
+}
+
+/// Keeps the log port forwarded in the router (UPnP), as in the GUI.
+pub fn spawn_port_mapper(tx: &Sender<Event>) -> PortMapper {
+    let tx = tx.clone();
+    PortMapper::spawn(move |result| {
+        let _ = tx.send(Event::PortMap(result));
+    })
 }
 
 pub struct QueryJob {
@@ -206,6 +248,14 @@ pub enum Request {
     Test,
     Disconnect,
     Exec(Tag, String),
+    /// Get Log: `logaddress_add` (CS2: `logaddress_add_http` with `http_path`) to our
+    /// public (`internet`) or LAN address and `port`, then `log on`.
+    StartLog {
+        internet: bool,
+        port: u16,
+        public_ip: Option<IpAddr>,
+        http_path: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -215,6 +265,35 @@ pub enum RconState {
     BadPassword,
     Failed(String),
     Disconnected,
+}
+
+/// Why a command did not run. A wrong password ends the session.
+enum Failure {
+    BadPassword,
+    Other(String),
+}
+
+/// Where the server is told to send its log: our public address (`internet`; the one from
+/// the settings or the router, else asked from api.ipify.org) or the LAN address towards
+/// the server, with `port`. Also returns the server's address the log comes from.
+fn log_target(
+    address: &ServerAddress,
+    internet: bool,
+    port: u16,
+    public_ip: Option<IpAddr>,
+) -> Result<(SocketAddr, SocketAddr), String> {
+    let server = address.resolve().map_err(|e| format!("DNS: {e}"))?;
+    let ip = if internet {
+        match public_ip {
+            Some(ip) => ip,
+            None => serverlog::public_ip_lookup()
+                .map_err(|e| format!("Could not determine public IP: {e}"))?,
+        }
+    } else {
+        serverlog::local_ip_towards(server)
+            .map_err(|e| format!("Could not determine LAN IP: {e}"))?
+    };
+    Ok((SocketAddr::new(ip, port), server))
 }
 
 enum Conn {
@@ -260,54 +339,89 @@ pub fn spawn_rcon(
                 RconClient::connect(addr, &password, RCON_TIMEOUT).map(Conn::Source)
             }
         };
-        while let Ok(request) = req_rx.recv() {
-            let (tag, command) = match request {
-                Request::Disconnect => {
-                    conn = None;
-                    state(RconState::Disconnected);
-                    continue;
-                }
-                Request::Test => {
-                    conn = None;
-                    (None, String::new())
-                }
-                Request::Exec(tag, command) => (Some(tag), command),
-            };
+        // Opens the connection when there is none and runs `command` ("" only logs in).
+        let run = |conn: &mut Option<Conn>, command: &str| -> Result<String, Failure> {
             if conn.is_none() {
                 match connect() {
                     Ok(c) => {
-                        conn = Some(c);
+                        *conn = Some(c);
                         state(RconState::Connected);
                     }
                     Err(RconError::BadPassword) => {
                         state(RconState::BadPassword);
-                        break;
+                        return Err(Failure::BadPassword);
                     }
                     Err(e) => {
                         state(RconState::Failed(e.to_string()));
-                        if let Some(tag) = tag {
-                            output(tag, Err(format!("RCON: {e}")));
-                        }
-                        continue;
+                        return Err(Failure::Other(format!("RCON: {e}")));
                     }
                 }
             }
-            let (Some(tag), Some(c)) = (tag, conn.as_mut()) else {
-                continue;
+            let Some(c) = conn.as_mut().filter(|_| !command.is_empty()) else {
+                return Ok(String::new());
             };
-            match c.exec(&command) {
-                Ok(out) => output(tag, Ok(out)),
+            match c.exec(command) {
+                Ok(out) => Ok(out),
                 Err(RconError::BadPassword) => {
                     state(RconState::BadPassword);
-                    break;
+                    Err(Failure::BadPassword)
                 }
                 Err(e) => {
-                    output(tag, Err(format!("RCON: {e}")));
                     // Reconnect on the next command (also after timeouts, the stream may
                     // be out of step).
                     if e.is_connection_lost() || matches!(e, RconError::Timeout) {
-                        conn = None;
+                        *conn = None;
                         state(RconState::Failed(e.to_string()));
+                    }
+                    Err(Failure::Other(format!("RCON: {e}")))
+                }
+            }
+        };
+        while let Ok(request) = req_rx.recv() {
+            match request {
+                Request::Disconnect => {
+                    conn = None;
+                    state(RconState::Disconnected);
+                }
+                Request::Test => {
+                    conn = None;
+                    if let Err(Failure::BadPassword) = run(&mut conn, "") {
+                        break;
+                    }
+                }
+                Request::Exec(tag, command) => match run(&mut conn, &command) {
+                    Ok(out) => output(tag, Ok(out)),
+                    Err(Failure::BadPassword) => break,
+                    Err(Failure::Other(e)) => output(tag, Err(e)),
+                },
+                Request::StartLog {
+                    internet,
+                    port,
+                    public_ip,
+                    http_path,
+                } => {
+                    let mut sent = Vec::new();
+                    let result = log_target(&address, internet, port, public_ip)
+                        .map_err(Failure::Other)
+                        .and_then(|(target, server)| {
+                            let cmd = serverlog::logaddress_command(
+                                target,
+                                http_path.as_deref(),
+                                goldsrc,
+                            );
+                            for command in [cmd.as_str(), "log on"] {
+                                sent.push((command.to_string(), run(&mut conn, command)?));
+                            }
+                            Ok((target, server))
+                        });
+                    let bad = matches!(result, Err(Failure::BadPassword));
+                    let result = result.map_err(|e| match e {
+                        Failure::BadPassword => "Bad RCON password".to_string(),
+                        Failure::Other(e) => e,
+                    });
+                    let _ = tx.send(Event::LogStarted { id, sent, result });
+                    if bad {
+                        break;
                     }
                 }
             }

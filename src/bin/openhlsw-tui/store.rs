@@ -102,6 +102,17 @@ impl Store {
         self.doc.get(key).and_then(Value::as_f64)
     }
 
+    pub fn setting_bool(&self, key: &str, default: bool) -> bool {
+        self.doc
+            .get(key)
+            .and_then(Value::as_bool)
+            .unwrap_or(default)
+    }
+
+    pub fn setting_str(&self, key: &str) -> Option<&str> {
+        self.doc.get(key).and_then(Value::as_str)
+    }
+
     pub fn history(&self) -> Vec<String> {
         match self.doc.get("console_history") {
             Some(Value::Array(h)) => h

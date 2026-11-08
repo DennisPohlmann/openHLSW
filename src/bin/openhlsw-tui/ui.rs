@@ -754,16 +754,26 @@ fn draw_rcon_config(f: &mut Frame, app: &App, area: Rect, focused: bool) {
         .border_style(Style::new().fg(Color::DarkGray));
     let inner = b.inner(log_box);
     f.render_widget(b, log_box);
-    let gray = Style::new().fg(Color::DarkGray);
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::styled("[ Get Log (Internet) ]", gray),
-            Line::styled("[ Get Log (LAN) ]", gray),
-            Line::styled("not in the console", gray),
-            Line::styled("tool yet", gray),
-        ]),
-        inner,
-    );
+    let mut lines = vec![
+        Line::from(button("Get Log (Internet)", on(Field::LogInternet))),
+        Line::from(button("Get Log (LAN)", on(Field::LogLan))),
+    ];
+    if let Some(target) = s.log_target {
+        lines.push(Line::styled(
+            format!("→ {target}"),
+            Style::new().fg(Color::Green),
+        ));
+    }
+    let upnp = match &app.log.mapping {
+        Some(Ok(m)) => Some(Line::styled(
+            format!("UPnP: port {} forwarded", m.port),
+            Style::new().fg(Color::Gray),
+        )),
+        Some(Err(_)) => Some(Line::styled("UPnP: failed", Style::new().fg(Color::Red))),
+        None => None,
+    };
+    lines.extend(upnp);
+    f.render_widget(Paragraph::new(lines), inner);
 
     let help = vec![
         Line::from(vec![
@@ -822,6 +832,7 @@ fn draw_console(f: &mut Frame, app: &App, area: Rect, focused: bool) {
             LineKind::Command => Line::styled(text.clone(), Style::new().fg(ACCENT).bold()),
             LineKind::Error => Line::styled(text.clone(), Style::new().fg(Color::Red)),
             LineKind::Output => Line::raw(text.clone()),
+            LineKind::Log => Line::styled(text.clone(), Style::new().fg(Color::Gray)),
         })
         .collect();
     if lines.is_empty() {
@@ -862,7 +873,7 @@ fn draw_chat(f: &mut Frame, app: &App, area: Rect, focused: bool) {
         let text = if no_password(s) {
             NO_PASSWORD
         } else {
-            "Enter sends the text to all players (say). What players write needs the server log (Get Log), which the console tool cannot receive yet."
+            "Enter sends the text to all players (say). What players write shows up here once the server sends its log (Rcon Config → Get Log)."
         };
         f.render_widget(
             Paragraph::new(text)

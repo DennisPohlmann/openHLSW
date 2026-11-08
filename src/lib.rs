@@ -12,6 +12,7 @@ pub mod httplog;
 pub mod query;
 pub mod rcon;
 pub mod rcon_text;
+pub mod serverlog;
 pub mod stats;
 pub mod steamid;
 pub mod upnp;

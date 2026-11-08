@@ -43,26 +43,7 @@ impl GeoInfo {
     }
 }
 
-/// Private, loopback and other non-routable addresses are not looked up.
-pub fn is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            !(v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64) // CGNAT 100.64/10
-        }
-        IpAddr::V6(v6) => {
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                || (v6.segments()[0] & 0xffc0) == 0xfe80)
-        }
-    }
-}
+pub use openhlsw::serverlog::is_public;
 
 fn cache_path() -> Option<PathBuf> {
     crate::config::path().and_then(|p| p.parent().map(|d| d.join("geo_cache.json")))

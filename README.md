@@ -133,8 +133,10 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   `y` copies the address to the terminal's clipboard.
 - Rcon Config: password, Test, Disconnect, Hide, Save (stored like in the GUI). Chat sends
   `say`; Ban List shows `listid` / `listip` with unban, ban and write; Change Level shows
-  the maps (`maps *` plus the stock maps) with search (`*`, `?`). Not in the console tool
-  yet: receiving the server log (Get Log), so the chat shows only what you send.
+  the maps (`maps *` plus the stock maps) with search (`*`, `?`). Get Log (Internet / LAN)
+  in Rcon Config works like in the GUI (UDP log, HTTP log of Counter-Strike 2, UPnP port
+  forwarding, the GUI's log port settings, asked again on map change): the log shows up in
+  the Console, what players write in the Chat.
 - Every panel stays current, whichever has the focus: like the GUI, each refresh asks
   every server for its info (ping, map, players count) and the selected one for its
   players; players and rules of all servers every 10 s. `openhlsw-tui -d 5` refreshes every
@@ -190,7 +192,9 @@ services are gone), Metamod plugin management.
   router (FRITZ!Box: "Permit independent port sharing") and a public IPv4 address – with
   CGNAT / DS-Lite no forwarding helps. Without UPnP, forward the port by hand. A firewall
   on this computer must let the port in too, e.g. `sudo ufw allow 27500/udp` (Linux with
-  ufw) or `sudo firewall-cmd --add-port=27500/udp --permanent` (firewalld).
+  ufw) or `sudo firewall-cmd --add-port=27500/udp --permanent` (firewalld). The console
+  tool `openhlsw-tui` does the same (Rcon Config → Get Log) with the GUI's settings for the
+  port, UPnP and the public IP.
 - **Counter-Strike 2 log**: CS2 sends its log only over HTTP. For a CS2 server Get Log sends
   `logaddress_add_http "http://<your IP>:<port>/log/<secret>/<n>"` and `log on`; openHLSW
   receives it on the same port number over **TCP** (a small HTTP server that only takes
@@ -267,6 +271,8 @@ src/
   history.rs                                 RCON console history (GUI and console tool)
   upnp.rs                                    port forwarding in the router (UPnP IGD)
   httplog.rs                                 HTTP log receiver (Counter-Strike 2)
+  serverlog.rs                               server log: UDP listener, UPnP forwarding,
+                                             logaddress_add, chat lines (GUI and console tool)
   query/                                     the other query protocols (GameSpy 1, Quake,
                                              Unreal, TeamSpeak, Minecraft, SA-MP, …)
   worker.rs                                  background threads (queries, RCON, log listener)
