@@ -672,5 +672,16 @@
  "How to add game servers: ports, query port, RCON and server log": "Как добавить игровые серверы: порты, порт запросов, RCON и лог сервера",
  "Game port: {port}": "Игровой порт: {port}",
  "Query port: {port}": "Порт запросов: {port}",
- "Query port: game port + {offset}": "Порт запросов: игровой порт + {offset}"
+ "Query port: game port + {offset}": "Порт запросов: игровой порт + {offset}",
+ "New server...\tCtrl+N": "Новый сервер...\tCtrl+N",
+ "New server...": "Новый сервер...",
+ "Add a server step by step with all its settings": "Добавить сервер шаг за шагом со всеми настройками",
+ "New server": "Новый сервер",
+ "required": "обязательно",
+ "optional": "необязательно",
+ "Host or IP:": "Хост или IP:",
+ "Game port:": "Игровой порт:",
+ "Query port:": "Порт запросов:",
+ "same as the game port": "как игровой порт",
+ "Enter the host name or IP address of the server": "Введите имя хоста или IP-адрес сервера"
 }

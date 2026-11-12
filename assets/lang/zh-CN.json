@@ -672,5 +672,16 @@
  "How to add game servers: ports, query port, RCON and server log": "如何添加游戏服务器：端口、查询端口、RCON 和服务器日志",
  "Game port: {port}": "游戏端口：{port}",
  "Query port: {port}": "查询端口：{port}",
- "Query port: game port + {offset}": "查询端口：游戏端口 + {offset}"
+ "Query port: game port + {offset}": "查询端口：游戏端口 + {offset}",
+ "New server...\tCtrl+N": "新建服务器...\tCtrl+N",
+ "New server...": "新建服务器...",
+ "Add a server step by step with all its settings": "分步添加服务器及其所有设置",
+ "New server": "新建服务器",
+ "required": "必填",
+ "optional": "可选",
+ "Host or IP:": "主机或 IP：",
+ "Game port:": "游戏端口：",
+ "Query port:": "查询端口：",
+ "same as the game port": "与游戏端口相同",
+ "Enter the host name or IP address of the server": "请输入服务器的主机名或 IP 地址"
 }

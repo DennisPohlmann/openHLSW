@@ -642,5 +642,16 @@
  "How to add game servers: ports, query port, RCON and server log": "Slik legger du til spillservere: porter, spørreport, RCON og serverlogg",
  "Game port: {port}": "Spillport: {port}",
  "Query port: {port}": "Spørreport: {port}",
- "Query port: game port + {offset}": "Spørreport: spillport + {offset}"
+ "Query port: game port + {offset}": "Spørreport: spillport + {offset}",
+ "New server...\tCtrl+N": "Ny server...\tCtrl+N",
+ "New server...": "Ny server...",
+ "Add a server step by step with all its settings": "Legg til en server steg for steg med alle innstillingene",
+ "New server": "Ny server",
+ "required": "påkrevd",
+ "optional": "valgfritt",
+ "Host or IP:": "Vert eller IP:",
+ "Game port:": "Spillport:",
+ "Query port:": "Spørreport:",
+ "same as the game port": "samme som spillporten",
+ "Enter the host name or IP address of the server": "Skriv inn serverens vertsnavn eller IP-adresse"
 }

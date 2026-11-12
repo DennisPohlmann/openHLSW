@@ -662,5 +662,16 @@
  "How to add game servers: ports, query port, RCON and server log": "Játékszerverek hozzáadása: portok, lekérdezési port, RCON és szervernapló",
  "Game port: {port}": "Játékport: {port}",
  "Query port: {port}": "Lekérdezési port: {port}",
- "Query port: game port + {offset}": "Lekérdezési port: játékport + {offset}"
+ "Query port: game port + {offset}": "Lekérdezési port: játékport + {offset}",
+ "New server...\tCtrl+N": "Új szerver...\tCtrl+N",
+ "New server...": "Új szerver...",
+ "Add a server step by step with all its settings": "Szerver hozzáadása lépésről lépésre, minden beállításával",
+ "New server": "Új szerver",
+ "required": "kötelező",
+ "optional": "opcionális",
+ "Host or IP:": "Gazdagép vagy IP:",
+ "Game port:": "Játékport:",
+ "Query port:": "Lekérdezési port:",
+ "same as the game port": "ugyanaz, mint a játékport",
+ "Enter the host name or IP address of the server": "Add meg a szerver gazdagépnevét vagy IP-címét"
 }

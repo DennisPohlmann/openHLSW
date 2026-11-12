@@ -839,6 +839,8 @@ type PlayerCol = &'static str;
 enum Action {
     Select(ServerId),
     Add,
+    /// "New server" wizard → OK.
+    AddFromWizard(Box<NewServerDraft>),
     Refresh(ServerId),
     RefreshAll,
     /// Asks first ("Delete … ?"), then `RemoveConfirmed`.
@@ -1469,6 +1471,8 @@ enum Dialog {
     ListProperties(String),
     MultiInsert(String),
     ServerProperties(ServerId, ServerPropsDraft),
+    /// "New server" wizard: the game first, then every setting of the server.
+    NewServer(Box<NewServerDraft>),
     ConfirmDeleteList,
     ConnectLog,
     /// "Change ID → Set": server and the new number being typed.
@@ -1548,6 +1552,72 @@ struct ServerPropsDraft {
     save_password: bool,
     /// The server's protocol has RCON (Valve A2S servers).
     rcon: bool,
+}
+
+/// The fields of the "New server" wizard.
+#[derive(Clone)]
+struct NewServerDraft {
+    game: AddGame,
+    host: String,
+    port: String,
+    query_port: String,
+    rcon_password: String,
+    save_password: bool,
+    hide_password: bool,
+    auto_update_status: bool,
+    status_interval: u32,
+    comment: String,
+    params: String,
+}
+
+impl Default for NewServerDraft {
+    fn default() -> Self {
+        Self {
+            game: None,
+            host: String::new(),
+            port: String::new(),
+            query_port: String::new(),
+            rcon_password: String::new(),
+            save_password: true,
+            hide_password: true,
+            auto_update_status: true,
+            status_interval: STATUS_INTERVAL_DEFAULT,
+            comment: String::new(),
+            params: String::new(),
+        }
+    }
+}
+
+impl NewServerDraft {
+    /// Only Valve A2S servers have RCON (like [`Server::supports_rcon`]).
+    fn rcon(&self) -> bool {
+        self.game.is_none_or(|g| g.protocol == Protocol::A2s)
+    }
+
+    /// The address as typed in the "IP/Port" field: `host`, `host:port` or
+    /// `host:port:queryport`; empty ports take the game's usual ones (see `Action::Add`).
+    fn address_input(&self) -> String {
+        let host = self.host.trim();
+        let host = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_string()
+        };
+        let (port, query) = (self.port.trim(), self.query_port.trim());
+        if query.is_empty() {
+            return if port.is_empty() { host } else { format!("{host}:{port}") };
+        }
+        let port = if port.is_empty() {
+            self.game
+                .map(|g| g.default_port)
+                .filter(|&p| p > 0)
+                .unwrap_or(openhlsw::address::DEFAULT_PORT)
+                .to_string()
+        } else {
+            port.to_string()
+        };
+        format!("{host}:{port}:{query}")
+    }
 }
 
 struct Traffic {
@@ -3429,6 +3499,29 @@ impl OpenHlswApp {
                 // `Select` above, which takes over the game of the selected server).
                 self.add_game = None;
             }
+            Action::AddFromWizard(draft) => {
+                let count = self.servers.len();
+                self.address_input = draft.address_input();
+                self.add_game = draft.game;
+                self.apply(Action::Add, ctx);
+                // Only a new server takes the wizard's settings; an existing one is just selected.
+                if self.servers.len() > count
+                    && let Some(id) = self.selected
+                    && let Some(s) = self.server_mut(id)
+                {
+                    s.comment = draft.comment.trim().to_string();
+                    s.params = draft.params.trim().to_string();
+                    if s.supports_rcon() {
+                        s.rcon_password = draft.rcon_password;
+                        s.save_password = draft.save_password;
+                        s.hide_password = draft.hide_password;
+                        s.auto_update_status = draft.auto_update_status;
+                        s.status_interval = draft.status_interval;
+                        // Typing alone never logs in; like the Rcon Config field.
+                    }
+                    self.save_config();
+                }
+            }
             Action::Refresh(id) => self.refresh(id, true),
             Action::RefreshAll => self.refresh_all(true),
             Action::Remove(id) => {
@@ -4598,6 +4691,9 @@ impl OpenHlswApp {
             if i.consume_shortcut(&ctrl(Key::I)) {
                 actions.push(Action::OpenDialog(Dialog::MultiInsert(String::new())));
             }
+            if i.consume_shortcut(&ctrl(Key::N)) {
+                actions.push(Action::OpenDialog(Dialog::NewServer(Box::default())));
+            }
             if i.consume_shortcut(&ctrl(Key::O)) {
                 actions.push(Action::OpenDialog(Dialog::ListProperties(
                     self.list_name.clone(),
@@ -4768,6 +4864,10 @@ impl OpenHlswApp {
                     ui.close();
                 }
                 ui.separator();
+                if ui.button(tr!("New server...\tCtrl+N")).clicked() {
+                    actions.push(Action::OpenDialog(Dialog::NewServer(Box::default())));
+                    ui.close();
+                }
                 if ui.button(tr!("Multi Server Insert...\tCtrl+I")).clicked() {
                     actions.push(Action::OpenDialog(Dialog::MultiInsert(String::new())));
                     ui.close();
@@ -5178,10 +5278,11 @@ impl OpenHlswApp {
             };
             let room = ui.available_width()
                 - text_width(ui, tr!("Add"))
+                - text_width(ui, tr!("New server..."))
                 - text_width(ui, "?")
-                - ui.spacing().button_padding.x * 4.0
+                - ui.spacing().button_padding.x * 6.0
                 - icon_w
-                - 4.0 * item
+                - 5.0 * item
                 - MIN_FIELD;
             if list_w + game_w > room {
                 let scale = (room / (list_w + game_w)).max(0.0);
@@ -5281,6 +5382,13 @@ impl OpenHlswApp {
                     .clicked()
                 {
                     actions.push(Action::OpenUrl(GAMES_DOC.into()));
+                }
+                if ui
+                    .button(tr!("New server..."))
+                    .on_hover_text(tr!("Add a server step by step with all its settings"))
+                    .clicked()
+                {
+                    actions.push(Action::OpenDialog(Dialog::NewServer(Box::default())));
                 }
                 if ui.button(tr!("Add")).clicked() {
                     actions.push(Action::Add);
@@ -6466,6 +6574,7 @@ impl OpenHlswApp {
             Dialog::ListProperties(_) => tr!("Server list properties"),
             Dialog::MultiInsert(_) => tr!("Multi Server Insert"),
             Dialog::ServerProperties(..) => tr!("Server properties"),
+            Dialog::NewServer(_) => tr!("New server"),
             Dialog::ConfirmDeleteList => tr!("Delete server list"),
             Dialog::ConnectLog => tr!("Connect Log"),
             Dialog::ChangeRule(..) => tr!("Change Value"),
@@ -6591,6 +6700,148 @@ impl OpenHlswApp {
                         let (ok, cancel) = ok_cancel(ui);
                         if ok {
                             actions.push(Action::MultiInsert(text.clone()));
+                            close = true;
+                        }
+                        close |= cancel;
+                    }
+                    Dialog::NewServer(draft) => {
+                        let weak = ui.visuals().weak_text_color();
+                        let tag = |ui: &mut Ui, required: bool| {
+                            let text = if required { tr!("required") } else { tr!("optional") };
+                            ui.label(RichText::new(text).color(weak).small());
+                        };
+                        let field = |ui: &mut Ui, text: &mut String, hint: String| {
+                            ui.add(
+                                TextEdit::singleline(text)
+                                    .align(egui::Align2::LEFT_CENTER)
+                                    .hint_text(hint)
+                                    .desired_width(260.0),
+                            )
+                            .with_edit_menu();
+                        };
+                        egui::Grid::new("new_server")
+                            .num_columns(3)
+                            .spacing([8.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label(tr!("Game:"));
+                                let game = &mut draft.game;
+                                crate::theme::combo("new_server_game")
+                                    .selected_text(game.map_or(tr!("Auto detect"), |g| g.name))
+                                    .width(260.0)
+                                    .height(420.0)
+                                    .show_ui(ui, |ui| {
+                                        let mut find = TypeAhead::begin(ui);
+                                        let auto = ui
+                                            .selectable_label(game.is_none(), tr!("Auto detect"))
+                                            .on_hover_text(tr!("Source, Half-Life 1 and CS2 servers are detected automatically"));
+                                        find.item(&auto, tr!("Auto detect"));
+                                        if auto.clicked() {
+                                            *game = None;
+                                            ui.close();
+                                        }
+                                        for g in games::GAMES {
+                                            let selected = game.is_some_and(|a| std::ptr::eq(a, g));
+                                            let r = ui
+                                                .selectable_label(selected, g.name)
+                                                .on_hover_text(game_ports_text(g));
+                                            find.item(&r, g.name);
+                                            if r.clicked() {
+                                                *game = Some(g);
+                                                ui.close();
+                                            }
+                                        }
+                                        find.finish(ui);
+                                    });
+                                tag(ui, true);
+                                ui.end_row();
+                                if let Some(g) = draft.game {
+                                    ui.label("");
+                                    ui.label(RichText::new(game_ports_text(g)).color(weak).small());
+                                    ui.end_row();
+                                }
+                                ui.label(tr!("Host or IP:"));
+                                field(ui, &mut draft.host, "203.0.113.10".into());
+                                tag(ui, true);
+                                ui.end_row();
+                                let default_port = draft
+                                    .game
+                                    .map(|g| g.default_port)
+                                    .filter(|&p| p > 0)
+                                    .unwrap_or(openhlsw::address::DEFAULT_PORT);
+                                ui.label(tr!("Game port:"));
+                                field(ui, &mut draft.port, default_port.to_string());
+                                tag(ui, false);
+                                ui.end_row();
+                                // Only games that may answer on a port of their own.
+                                if draft.game.is_none_or(|g| g.query_port(default_port).is_some()) {
+                                    let port = draft.port.trim().parse().unwrap_or(default_port);
+                                    let hint = draft
+                                        .game
+                                        .and_then(|g| g.query_port(port))
+                                        .map_or(tr!("same as the game port").into(), |p| p.to_string());
+                                    ui.label(tr!("Query port:"));
+                                    field(ui, &mut draft.query_port, hint);
+                                    tag(ui, false);
+                                    ui.end_row();
+                                }
+                                if draft.rcon() {
+                                    ui.label(tr!("Rcon password:"));
+                                    password_field(ui, &mut draft.rcon_password, draft.hide_password, 260.0)
+                                        .with_edit_menu();
+                                    tag(ui, false);
+                                    ui.end_row();
+                                    ui.label("");
+                                    ui.vertical(|ui| {
+                                        ui.checkbox(&mut draft.save_password, tr!("Save Rcon password"));
+                                        ui.checkbox(&mut draft.hide_password, tr!("Hide"));
+                                        ui.checkbox(&mut draft.auto_update_status, tr!("Auto Update Status"))
+                                            .on_hover_text(tr!("Regularly sends `status` (Steam IDs, IPs, ping) and sets up the server log (logaddress_add) for the Console and Chat tabs"));
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(22.0);
+                                            ui.label(tr!("Interval:"));
+                                            ui.add_enabled(
+                                                draft.auto_update_status,
+                                                DragValue::new(&mut draft.status_interval)
+                                                    .range(STATUS_INTERVAL_RANGE)
+                                                    .suffix(" s"),
+                                            );
+                                        });
+                                    });
+                                    ui.label("");
+                                    ui.end_row();
+                                }
+                                ui.label(tr!("Comment:"));
+                                field(ui, &mut draft.comment, String::new());
+                                tag(ui, false);
+                                ui.end_row();
+                                ui.label(tr!("Additional parameters:"));
+                                field(ui, &mut draft.params, tr!("start parameters of the game").into());
+                                tag(ui, false);
+                                ui.end_row();
+                            });
+                        if !draft.rcon() {
+                            ui.label(RichText::new(tr!("RCON is not supported for this game")).color(weak));
+                        }
+                        let input = draft.address_input();
+                        let error = if draft.host.trim().is_empty() {
+                            Some(tr!("Enter the host name or IP address of the server").to_string())
+                        } else if ServerAddress::parse(&input).is_none() {
+                            Some(tr!("Invalid address: {input}", input = input))
+                        } else {
+                            None
+                        };
+                        if let Some(error) = &error {
+                            ui.colored_label(Color32::from_rgb(220, 60, 60), error);
+                        }
+                        if ui
+                            .link(tr!("How to add game servers: ports, query port, RCON and server log"))
+                            .clicked()
+                        {
+                            actions.push(Action::OpenUrl(GAMES_DOC.into()));
+                        }
+                        let (ok, cancel) = ok_cancel(ui);
+                        if ok && error.is_none() {
+                            actions.push(Action::AddFromWizard(draft.clone()));
                             close = true;
                         }
                         close |= cancel;
@@ -12450,6 +12701,26 @@ fn status_line(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_server_address() {
+        let bf2 = games::GAMES.iter().find(|g| g.default_query_port == 29900).unwrap();
+        let draft = |game, host: &str, port: &str, query: &str| NewServerDraft {
+            game,
+            host: host.into(),
+            port: port.into(),
+            query_port: query.into(),
+            ..Default::default()
+        };
+        assert_eq!(draft(None, " 1.2.3.4 ", "", "").address_input(), "1.2.3.4");
+        assert_eq!(draft(None, "1.2.3.4", "27016", "").address_input(), "1.2.3.4:27016");
+        assert_eq!(draft(None, "::1", "27016", "").address_input(), "[::1]:27016");
+        assert_eq!(draft(None, "h", "", "27020").address_input(), "h:27015:27020");
+        assert_eq!(
+            draft(Some(bf2), "h", "", "29901").address_input(),
+            format!("h:{}:29901", bf2.default_port)
+        );
+    }
 
     #[test]
     fn natural_cmp_orders_text_and_numbers() {

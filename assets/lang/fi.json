@@ -667,5 +667,16 @@
  "How to add game servers: ports, query port, RCON and server log": "Pelipalvelimien lisääminen: portit, kyselyportti, RCON ja palvelinloki",
  "Game port: {port}": "Peliportti: {port}",
  "Query port: {port}": "Kyselyportti: {port}",
- "Query port: game port + {offset}": "Kyselyportti: peliportti + {offset}"
+ "Query port: game port + {offset}": "Kyselyportti: peliportti + {offset}",
+ "New server...\tCtrl+N": "Uusi palvelin...\tCtrl+N",
+ "New server...": "Uusi palvelin...",
+ "Add a server step by step with all its settings": "Lisää palvelin vaihe vaiheelta kaikkine asetuksineen",
+ "New server": "Uusi palvelin",
+ "required": "pakollinen",
+ "optional": "valinnainen",
+ "Host or IP:": "Isäntä tai IP:",
+ "Game port:": "Peliportti:",
+ "Query port:": "Kyselyportti:",
+ "same as the game port": "sama kuin peliportti",
+ "Enter the host name or IP address of the server": "Anna palvelimen isäntänimi tai IP-osoite"
 }

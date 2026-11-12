@@ -653,5 +653,16 @@
  "How to add game servers: ports, query port, RCON and server log": "Jak přidat herní servery: porty, dotazovací port, RCON a log serveru",
  "Game port: {port}": "Herní port: {port}",
  "Query port: {port}": "Dotazovací port: {port}",
- "Query port: game port + {offset}": "Dotazovací port: herní port + {offset}"
+ "Query port: game port + {offset}": "Dotazovací port: herní port + {offset}",
+ "New server...\tCtrl+N": "Nový server...\tCtrl+N",
+ "New server...": "Nový server...",
+ "Add a server step by step with all its settings": "Přidat server krok za krokem se všemi jeho nastaveními",
+ "New server": "Nový server",
+ "required": "povinné",
+ "optional": "volitelné",
+ "Host or IP:": "Hostitel nebo IP:",
+ "Game port:": "Herní port:",
+ "Query port:": "Dotazovací port:",
+ "same as the game port": "stejný jako herní port",
+ "Enter the host name or IP address of the server": "Zadejte název hostitele nebo IP adresu serveru"
 }

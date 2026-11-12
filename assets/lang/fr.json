@@ -643,5 +643,16 @@
  "How to add game servers: ports, query port, RCON and server log": "Ajouter des serveurs de jeu : ports, port de requête, RCON et log du serveur",
  "Game port: {port}": "Port de jeu : {port}",
  "Query port: {port}": "Port de requête : {port}",
- "Query port: game port + {offset}": "Port de requête : port de jeu + {offset}"
+ "Query port: game port + {offset}": "Port de requête : port de jeu + {offset}",
+ "New server...\tCtrl+N": "Nouveau serveur...\tCtrl+N",
+ "New server...": "Nouveau serveur...",
+ "Add a server step by step with all its settings": "Ajouter un serveur pas à pas avec tous ses réglages",
+ "New server": "Nouveau serveur",
+ "required": "obligatoire",
+ "optional": "facultatif",
+ "Host or IP:": "Hôte ou IP :",
+ "Game port:": "Port de jeu :",
+ "Query port:": "Port de requête :",
+ "same as the game port": "comme le port de jeu",
+ "Enter the host name or IP address of the server": "Saisissez le nom d'hôte ou l'adresse IP du serveur"
 }

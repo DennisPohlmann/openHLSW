@@ -635,5 +635,16 @@
  "How to add game servers: ports, query port, RCON and server log": "Gameservers toevoegen: poorten, querypoort, RCON en serverlog",
  "Game port: {port}": "Spelpoort: {port}",
  "Query port: {port}": "Querypoort: {port}",
- "Query port: game port + {offset}": "Querypoort: spelpoort + {offset}"
+ "Query port: game port + {offset}": "Querypoort: spelpoort + {offset}",
+ "New server...\tCtrl+N": "Nieuwe server...\tCtrl+N",
+ "New server...": "Nieuwe server...",
+ "Add a server step by step with all its settings": "Een server stap voor stap toevoegen met al zijn instellingen",
+ "New server": "Nieuwe server",
+ "required": "verplicht",
+ "optional": "optioneel",
+ "Host or IP:": "Host of IP:",
+ "Game port:": "Spelpoort:",
+ "Query port:": "Querypoort:",
+ "same as the game port": "gelijk aan de spelpoort",
+ "Enter the host name or IP address of the server": "Voer de hostnaam of het IP-adres van de server in"
 }

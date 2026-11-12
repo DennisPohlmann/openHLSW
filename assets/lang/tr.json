@@ -660,5 +660,16 @@
  "How to add game servers: ports, query port, RCON and server log": "Oyun sunucuları nasıl eklenir: portlar, sorgu portu, RCON ve sunucu günlüğü",
  "Game port: {port}": "Oyun portu: {port}",
  "Query port: {port}": "Sorgu portu: {port}",
- "Query port: game port + {offset}": "Sorgu portu: oyun portu + {offset}"
+ "Query port: game port + {offset}": "Sorgu portu: oyun portu + {offset}",
+ "New server...\tCtrl+N": "Yeni sunucu...\tCtrl+N",
+ "New server...": "Yeni sunucu...",
+ "Add a server step by step with all its settings": "Tüm ayarlarıyla adım adım bir sunucu ekle",
+ "New server": "Yeni sunucu",
+ "required": "zorunlu",
+ "optional": "isteğe bağlı",
+ "Host or IP:": "Ana bilgisayar veya IP:",
+ "Game port:": "Oyun portu:",
+ "Query port:": "Sorgu portu:",
+ "same as the game port": "oyun portuyla aynı",
+ "Enter the host name or IP address of the server": "Sunucunun ana bilgisayar adını veya IP adresini girin"
 }
