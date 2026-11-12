@@ -1568,6 +1568,9 @@ struct NewServerDraft {
     status_interval: u32,
     comment: String,
     params: String,
+    /// Search text of the game list, and whether the list was open in the last frame.
+    search: String,
+    list_open: bool,
 }
 
 impl Default for NewServerDraft {
@@ -1584,14 +1587,63 @@ impl Default for NewServerDraft {
             status_interval: STATUS_INTERVAL_DEFAULT,
             comment: String::new(),
             params: String::new(),
+            search: String::new(),
+            list_open: false,
         }
     }
 }
 
+/// RCON of a game in openHLSW (docs/games.md, "RCON in openHLSW").
+#[derive(Clone, Copy, PartialEq)]
+enum RconSupport {
+    Yes,
+    /// Answers Valve A2S on the game port: Source RCON is tried there.
+    Maybe,
+    No,
+    /// Valve A2S on a query port of its own.
+    OwnQueryPort,
+}
+
+/// Valve's own games (Games.cfg keys): RCON on the game port for sure.
+const VALVE_GAMES: &[&str] = &[
+    "CS15", "CS16", "CS2", "CSCZ", "CSGO", "CSS", "DoD", "DoDS", "GMod", "HL", "HLWON", "HL2",
+    "HL2DM", "L4D", "L4D2", "TF2",
+];
+
+fn rcon_support(game: AddGame) -> RconSupport {
+    match game {
+        None => RconSupport::Yes,
+        Some(g) if g.protocol != Protocol::A2s => RconSupport::No,
+        Some(g) if g.query_port(1).is_some() => RconSupport::OwnQueryPort,
+        Some(g) if VALVE_GAMES.contains(&g.key) => RconSupport::Yes,
+        Some(_) => RconSupport::Maybe,
+    }
+}
+
 impl NewServerDraft {
-    /// Only Valve A2S servers have RCON (like [`Server::supports_rcon`]).
+    /// RCON fields are shown: Valve A2S on the game port (a typed query port means GameSpy).
     fn rcon(&self) -> bool {
-        self.game.is_none_or(|g| g.protocol == Protocol::A2s)
+        matches!(rcon_support(self.game), RconSupport::Yes | RconSupport::Maybe)
+            && self.query_port.trim().is_empty()
+    }
+
+    /// The game has no usual query port and the user must enter it (GameSpy 2/3).
+    fn needs_query_port(&self) -> bool {
+        self.game
+            .is_some_and(|g| g.protocol == Protocol::GameSpy2 && g.query_port(1).is_none())
+    }
+
+    fn error(&self) -> Option<String> {
+        let input = self.address_input();
+        if self.host.trim().is_empty() {
+            Some(tr!("Enter the host name or IP address of the server").into())
+        } else if self.needs_query_port() && self.query_port.trim().is_empty() {
+            Some(tr!("Enter the query port of the server").into())
+        } else if ServerAddress::parse(&input).is_none() {
+            Some(tr!("Invalid address: {input}", input = input))
+        } else {
+            None
+        }
     }
 
     /// The address as typed in the "IP/Port" field: `host`, `host:port` or
@@ -6632,6 +6684,7 @@ impl OpenHlswApp {
             })
             .collect();
         let connect_log = &self.connect_log;
+        let game_icons = self.game_icons.as_ref();
         NativeWindow::new(("menu_dialog", title), title)
             .open(&mut open)
             .collapsible(false)
@@ -6711,145 +6764,11 @@ impl OpenHlswApp {
                         close |= cancel;
                     }
                     Dialog::NewServer(draft) => {
-                        let weak = ui.visuals().weak_text_color();
-                        let tag = |ui: &mut Ui, required: bool| {
-                            let text = if required { tr!("required") } else { tr!("optional") };
-                            ui.label(RichText::new(text).color(weak).small());
-                        };
-                        let field = |ui: &mut Ui, text: &mut String, hint: String| {
-                            ui.add(
-                                TextEdit::singleline(text)
-                                    .align(egui::Align2::LEFT_CENTER)
-                                    .hint_text(hint)
-                                    .desired_width(260.0),
-                            )
-                            .with_edit_menu();
-                        };
-                        egui::Grid::new("new_server")
-                            .num_columns(3)
-                            .spacing([8.0, 6.0])
-                            .show(ui, |ui| {
-                                ui.label(tr!("Game:"));
-                                let game = &mut draft.game;
-                                crate::theme::combo("new_server_game")
-                                    .selected_text(game.map_or(tr!("Auto detect"), |g| g.name))
-                                    .width(260.0)
-                                    .height(420.0)
-                                    .show_ui(ui, |ui| {
-                                        let mut find = TypeAhead::begin(ui);
-                                        let auto = ui
-                                            .selectable_label(game.is_none(), tr!("Auto detect"))
-                                            .on_hover_text(tr!("Source, Half-Life 1 and CS2 servers are detected automatically"));
-                                        find.item(&auto, tr!("Auto detect"));
-                                        if game.is_none() {
-                                            find.current(&auto);
-                                        }
-                                        if auto.clicked() {
-                                            *game = None;
-                                            ui.close();
-                                        }
-                                        for g in games::GAMES {
-                                            let selected = game.is_some_and(|a| std::ptr::eq(a, g));
-                                            let r = ui
-                                                .selectable_label(selected, g.name)
-                                                .on_hover_text(game_ports_text(g));
-                                            find.item(&r, g.name);
-                                            if selected {
-                                                find.current(&r);
-                                            }
-                                            if r.clicked() {
-                                                *game = Some(g);
-                                                ui.close();
-                                            }
-                                        }
-                                        find.finish(ui);
-                                    });
-                                tag(ui, true);
-                                ui.end_row();
-                                if let Some(g) = draft.game {
-                                    ui.label("");
-                                    ui.label(RichText::new(game_ports_text(g)).color(weak).small());
-                                    ui.end_row();
-                                }
-                                ui.label(tr!("Host or IP:"));
-                                field(ui, &mut draft.host, "203.0.113.10".into());
-                                tag(ui, true);
-                                ui.end_row();
-                                let default_port = draft
-                                    .game
-                                    .map(|g| g.default_port)
-                                    .filter(|&p| p > 0)
-                                    .unwrap_or(openhlsw::address::DEFAULT_PORT);
-                                ui.label(tr!("Game port:"));
-                                field(ui, &mut draft.port, default_port.to_string());
-                                tag(ui, false);
-                                ui.end_row();
-                                // Only games that may answer on a port of their own.
-                                if draft.game.is_none_or(|g| g.query_port(default_port).is_some()) {
-                                    let port = draft.port.trim().parse().unwrap_or(default_port);
-                                    let hint = draft
-                                        .game
-                                        .and_then(|g| g.query_port(port))
-                                        .map_or(tr!("same as the game port").into(), |p| p.to_string());
-                                    ui.label(tr!("Query port:"));
-                                    field(ui, &mut draft.query_port, hint);
-                                    tag(ui, false);
-                                    ui.end_row();
-                                }
-                                if draft.rcon() {
-                                    ui.label(tr!("Rcon password:"));
-                                    password_field(ui, &mut draft.rcon_password, draft.hide_password, 260.0)
-                                        .with_edit_menu();
-                                    tag(ui, false);
-                                    ui.end_row();
-                                    ui.label("");
-                                    ui.vertical(|ui| {
-                                        ui.checkbox(&mut draft.save_password, tr!("Save Rcon password"));
-                                        ui.checkbox(&mut draft.hide_password, tr!("Hide"));
-                                        ui.checkbox(&mut draft.auto_update_status, tr!("Auto Update Status"))
-                                            .on_hover_text(tr!("Regularly sends `status` (Steam IDs, IPs, ping) and sets up the server log (logaddress_add) for the Console and Chat tabs"));
-                                        ui.horizontal(|ui| {
-                                            ui.add_space(22.0);
-                                            ui.label(tr!("Interval:"));
-                                            ui.add_enabled(
-                                                draft.auto_update_status,
-                                                DragValue::new(&mut draft.status_interval)
-                                                    .range(STATUS_INTERVAL_RANGE)
-                                                    .suffix(" s"),
-                                            );
-                                        });
-                                    });
-                                    ui.label("");
-                                    ui.end_row();
-                                }
-                                ui.label(tr!("Comment:"));
-                                field(ui, &mut draft.comment, String::new());
-                                tag(ui, false);
-                                ui.end_row();
-                                ui.label(tr!("Additional parameters:"));
-                                field(ui, &mut draft.params, tr!("start parameters of the game").into());
-                                tag(ui, false);
-                                ui.end_row();
-                            });
-                        if !draft.rcon() {
-                            ui.label(RichText::new(tr!("RCON is not supported for this game")).color(weak));
-                        }
-                        let input = draft.address_input();
-                        let error = if draft.host.trim().is_empty() {
-                            Some(tr!("Enter the host name or IP address of the server").to_string())
-                        } else if ServerAddress::parse(&input).is_none() {
-                            Some(tr!("Invalid address: {input}", input = input))
-                        } else {
-                            None
-                        };
+                        new_server_form(ui, draft, game_icons);
+                        let error = draft.error();
+                        ui.add_space(6.0);
                         if let Some(error) = &error {
                             ui.colored_label(Color32::from_rgb(220, 60, 60), error);
-                        }
-                        if ui
-                            .link(tr!("How to add game servers: ports, query port, RCON and server log"))
-                            .clicked()
-                        {
-                            actions.push(Action::OpenUrl(GAMES_DOC.into()));
                         }
                         let (ok, cancel) = ok_cancel(ui);
                         if ok && error.is_none() {
@@ -11718,6 +11637,359 @@ fn star(ui: &mut Ui, size: f32) -> egui::Response {
 
 /// Password field: hidden passwords show round dots (●) with a little room between them,
 /// like Windows' password boxes, instead of egui's small bullets.
+/// Width of the labels and fields in the "New server" wizard.
+const FORM_LABEL: f32 = 150.0;
+const FORM_FIELD: f32 = 330.0;
+
+/// The "New server" wizard: the game with what it needs, then every setting of the server.
+fn new_server_form(ui: &mut Ui, d: &mut NewServerDraft, icons: Option<&GameIcons>) {
+    ui.set_width(FORM_LABEL + FORM_FIELD + 110.0);
+    let weak = ui.visuals().weak_text_color();
+    let heading = |ui: &mut Ui, text: &str| {
+        ui.add_space(10.0);
+        ui.label(RichText::new(text).strong().size(15.0));
+        ui.separator();
+    };
+    // Explanation under a field, lined up with the fields.
+    let note = |ui: &mut Ui, text: &str| {
+        ui.horizontal_top(|ui| {
+            ui.allocate_exact_size(egui::vec2(FORM_LABEL - 2.0, 1.0), Sense::hover());
+            ui.vertical(|ui| {
+                ui.set_max_width(FORM_FIELD + 100.0);
+                ui.add(Label::new(RichText::new(text).color(weak)).wrap());
+            });
+        });
+        ui.add_space(4.0);
+    };
+    // Label, the field (`add`), and whether it must be filled in.
+    let row = |ui: &mut Ui, label: &str, required: Option<bool>, add: &mut dyn FnMut(&mut Ui)| {
+        ui.horizontal(|ui| {
+            ui.set_min_height(26.0);
+            let width = ui.label(label).rect.width() + ui.spacing().item_spacing.x;
+            ui.add_space((FORM_LABEL - width).max(0.0));
+            add(ui);
+            if let Some(required) = required {
+                let text = if required { tr!("required") } else { tr!("optional") };
+                let color = if required { ui.visuals().text_color() } else { weak };
+                ui.label(RichText::new(text).color(color).small());
+            }
+        });
+    };
+    let field = |ui: &mut Ui, text: &mut String, hint: &str| {
+        ui.add(
+            TextEdit::singleline(text)
+                .align(egui::Align2::LEFT_CENTER)
+                .hint_text(hint)
+                .margin(egui::vec2(6.0, 4.0))
+                .desired_width(FORM_FIELD),
+        )
+        .with_edit_menu();
+    };
+
+    heading(ui, tr!("1. Game"));
+    row(ui, tr!("Game:"), Some(true), &mut |ui| game_picker(ui, d, icons));
+    note(
+        ui,
+        tr!("The game decides how openHLSW asks the server and which fields below you need. Type to search, the arrow keys switch the game."),
+    );
+    ui.add_space(4.0);
+    game_facts(ui, d.game);
+
+    heading(ui, tr!("2. Address"));
+    row(ui, tr!("Host or IP:"), Some(true), &mut |ui| {
+        field(ui, &mut d.host, "203.0.113.10")
+    });
+    note(ui, tr!("Host name or IP address of the server, e.g. 203.0.113.10 or play.example.org."));
+    let default_port = d
+        .game
+        .map(|g| g.default_port)
+        .filter(|&p| p > 0)
+        .unwrap_or(openhlsw::address::DEFAULT_PORT);
+    row(ui, tr!("Game port:"), Some(false), &mut |ui| {
+        field(ui, &mut d.port, &default_port.to_string())
+    });
+    note(
+        ui,
+        &tr!("The port players connect to. Empty = {port}, the game's usual port.", port = default_port),
+    );
+    let port = d.port.trim().parse().unwrap_or(default_port);
+    let query = d.game.and_then(|g| g.query_port(port));
+    // Only games that may answer on a port of their own.
+    if d.game.is_none() || query.is_some() || d.needs_query_port() {
+        let required = d.needs_query_port();
+        let hint = query.map_or(String::new(), |p| p.to_string());
+        row(ui, tr!("Query port:"), Some(required), &mut |ui| {
+            field(ui, &mut d.query_port, &hint)
+        });
+        let text = match (d.game, query) {
+            (None, _) => tr!("Only for servers that answer on a port of their own (GameSpy 2/3, e.g. Battlefield 2). Such servers have no RCON in openHLSW.").to_string(),
+            (Some(_), Some(p)) => tr!("The port the server answers queries on. Empty = {port}, the game's usual query port.", port = p),
+            (Some(_), None) => tr!("This game has no usual query port: enter the one from the server's configuration.").to_string(),
+        };
+        note(ui, &text);
+    }
+
+    heading(ui, tr!("3. RCON (remote console)"));
+    if d.rcon() {
+        let hide = d.hide_password;
+        row(ui, tr!("Rcon password:"), Some(false), &mut |ui| {
+            password_field(ui, &mut d.rcon_password, hide, FORM_FIELD).with_edit_menu();
+        });
+        note(ui, tr!("The rcon_password from the server's configuration (server.cfg). With it you send commands, kick and ban players and see the server log. openHLSW only logs in when you click Test in Rcon Config: servers ban addresses after a few failed logins."));
+        if rcon_support(d.game) == RconSupport::Maybe {
+            note(ui, tr!("This game answers like a Source server: openHLSW tries Source RCON on the game port. Whether that works depends on the game's server."));
+        }
+        ui.horizontal(|ui| {
+            ui.add_space(FORM_LABEL + ui.spacing().item_spacing.x);
+            ui.vertical(|ui| {
+                ui.checkbox(&mut d.save_password, tr!("Save Rcon password"))
+                    .on_hover_text(tr!("Stored in plain text in openHLSW's config file"));
+                ui.checkbox(&mut d.hide_password, tr!("Hide"));
+                ui.checkbox(&mut d.auto_update_status, tr!("Auto Update Status"))
+                    .on_hover_text(tr!("Regularly sends `status` (Steam IDs, IPs, ping) and sets up the server log (logaddress_add) for the Console and Chat tabs"));
+                ui.horizontal(|ui| {
+                    ui.add_space(22.0);
+                    ui.label(tr!("Interval:"));
+                    ui.add_enabled(
+                        d.auto_update_status,
+                        DragValue::new(&mut d.status_interval)
+                            .range(STATUS_INTERVAL_RANGE)
+                            .suffix(" s"),
+                    );
+                });
+            });
+        });
+        let log = if d.game.is_some_and(|g| g.key == "CS2") {
+            tr!("Server log (Console and Chat tabs): Counter-Strike 2 sends it over HTTP to openHLSW. Set a fixed port under Settings → Connections and allow it for UDP and TCP in your firewall.")
+        } else {
+            tr!("Server log (Console and Chat tabs): the server sends it over UDP to openHLSW. Set a fixed port under Settings → Connections and allow it in your firewall.")
+        };
+        note(ui, log);
+    } else {
+        let text = if rcon_support(d.game) == RconSupport::OwnQueryPort || !d.query_port.trim().is_empty() {
+            tr!("Servers with a query port of their own have no RCON in openHLSW.")
+        } else {
+            tr!("RCON is not supported for this game")
+        };
+        note(ui, text);
+    }
+
+    heading(ui, tr!("4. More"));
+    row(ui, tr!("Comment:"), Some(false), &mut |ui| field(ui, &mut d.comment, ""));
+    note(ui, tr!("Your own note for this server."));
+    row(ui, tr!("Additional parameters:"), Some(false), &mut |ui| {
+        field(ui, &mut d.params, tr!("start parameters of the game"))
+    });
+    note(ui, tr!("Extra start parameters of the game when you connect from openHLSW."));
+}
+
+/// The games that match the search text (name, any part), "Auto detect" first.
+fn game_matches(search: &str) -> Vec<AddGame> {
+    let search = search.trim().to_lowercase();
+    let hit = |name: &str| search.is_empty() || name.to_lowercase().contains(&search);
+    let auto = hit(tr!("Auto detect")).then_some(None);
+    auto.into_iter()
+        .chain(games::GAMES.iter().filter(|g| hit(g.name)).map(Some))
+        .collect()
+}
+
+/// The entry `step` rows away from `game` in `list` (the first one when it is not there).
+fn step_game(list: &[AddGame], game: AddGame, step: isize) -> AddGame {
+    let same = |e: &AddGame| match (e, game) {
+        (Some(a), Some(b)) => std::ptr::eq(*a, b),
+        (a, b) => a.is_none() && b.is_none(),
+    };
+    let Some(pos) = list.iter().position(same) else {
+        return list.first().copied().unwrap_or(game);
+    };
+    let next = (pos as isize + step).clamp(0, list.len() as isize - 1);
+    list[next as usize]
+}
+
+/// Dropdown of the games with a search field on top. The arrow keys change the game right
+/// away (also with the list closed), so the fields below follow.
+fn game_picker(ui: &mut Ui, d: &mut NewServerDraft, icons: Option<&GameIcons>) {
+    let name = d.game.map_or(tr!("Auto detect"), |g| g.name);
+    let icon = egui::IdSalt::new("picker_icon");
+    let button = Button::new((
+        egui::Atom::custom(icon, GameIcons::slot(ui)),
+        name,
+        egui::Atom::grow(),
+        egui::Atom::custom(egui::IdSalt::new("picker_arrow"), egui::vec2(10.0, 10.0)),
+    ))
+    .min_size(egui::vec2(FORM_FIELD, 26.0))
+    .atom_ui(ui);
+    // The down arrow of a dropdown (the system fonts may lack the glyph).
+    if let Some(r) = button.rect(egui::IdSalt::new("picker_arrow")) {
+        let c = r.center();
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 2.5)],
+            ui.visuals().text_color(),
+            Stroke::NONE,
+        ));
+    }
+    if let (Some(icons), Some(g), Some(rect)) = (icons, d.game, button.rect(icon)) {
+        icons.paint(ui, g.icon, rect);
+    }
+    let button = button.response;
+    let mut open = false;
+    egui::Popup::from_toggle_button_response(&button)
+        .width(button.rect.width())
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            open = true;
+            let opened = !d.list_open;
+            ui.set_min_width(button.rect.width() - 12.0);
+            let (down, up, enter) = ui.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
+                    i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
+                    i.consume_key(egui::Modifiers::NONE, Key::Enter),
+                )
+            });
+            if opened {
+                d.search.clear();
+            }
+            let search = ui.add(
+                TextEdit::singleline(&mut d.search)
+                    .hint_text(tr!("Search game..."))
+                    .margin(egui::vec2(6.0, 4.0))
+                    .desired_width(f32::INFINITY),
+            );
+            // Typing always goes into the search field.
+            if !search.has_focus() {
+                search.request_focus();
+            }
+            let list = game_matches(&d.search);
+            let mut moved = opened;
+            if search.changed() {
+                d.game = step_game(&list, d.game, 0);
+                moved = true;
+            }
+            if down || up {
+                d.game = step_game(&list, d.game, if down { 1 } else { -1 });
+                moved = true;
+            }
+            ui.separator();
+            if list.is_empty() {
+                ui.label(RichText::new(tr!("No game found")).color(ui.visuals().weak_text_color()));
+            }
+            let slot = GameIcons::slot(ui);
+            let row_icon = egui::IdSalt::new("picker_row_icon");
+            ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                for entry in &list {
+                    let selected = match (entry, d.game) {
+                        (Some(a), Some(b)) => std::ptr::eq(*a, b),
+                        (a, b) => a.is_none() && b.is_none(),
+                    };
+                    let label = entry.map_or(tr!("Auto detect"), |g| g.name);
+                    let r = Button::selectable(selected, (egui::Atom::custom(row_icon, slot), label))
+                        .min_size(egui::vec2(ui.available_width(), 0.0))
+                        .atom_ui(ui);
+                    if let (Some(icons), Some(g), Some(rect)) = (icons, entry, r.rect(row_icon)) {
+                        icons.paint(ui, g.icon, rect);
+                    }
+                    if selected && moved {
+                        r.response.scroll_to_me(Some(Align::Center));
+                    }
+                    if r.response.clicked() {
+                        d.game = *entry;
+                        ui.close();
+                    }
+                }
+            });
+            if enter {
+                ui.close();
+            }
+        });
+    // Closed list: the arrow keys on the focused button step through all games.
+    if !open && button.has_focus() {
+        let (down, up) = ui.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
+            )
+        });
+        if down || up {
+            d.game = step_game(&game_matches(""), d.game, if down { 1 } else { -1 });
+        }
+    }
+    d.list_open = open;
+}
+
+/// What the chosen game needs: query, ports, transport, detection, RCON.
+fn game_facts(ui: &mut Ui, game: AddGame) {
+    let weak = ui.visuals().weak_text_color();
+    Frame::group(ui.style())
+        .fill(ui.visuals().faint_bg_color)
+        .inner_margin(Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let Some(g) = game else {
+                ui.label(tr!("Auto detect finds Source, Half-Life 1 and Counter-Strike 2 servers by itself and also tries GameSpy 1 and 2. Choose the game when it is not detected or answers on a port of its own."));
+                return;
+            };
+            let transport = match g.protocol {
+                Protocol::Cfx => "UDP + TCP",
+                p if p.is_tcp() => "TCP",
+                _ => "UDP",
+            };
+            let game_port = if g.default_port > 0 {
+                g.default_port.to_string()
+            } else if g.protocol == Protocol::A2s {
+                openhlsw::address::DEFAULT_PORT.to_string()
+            } else {
+                tr!("enter it").into()
+            };
+            let query_port = if g.default_query_port > 0 {
+                g.default_query_port.to_string()
+            } else if g.port_diff != 0 {
+                tr!("game port + {offset}", offset = g.port_diff)
+            } else if g.protocol == Protocol::GameSpy2 {
+                tr!("enter it").into()
+            } else if g.protocol == Protocol::A2s {
+                tr!("same as the game port").into()
+            } else {
+                tr!("openHLSW tries the usual ports").into()
+            };
+            let detected = if g.not_detectable {
+                tr!("no, choose the game here")
+            } else {
+                tr!("yes")
+            };
+            let rcon = match rcon_support(game) {
+                RconSupport::Yes => tr!("yes, on the game port"),
+                RconSupport::Maybe => tr!("maybe (Source RCON on the game port)"),
+                RconSupport::No | RconSupport::OwnQueryPort => tr!("no"),
+            };
+            egui::Grid::new("game_facts")
+                .num_columns(2)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    for (label, value) in [
+                        (tr!("Server query:"), g.protocol.name().to_string()),
+                        (tr!("Transport:"), transport.to_string()),
+                        (tr!("Game port:"), game_port),
+                        (tr!("Query port:"), query_port),
+                        (tr!("Detected automatically:"), detected.to_string()),
+                        (tr!("RCON:"), rcon.to_string()),
+                    ] {
+                        ui.label(RichText::new(label).color(weak));
+                        ui.label(value);
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(tr!(
+                    "The game server must allow {transport} on these ports in its firewall.",
+                    transport = transport
+                ))
+                .color(weak),
+            );
+        });
+}
+
 fn password_field(ui: &mut Ui, text: &mut String, hide: bool, width: f32) -> egui::Response {
     let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
         let font = TextStyle::Body.resolve(ui.style());
@@ -12713,6 +12985,21 @@ fn status_line(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_search_and_arrows() {
+        let all = game_matches("");
+        assert!(all[0].is_none() && all.len() == games::GAMES.len() + 1);
+        let bf = game_matches("BATTLEFIELD");
+        assert!(bf.iter().all(|g| g.is_some_and(|g| g.name.contains("Battlefield"))));
+        // Down from "Auto detect", up stops at the top, a game not in the list → the first.
+        let key = |g: AddGame| g.map(|g| g.key);
+        assert_eq!(key(step_game(&all, None, 1)), Some(games::GAMES[0].key));
+        assert!(step_game(&all, None, -1).is_none());
+        assert_eq!(key(step_game(&bf, None, 0)), key(bf[0]));
+        let last = all[all.len() - 1];
+        assert_eq!(key(step_game(&all, last, 1)), key(last));
+    }
 
     #[test]
     fn new_server_address() {
