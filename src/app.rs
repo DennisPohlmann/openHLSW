@@ -1643,6 +1643,8 @@ pub struct OpenHlswApp {
     /// Marked players (by name) and rules (by key): click, Ctrl+click, Shift+click.
     player_sel: Selection,
     rule_sel: Selection,
+    /// Rules list: column (0 = server order, 1 = key, 2 = value) and ascending.
+    rule_sort: (usize, bool),
     rules_filter: String,
     tab: Tab,
     console_input: String,
@@ -1845,6 +1847,7 @@ impl OpenHlswApp {
             player_filter: String::new(),
             player_sel: Selection::default(),
             rule_sel: Selection::default(),
+            rule_sort: (0, true),
             rules_filter: String::new(),
             tab: Tab::RconConfig,
             console_input: String::new(),
@@ -5497,6 +5500,7 @@ impl OpenHlswApp {
                         &needle,
                         rule_server,
                         &mut self.rule_sel,
+                        &mut self.rule_sort,
                         actions,
                     )
                 });
@@ -8521,15 +8525,9 @@ fn sort_header<C: PartialEq + Copy + Send + Sync + 'static>(
             ));
         }
     });
-    // A double click (auto-size) must not change the sorting: remember the order before
-    // the first click and restore it when the second click turns out to be a double click.
-    let memory_id = resp.id.with("sort_before_click");
-    if resp.double_clicked() {
-        if let Some(previous) = ui.ctx().data_mut(|d| d.get_temp::<(C, bool)>(memory_id)) {
-            *sort = previous;
-        }
-    } else if resp.clicked() {
-        ui.ctx().data_mut(|d| d.insert_temp(memory_id, *sort));
+    // The second click of a double click (auto-size) does not toggle again: a double
+    // click sorts like one click.
+    if resp.clicked() && !resp.double_clicked() {
         *sort = if sort.0 == col {
             (col, !sort.1)
         } else {
@@ -8661,6 +8659,7 @@ fn server_table(
     actions: &mut Vec<Action>,
 ) {
     let selected = opts.selected;
+    let sort_before = *sort;
     let fresh: Vec<usize> = sorted_servers(servers, opts.locations, *sort)
         .into_iter()
         .filter(|&i| {
@@ -8790,6 +8789,11 @@ fn server_table(
                     let (auto, resp) = sort_header(ui, p, title, col, sort);
                     if auto {
                         autosize_request = Some(i);
+                    }
+                    if *sort != sort_before {
+                        // A header click while hovering: show the new order, do not keep the old one.
+                        last_order.clear();
+                        ui.ctx().request_repaint();
                     }
                     resp.rows_context_menu(|ui| column_menu(ui, false, &menu_items, actions));
                 });
@@ -9122,39 +9126,33 @@ fn sorted_servers(
     locations: &[(String, String)],
     (col, ascending): (Col, bool),
 ) -> Vec<usize> {
-    fn text(s: Option<&String>) -> String {
-        s.map(|s| s.to_lowercase()).unwrap_or_default()
+    fn text(s: Option<&String>) -> &str {
+        s.map_or("", |s| s.as_str())
     }
     let mut order: Vec<usize> = (0..servers.len()).collect();
     order.sort_by(|&a, &b| {
         let (x, y) = (&servers[a], &servers[b]);
         let (xi, yi) = (x.info.as_ref(), y.info.as_ref());
+        let name = || natural_cmp(text(xi.map(|i| &i.name)), text(yi.map(|i| &i.name)));
+        let addr = || natural_cmp(&x.address.to_string(), &y.address.to_string());
         let ord = match col {
             Col::Index => a.cmp(&b),
-            Col::Address => x.address.to_string().cmp(&y.address.to_string()),
-            Col::Name => text(xi.map(|i| &i.name)).cmp(&text(yi.map(|i| &i.name))),
-            Col::Game => x.game_short().cmp(&y.game_short()),
-            Col::Map => text(xi.map(|i| &i.map)).cmp(&text(yi.map(|i| &i.map))),
-            Col::Players => xi.map(|i| i.players).cmp(&yi.map(|i| i.players)),
+            Col::Address => addr(),
+            Col::Name => name(),
+            Col::Game => natural_cmp(&x.game_short(), &y.game_short()),
+            Col::Map => natural_cmp(text(xi.map(|i| &i.map)), text(yi.map(|i| &i.map))),
+            // Active (human) players, not slots or bots.
+            Col::Players => xi.map(|_| x.humans()).cmp(&yi.map(|_| y.humans())),
             Col::Ping => x.ping.unwrap_or(u32::MAX).cmp(&y.ping.unwrap_or(u32::MAX)),
-            Col::Version => text(xi.map(|i| &i.version)).cmp(&text(yi.map(|i| &i.version))),
-            Col::Location => locations[a]
-                .1
-                .to_lowercase()
-                .cmp(&locations[b].1.to_lowercase()),
-            Col::AddOn => x.addons_short().cmp(&y.addons_short()),
-            Col::AntiCheat => x.anticheat().cmp(&y.anticheat()),
-            Col::Ranking => x.ranking().0.cmp(&y.ranking().0),
-            Col::Limits => x.limits().cmp(&y.limits()),
-            Col::Comment => x.comment.to_lowercase().cmp(&y.comment.to_lowercase()),
-            Col::GameName => x
-                .game_short()
-                .cmp(&y.game_short())
-                .then_with(|| text(xi.map(|i| &i.name)).cmp(&text(yi.map(|i| &i.name)))),
-            Col::GameAddress => x
-                .game_short()
-                .cmp(&y.game_short())
-                .then_with(|| x.address.to_string().cmp(&y.address.to_string())),
+            Col::Version => natural_cmp(text(xi.map(|i| &i.version)), text(yi.map(|i| &i.version))),
+            Col::Location => natural_cmp(&locations[a].1, &locations[b].1),
+            Col::AddOn => natural_cmp(&x.addons_short(), &y.addons_short()),
+            Col::AntiCheat => natural_cmp(&x.anticheat(), &y.anticheat()),
+            Col::Ranking => natural_cmp(&x.ranking().0, &y.ranking().0),
+            Col::Limits => natural_cmp(&x.limits(), &y.limits()),
+            Col::Comment => natural_cmp(&x.comment, &y.comment),
+            Col::GameName => natural_cmp(&x.game_short(), &y.game_short()).then_with(name),
+            Col::GameAddress => natural_cmp(&x.game_short(), &y.game_short()).then_with(addr),
         };
         let ord = if ascending { ord } else { ord.reverse() };
         // Offline servers always go to the end (sorted among themselves the same way) and
@@ -10217,10 +10215,56 @@ const PLAYER_COLUMNS: [(&str, bool, f32, f32); 31] = [
 ];
 
 /// Sort key of a players list cell.
-#[derive(PartialEq, PartialOrd)]
+#[derive(PartialEq)]
 enum CellKey {
     Num(f64),
     Text(String),
+}
+
+impl PartialOrd for CellKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(match (self, other) {
+            (CellKey::Num(a), CellKey::Num(b)) => a.total_cmp(b),
+            (CellKey::Text(a), CellKey::Text(b)) => natural_cmp(a, b),
+            (CellKey::Num(_), CellKey::Text(_)) => Ordering::Less,
+            (CellKey::Text(_), CellKey::Num(_)) => Ordering::Greater,
+        })
+    }
+}
+
+/// Text order of all lists: case-insensitive, digit runs compared as numbers
+/// ("Server 9" < "Server 10", "10.0.0.9" < "10.0.0.10", "2 / 16" < "10 / 16").
+fn natural_cmp(a: &str, b: &str) -> Ordering {
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return a.cmp(b),
+            (None, _) => return Ordering::Less,
+            (_, None) => return Ordering::Greater,
+            (Some(c), Some(d)) if c.is_ascii_digit() && d.is_ascii_digit() => {
+                let run = |it: &mut std::iter::Peekable<std::str::Chars<'_>>| {
+                    let mut n = String::new();
+                    while let Some(c) = it.next_if(char::is_ascii_digit) {
+                        n.push(c);
+                    }
+                    n.trim_start_matches('0').to_string()
+                };
+                let (m, n) = (run(&mut x), run(&mut y));
+                let ord = m.len().cmp(&n.len()).then_with(|| m.cmp(&n));
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(c), Some(d)) => {
+                let ord = c.to_lowercase().cmp(d.to_lowercase());
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+                x.next();
+                y.next();
+            }
+        }
+    }
 }
 
 /// Text and sort key of one players list cell.
@@ -10367,7 +10411,10 @@ fn players_table(
             .1
             .partial_cmp(&player_cell(b, sort.0).1)
             .unwrap_or(Ordering::Equal);
-        if sort.1 { ord } else { ord.reverse() }
+        let ord = if sort.1 { ord } else { ord.reverse() };
+        // Equal keys: fixed order, so rows do not swap places on every refresh.
+        ord.then_with(|| natural_cmp(&a.player.name, &b.player.name))
+            .then(a.player.index.cmp(&b.player.index))
     });
     let order: Vec<&str> = list.iter().map(|r| r.player.name.as_str()).collect();
     sel.retain(&order);
@@ -10933,6 +10980,7 @@ fn rules_table(
     needle: &str,
     server: Option<(ServerId, bool)>,
     sel: &mut Selection,
+    sort: &mut (usize, bool),
     actions: &mut Vec<Action>,
 ) {
     let all: Vec<&Rule> = rules.iter().chain(info_rules).collect();
@@ -10947,6 +10995,12 @@ fn rules_table(
                 || r.value.to_lowercase().contains(needle)
         })
         .collect();
+    let mut rows = rows;
+    match *sort {
+        (0, true) => {}
+        (0, false) => rows.reverse(),
+        _ => rows.sort_by(|(a, ..), (b, ..)| rule_cmp(a, b, *sort)),
+    }
     let rules: Vec<&Rule> = rows.iter().map(|(r, _, _)| *r).collect();
     let autosize = take_autosize(ui, "rules");
     let mut autosize_request = None;
@@ -11004,9 +11058,9 @@ fn rules_table(
         ))
         .column(Column::remainder())
         .header(HEADER_HEIGHT, |mut h| {
-            for (i, title) in ["", tr!("Key"), tr!("Value")].into_iter().enumerate() {
+            for (i, title) in ["", "Key", "Value"].into_iter().enumerate() {
                 h.col(|ui| {
-                    if plain_header(ui, p, title) {
+                    if sort_header(ui, p, title, i, sort).0 {
                         autosize_request = Some(i);
                     }
                 });
@@ -11137,6 +11191,20 @@ fn rule_context_menu(
 }
 
 /// `key "value"` per line, like HLSW's copy of rules.
+/// Rules list order by `col` 1 = key or 2 = value (numerically when both are numbers).
+fn rule_cmp(a: &Rule, b: &Rule, (col, ascending): (usize, bool)) -> Ordering {
+    let ord = if col == 1 {
+        natural_cmp(&a.key, &b.key)
+    } else {
+        match (a.value.trim().parse::<f64>(), b.value.trim().parse::<f64>()) {
+            (Ok(x), Ok(y)) => x.total_cmp(&y),
+            _ => natural_cmp(&a.value, &b.value),
+        }
+    };
+    let ord = if ascending { ord } else { ord.reverse() };
+    ord.then_with(|| natural_cmp(&a.key, &b.key))
+}
+
 fn rules_as_text(rules: &[&Rule]) -> String {
     rules
         .iter()
@@ -12382,6 +12450,43 @@ fn status_line(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn natural_cmp_orders_text_and_numbers() {
+        use Ordering::*;
+        assert_eq!(natural_cmp("alpha", "Beta"), Less);
+        assert_eq!(natural_cmp("Zulu", "alpha"), Greater);
+        assert_eq!(natural_cmp("Server 9", "Server 10"), Less);
+        assert_eq!(natural_cmp("10.0.0.9:27015", "10.0.0.10:27015"), Less);
+        assert_eq!(natural_cmp("2 / 16", "10 / 16"), Less);
+        assert_eq!(natural_cmp("abc", "abcd"), Less);
+        assert_eq!(natural_cmp("x", "x"), Equal);
+        let mut v = ["b", "A", "c10", "c9", "a"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(v, ["A", "a", "b", "c9", "c10"]);
+    }
+
+    #[test]
+    fn rule_cmp_sorts_values_numerically() {
+        let r = |k: &str, v: &str| Rule {
+            key: k.into(),
+            value: v.into(),
+        };
+        let mut rules = [r("b", "10"), r("a", "1.5"), r("c", "1.25"), r("d", "x")];
+        rules.sort_by(|a, b| rule_cmp(a, b, (2, true)));
+        let keys: Vec<&str> = rules.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, ["c", "a", "b", "d"]);
+        rules.sort_by(|a, b| rule_cmp(a, b, (1, false)));
+        let keys: Vec<&str> = rules.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, ["d", "c", "b", "a"]);
+    }
+
+    #[test]
+    fn player_cell_keys_compare_numbers_and_text() {
+        assert!(CellKey::Num(2.0) < CellKey::Num(10.0));
+        assert!(CellKey::Text("bob".into()) < CellKey::Text("Carl".into()));
+        assert!(CellKey::Num(-1.0) < CellKey::Text(String::new()));
+    }
 
     #[test]
     fn geo_requests_one_per_second_14_per_minute() {

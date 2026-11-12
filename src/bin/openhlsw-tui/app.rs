@@ -744,8 +744,14 @@ impl App {
             SortKey::Name => list.sort_by_key(|s| lower(s.name())),
             SortKey::Game => list.sort_by_key(|s| lower(&s.game_name())),
             SortKey::Map => list.sort_by_key(|s| lower(s.map())),
-            // Most players first, then the larger servers.
-            SortKey::Players => list.sort_by_key(|s| std::cmp::Reverse(s.counts())),
+            // Most active (human) players first, then the larger servers.
+            SortKey::Players => list.sort_by_key(|s| {
+                let humans = s
+                    .info
+                    .as_ref()
+                    .map_or(0, |i| i.players.saturating_sub(i.bots));
+                std::cmp::Reverse((humans, s.counts().1))
+            }),
             SortKey::Ping => list.sort_by_key(|s| s.ping_ms.unwrap_or(u32::MAX)),
         }
         if self.reverse {
