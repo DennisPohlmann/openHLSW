@@ -28,6 +28,8 @@ struct State {
     pending: bool,
     /// No entry starts with the typed text: match the start of any word instead.
     words: bool,
+    /// Pass in which the list was last shown (to tell when it opens).
+    pass: u64,
 }
 
 pub struct TypeAhead {
@@ -36,6 +38,8 @@ pub struct TypeAhead {
     matched: bool,
     /// An entry was picked this frame.
     picked: bool,
+    /// The list opened this frame.
+    opened: bool,
 }
 
 impl TypeAhead {
@@ -43,6 +47,10 @@ impl TypeAhead {
     pub fn begin(ui: &Ui) -> Self {
         let id = ui.scope_id().with("typeahead");
         let mut state: State = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+        let pass = ui.ctx().cumulative_pass_nr();
+        // Not shown in the last pass (or never): the list just opened.
+        let opened = state.pass == 0 || pass > state.pass + 1;
+        state.pass = pass;
         // Typing into a text field (e.g. an editable dropdown) is not a search.
         if !ui.ctx().text_edit_focused() {
             let (typed, backspace, now) = ui.input(|i| {
@@ -76,6 +84,16 @@ impl TypeAhead {
             state,
             matched: false,
             picked: false,
+            opened,
+        }
+    }
+
+    /// Marks the chosen entry: it gets the focus when the list opens, so the arrow keys
+    /// move on from it and Enter picks.
+    pub fn current(&self, response: &Response) {
+        if self.opened {
+            response.request_focus();
+            response.scroll_to_me(Some(Align::Center));
         }
     }
 
@@ -134,5 +152,70 @@ mod tests {
         assert!(matches("Español (Argentina)", "esp", false));
         assert!(matches("Русский", "ру", false));
         assert!(!matches("Arial", "x", true));
+    }
+}
+
+#[cfg(test)]
+mod keys {
+    use super::TypeAhead;
+    use eframe::egui::{self, Event, Key, PointerButton, pos2, vec2};
+
+    /// Click opens the list on the chosen entry, two arrows down and Enter pick "d".
+    #[test]
+    fn arrows_start_at_the_chosen_entry() {
+        let ctx = egui::Context::default();
+        let items = ["a", "b", "c", "d"];
+        let mut value = 1;
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        for frame in 0..6 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let p = pos2(20.0, 10.0);
+            input.events = match frame {
+                1 => vec![
+                    Event::PointerMoved(p),
+                    Event::PointerButton {
+                        pos: p,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    Event::PointerButton {
+                        pos: p,
+                        button: PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+                3 | 4 => vec![key(Key::ArrowDown)],
+                5 => vec![key(Key::Enter)],
+                _ => vec![],
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                egui::ComboBox::from_id_salt("combo")
+                    .selected_text(items[value])
+                    .show_ui(ui, |ui| {
+                        let mut find = TypeAhead::begin(ui);
+                        for (i, item) in items.iter().enumerate() {
+                            let r = ui.selectable_value(&mut value, i, *item);
+                            find.item(&r, item);
+                            if i == value {
+                                find.current(&r);
+                            }
+                        }
+                        find.finish(ui);
+                    });
+            });
+            out.textures_delta.clear();
+        }
+        assert_eq!(value, 3);
     }
 }

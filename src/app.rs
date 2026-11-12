@@ -5339,6 +5339,9 @@ impl OpenHlswApp {
                         tr!("Source, Half-Life 1 and CS2 servers are detected automatically"),
                     );
                     find.item(&auto, tr!("Auto detect"));
+                    if add_game.is_none() {
+                        find.current(&auto);
+                    }
                     if auto.clicked() {
                         *add_game = None;
                         ui.close();
@@ -5348,6 +5351,9 @@ impl OpenHlswApp {
                         let r =
                             entry(ui, selected, g.icon, g.name).on_hover_text(game_ports_text(g));
                         find.item(&r, g.name);
+                        if selected {
+                            find.current(&r);
+                        }
                         if r.clicked() {
                             *add_game = Some(g);
                             ui.close();
@@ -6735,6 +6741,9 @@ impl OpenHlswApp {
                                             .selectable_label(game.is_none(), tr!("Auto detect"))
                                             .on_hover_text(tr!("Source, Half-Life 1 and CS2 servers are detected automatically"));
                                         find.item(&auto, tr!("Auto detect"));
+                                        if game.is_none() {
+                                            find.current(&auto);
+                                        }
                                         if auto.clicked() {
                                             *game = None;
                                             ui.close();
@@ -6745,6 +6754,9 @@ impl OpenHlswApp {
                                                 .selectable_label(selected, g.name)
                                                 .on_hover_text(game_ports_text(g));
                                             find.item(&r, g.name);
+                                            if selected {
+                                                find.current(&r);
+                                            }
                                             if r.clicked() {
                                                 *game = Some(g);
                                                 ui.close();
