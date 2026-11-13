@@ -82,6 +82,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   right-click a value (name, address, map, …) to copy it, its line or all details.
 - Players with country flag and – via RCON `status` – ping, loss, Steam ID and IP;
   Battlefield 2 score, deaths, skill, team and bots straight from the query.
+- Mark several players with Ctrl / Shift + click, Ctrl+A, or by dragging a rectangle over
+  them with the mouse like in HLSW (Ctrl + drag adds to the marked players).
 - Right-click menus like HLSW: copy (names, Steam IDs, profile URLs, rows), Steam profile,
   Global ID Database, kick and ban with a duration – Multi Kick / Multi Ban for several
   marked players. Rules: copy and change values; after the cvars, HLSW's grey server info

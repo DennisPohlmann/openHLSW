@@ -10473,6 +10473,14 @@ fn players_table(
             })
         })
         .collect();
+    // Registered before the rows, so they keep their clicks and only drags reach it.
+    let band_area = ui.max_rect();
+    let band = ui.interact(
+        band_area,
+        egui::Id::unique("players_band"),
+        Sense::click_and_drag(),
+    );
+    let mut first_row: Option<(usize, egui::Rect)> = None;
     let mut table = styled_table(ui, "players").sense(Sense::click());
     if let Some(i) = scroll_to {
         table = table.scroll_to_row(i, None);
@@ -10556,6 +10564,7 @@ fn players_table(
                 row.col(|_| {});
 
                 let resp = row.response();
+                first_row.get_or_insert((row.index(), resp.rect));
                 if resp.clicked() {
                     clicked = Some((r.player.name.clone(), ui_modifiers(&resp)));
                 }
@@ -10579,9 +10588,98 @@ fn players_table(
         sel.click(&key, &order, mods);
         set_active_list(ui.ctx(), "players");
     }
+    rubber_band(
+        ui,
+        p,
+        &band,
+        band_area.top() + HEADER_HEIGHT,
+        first_row,
+        &order,
+        sel,
+    );
     if let Some(i) = autosize_request {
         request_autosize(ui, "players", i);
     }
+}
+
+/// Drag selection like in HLSW: a rectangle dragged from anywhere below the header selects
+/// every row it touches (with Ctrl in addition to the rows already selected); a click
+/// below the last row clears the selection. `first_row` is the first row drawn and its rect.
+fn rubber_band(
+    ui: &Ui,
+    p: &Palette,
+    band: &egui::Response,
+    body_top: f32,
+    first_row: Option<(usize, egui::Rect)>,
+    order: &[&str],
+    sel: &mut Selection,
+) {
+    let ctrl = ui_modifiers(band).command;
+    if band.clicked() && !ctrl {
+        sel.keys.clear();
+    }
+    let Some((i, r)) = first_row else { return };
+    // Row positions relative to the first row, so the rectangle stays put while scrolling.
+    let stride = r.height();
+    let top0 = r.top() - i as f32 * stride;
+    let ctx = ui.ctx();
+    if band.drag_started_by(egui::PointerButton::Primary)
+        && let Some(o) = ctx.input(|i| i.pointer.press_origin())
+        && o.y >= body_top
+    {
+        let base = if ctrl {
+            sel.keys.clone()
+        } else {
+            HashSet::new()
+        };
+        ctx.data_mut(|d| d.insert_temp(band.id, (o.x, o.y - top0, base)));
+        set_active_list(ctx, "players");
+    }
+    let Some((x0, y0, base)) = ctx.data(|d| d.get_temp::<(f32, f32, HashSet<String>)>(band.id))
+    else {
+        return;
+    };
+    let pos = ctx.pointer_latest_pos().filter(|_| band.dragged());
+    let Some(pos) = pos else {
+        ctx.data_mut(|d| d.remove::<(f32, f32, HashSet<String>)>(band.id));
+        return;
+    };
+    let rows = band_rows(y0, pos.y - top0, stride, order.len());
+    sel.keys = base;
+    if let Some((a, b)) = rows {
+        sel.keys.extend(order[a..=b].iter().map(|k| k.to_string()));
+        sel.anchor = Some(order[a].to_string());
+        sel.cursor = Some(order[b].to_string());
+    }
+    let rect = egui::Rect::from_two_pos(egui::pos2(x0, y0 + top0), pos);
+    let clip = egui::Rect::from_min_max(egui::pos2(band.rect.left(), body_top), band.rect.max);
+    let points = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+        rect.left_top(),
+    ];
+    ui.painter()
+        .with_clip_rect(clip.intersect(ui.clip_rect()))
+        .add(egui::Shape::dashed_line(
+            &points,
+            Stroke::new(1.0, p.text),
+            1.0,
+            1.0,
+        ));
+}
+
+/// First and last of `len` rows (each `stride` high, row 0 at 0) between the heights `y0`
+/// and `y1`; `None` if the band misses every row.
+fn band_rows(y0: f32, y1: f32, stride: f32, len: usize) -> Option<(usize, usize)> {
+    let (lo, hi) = (y0.min(y1), y0.max(y1));
+    if len == 0 || hi < 0.0 || lo >= len as f32 * stride {
+        return None;
+    }
+    let a = (lo.max(0.0) / stride) as usize;
+    let b = ((hi / stride) as usize).min(len - 1);
+    Some((a, b))
 }
 
 /// Tab separated copy of the visible player table (HLSW "Copy → Whole Table").
@@ -12479,6 +12577,16 @@ mod tests {
         rules.sort_by(|a, b| rule_cmp(a, b, (1, false)));
         let keys: Vec<&str> = rules.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, ["d", "c", "b", "a"]);
+    }
+
+    #[test]
+    fn band_rows_covers_the_touched_rows() {
+        assert_eq!(band_rows(20.0, 5.0, 10.0, 5), Some((0, 2)));
+        assert_eq!(band_rows(-30.0, 15.0, 10.0, 5), Some((0, 1)));
+        assert_eq!(band_rows(35.0, 200.0, 10.0, 5), Some((3, 4)));
+        assert_eq!(band_rows(55.0, 200.0, 10.0, 5), None);
+        assert_eq!(band_rows(-20.0, -5.0, 10.0, 5), None);
+        assert_eq!(band_rows(0.0, 5.0, 10.0, 0), None);
     }
 
     #[test]
