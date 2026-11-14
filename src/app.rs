@@ -5645,62 +5645,7 @@ impl OpenHlswApp {
 
         ui.horizontal_top(|ui| {
             group_box(ui, p, tr!("Rcon Password"), 200.0, |ui| {
-                egui::Grid::new("rcon_pw_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 5.0])
-                    .show(ui, |ui| {
-                        let pw = password_field(ui, &mut s.rcon_password, s.hide_password, 105.0)
-                            .with_edit_menu();
-                        // Typing only edits the password: the server is asked with it when
-                        // Test (or Enter) is pressed, not on every key (failed RCON logins get
-                        // the address banned).
-                        if pw.changed() && s.save_password {
-                            actions.push(Action::SaveConfig);
-                        }
-                        if pw.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                            actions.push(Action::RconTest(id));
-                        }
-                        if ui.add(Button::new(tr!("Test")).min_size(egui::vec2(75.0, 18.0))).clicked() {
-                            actions.push(Action::RconTest(id));
-                        }
-                        ui.end_row();
-
-                        ui.horizontal(|ui| {
-                            ui.label(tr!("Status:"));
-                            ui.label(rcon_status_text(&s.rcon_status, p));
-                        });
-                        if ui
-                            .add(Button::new(tr!("Disconnect")).min_size(egui::vec2(75.0, 18.0)))
-                            .clicked()
-                        {
-                            actions.push(Action::RconDisconnect(id));
-                        }
-                        ui.end_row();
-
-                        ui.horizontal(|ui| {
-                            if ui.checkbox(&mut s.hide_password, tr!("Hide")).changed() {
-                                actions.push(Action::SaveConfig);
-                            }
-                            ui.add_space(14.0);
-                            if ui
-                                .checkbox(&mut s.save_password, tr!("Save"))
-                                .on_hover_text(
-                                    tr!("Stores the password in plain text in the settings file"),
-                                )
-                                .changed()
-                            {
-                                actions.push(Action::SaveConfig);
-                            }
-                        });
-                        if ui
-                            .add(Button::new(tr!("Properties...")).min_size(egui::vec2(75.0, 18.0)))
-                            .on_hover_text(tr!("Log port and public IP"))
-                            .clicked()
-                        {
-                            actions.push(Action::OpenSettings(SettingsTab::Connections));
-                        }
-                        ui.end_row();
-                    });
+                rcon_password_grid(ui, p, s, actions);
             });
 
             let log_on_map_change = &mut self.settings.log_on_map_change;
@@ -6385,6 +6330,30 @@ impl OpenHlswApp {
             ui.add_enabled_ui(false, |ui| ui.label(tr!("RCON is not supported for this game")));
             return;
         }
+        // Console and chat need RCON: the login of Rcon Config (same server state) right here
+        // until it works, then only a line with the status.
+        let s = &mut self.servers[idx];
+        if s.rcon_status == RconStatus::Ok {
+            ui.horizontal(|ui| {
+                ui.label(tr!("Status:"));
+                ui.label(rcon_status_text(&s.rcon_status, p));
+                if ui.add(Button::new(tr!("Disconnect")).min_size(egui::vec2(75.0, 18.0))).clicked() {
+                    actions.push(Action::RconDisconnect(s.id));
+                }
+            });
+        } else {
+            ui.horizontal_top(|ui| {
+                group_box(ui, p, tr!("Rcon Password"), 200.0, |ui| {
+                    rcon_password_grid(ui, p, s, actions);
+                });
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(tr!("Enter the RCON password and press Test to use console and chat."));
+                });
+            });
+        }
+        ui.add_space(4.0);
         // The find shortcuts of the main window, for this window.
         ui.input_mut(|i| {
             use egui::{KeyboardShortcut, Modifiers};
@@ -11308,6 +11277,67 @@ fn rules_as_text(rules: &[&Rule]) -> String {
         .iter()
         .map(|r| format!("{} \"{}\"\n", r.key, r.value))
         .collect()
+}
+
+/// The "Rcon Password" group: in Rcon Config and, while not connected, in the console window.
+fn rcon_password_grid(ui: &mut Ui, p: &Palette, s: &mut Server, actions: &mut Vec<Action>) {
+    let id = s.id;
+    egui::Grid::new("rcon_pw_grid")
+        .num_columns(2)
+        .spacing([8.0, 5.0])
+        .show(ui, |ui| {
+            let pw = password_field(ui, &mut s.rcon_password, s.hide_password, 105.0)
+                .with_edit_menu();
+            // Typing only edits the password: the server is asked with it when
+            // Test (or Enter) is pressed, not on every key (failed RCON logins get
+            // the address banned).
+            if pw.changed() && s.save_password {
+                actions.push(Action::SaveConfig);
+            }
+            if pw.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                actions.push(Action::RconTest(id));
+            }
+            if ui.add(Button::new(tr!("Test")).min_size(egui::vec2(75.0, 18.0))).clicked() {
+                actions.push(Action::RconTest(id));
+            }
+            ui.end_row();
+
+            ui.horizontal(|ui| {
+                ui.label(tr!("Status:"));
+                ui.label(rcon_status_text(&s.rcon_status, p));
+            });
+            if ui
+                .add(Button::new(tr!("Disconnect")).min_size(egui::vec2(75.0, 18.0)))
+                .clicked()
+            {
+                actions.push(Action::RconDisconnect(id));
+            }
+            ui.end_row();
+
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut s.hide_password, tr!("Hide")).changed() {
+                    actions.push(Action::SaveConfig);
+                }
+                ui.add_space(14.0);
+                if ui
+                    .checkbox(&mut s.save_password, tr!("Save"))
+                    .on_hover_text(
+                        tr!("Stores the password in plain text in the settings file"),
+                    )
+                    .changed()
+                {
+                    actions.push(Action::SaveConfig);
+                }
+            });
+            if ui
+                .add(Button::new(tr!("Properties...")).min_size(egui::vec2(75.0, 18.0)))
+                .on_hover_text(tr!("Log port and public IP"))
+                .clicked()
+            {
+                actions.push(Action::OpenSettings(SettingsTab::Connections));
+            }
+            ui.end_row();
+        });
 }
 
 fn rcon_status_text(status: &RconStatus, p: &Palette) -> RichText {

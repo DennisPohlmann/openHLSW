@@ -186,6 +186,7 @@
  "Enable Admin Notification": "Admin-Benachrichtigung aktivieren",
  "Enables the console": "Aktiviert die Konsole",
  "Enter the address of the server (IP:port or host:port)": "Gib die Adresse des Servers ein (IP:Port oder Host:Port)",
+ "Enter the RCON password and press Test to use console and chat.": "Gib das Rcon-Passwort ein und klicke auf Testen, um Konsole und Chat zu nutzen.",
  "Event": "Ereignis",
  "Execute applications": "Programme ausführen",
  "Exit": "Beenden",

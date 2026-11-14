@@ -113,7 +113,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
 - Console and Chat in a big window of their own (toolbar button or the window button next
   to the console or chat input): console above, chat below, the divider can be dragged (console
   20–90 %); input, history, find and switches are the same as in the tabs. Size and divider
-  are remembered.
+  are remembered. Until RCON is connected the window shows the RCON password box of Rcon
+  Config (same password and status), afterwards only a line with the status and Disconnect.
 - The main window opens maximized the first time, later exactly as it was closed:
   position, size and maximized or not ("Restore" gives the normal size and place you last
   chose; a window on a monitor that is gone is centered on the main one). Maximized and
