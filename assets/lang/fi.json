@@ -667,5 +667,21 @@
  "How to add game servers: ports, query port, RCON and server log": "Pelipalvelimien lisääminen: portit, kyselyportti, RCON ja palvelinloki",
  "Game port: {port}": "Peliportti: {port}",
  "Query port: {port}": "Kyselyportti: {port}",
- "Query port: game port + {offset}": "Kyselyportti: peliportti + {offset}"
+ "Query port: game port + {offset}": "Kyselyportti: peliportti + {offset}",
+ "MCP server (Model Context Protocol)": "MCP-palvelin (Model Context Protocol)",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "Antaa Clauden kaltaisten tekoälyasiakkaiden lukea palvelinluettelon, palvelintiedot, pelaajat ja säännöt.",
+ "Enable MCP server": "Ota MCP-palvelin käyttöön",
+ "TCP Port:": "TCP-portti:",
+ "Allow RCON commands": "Salli RCON-komennot",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "Tekoälyasiakas voi silloin suorittaa minkä tahansa komennon palvelimilla, joiden RCON-salasana on tallennettu, myös potkia, estää tai sammuttaa.",
+ "Access": "Käyttö",
+ "Address:": "Osoite:",
+ "Token:": "Tunniste:",
+ "New token": "Uusi tunniste",
+ "Clients with the old token are locked out.": "Vanhaa tunnistetta käyttävät asiakkaat eivät enää pääse sisään.",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "Asiakkaat lähettävät tunnisteen HTTP-otsakkeena \"Authorization: Bearer <token>\". Vain tämän tietokoneen ohjelmat voivat muodostaa yhteyden.",
+ "Copy command for Claude Code": "Kopioi komento Claude Codelle",
+ "MCP server running on {url}": "MCP-palvelin käynnissä osoitteessa {url}",
+ "MCP server: port {port}: {e}": "MCP-palvelin: portti {port}: {e}",
+ "*** Command from an MCP client:": "*** Komento MCP-asiakkaalta:"
 }

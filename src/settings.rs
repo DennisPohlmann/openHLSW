@@ -634,6 +634,15 @@ pub struct Settings {
     /// Forward the log port in the router with UPnP while openHLSW listens on it.
     pub upnp: bool,
     pub public_ip: String,
+    // MCP
+    /// Run the MCP server for AI clients (Model Context Protocol), on 127.0.0.1 only.
+    pub mcp_enabled: bool,
+    pub mcp_port: u16,
+    /// MCP clients may send RCON commands (they can change or shut down the servers).
+    pub mcp_allow_rcon: bool,
+    /// Secret every MCP request must send (`Authorization: Bearer`), made on first use.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub mcp_token: String,
     // Sounds
     pub sounds_disabled: bool,
     pub sounds: Vec<Sound>,
@@ -843,6 +852,10 @@ impl Default for Settings {
             log_port: 27500,
             upnp: true,
             public_ip: String::new(),
+            mcp_enabled: false,
+            mcp_port: 48700,
+            mcp_allow_rcon: false,
+            mcp_token: String::new(),
             sounds_disabled: true,
             sounds: SoundEvent::ALL
                 .iter()
@@ -893,10 +906,11 @@ pub enum SettingsTab {
     Connections,
     Plugins,
     Sounds,
+    Mcp,
     Misc,
 }
 
-const TABS: [(&str, Option<SettingsTab>); 8] = [
+const TABS: [(&str, Option<SettingsTab>); 9] = [
     ("My Games", Some(SettingsTab::MyGames)),
     ("Startup", Some(SettingsTab::Startup)),
     ("Connecting", Some(SettingsTab::Connecting)),
@@ -904,6 +918,7 @@ const TABS: [(&str, Option<SettingsTab>); 8] = [
     ("Connections", Some(SettingsTab::Connections)),
     ("Plugins", Some(SettingsTab::Plugins)),
     ("Sounds", Some(SettingsTab::Sounds)),
+    ("MCP", Some(SettingsTab::Mcp)),
     ("Misc", Some(SettingsTab::Misc)),
 ];
 
@@ -965,6 +980,8 @@ pub struct SettingsDialog {
     port_test: Option<String>,
     /// State of the UPnP forwarding, set by the app every frame.
     pub upnp_status: Option<String>,
+    /// State of the MCP server, set by the app every frame.
+    pub mcp_status: Option<String>,
 }
 
 pub enum DialogResult {
@@ -983,6 +1000,7 @@ impl SettingsDialog {
             selected_app: None,
             port_test: None,
             upnp_status: None,
+            mcp_status: None,
         }
     }
 
@@ -1018,6 +1036,7 @@ impl SettingsDialog {
                         SettingsTab::Connections => self.connections(ui, p),
                         SettingsTab::Plugins => plugins(ui, p),
                         SettingsTab::Sounds => self.sounds(ui, p),
+                        SettingsTab::Mcp => self.mcp(ui, p),
                         SettingsTab::Misc => self.misc(ui, p),
                     });
                 ui.separator();
@@ -1435,6 +1454,78 @@ impl SettingsDialog {
             ui.label(tr!(
                 "Used by Get Log (Internet). Empty = the router's address (UPnP), otherwise ask api.ipify.org."
             ));
+        });
+    }
+
+    fn mcp(&mut self, ui: &mut Ui, p: &Palette) {
+        let d = &mut self.draft;
+        let width = ui.available_width() - 20.0;
+        group_box(ui, p, tr!("MCP server (Model Context Protocol)"), width, |ui| {
+            ui.label(tr!(
+                "Lets AI clients such as Claude read the server list, server details, players and rules."
+            ));
+            ui.add_space(4.0);
+            if ui
+                .checkbox(&mut d.mcp_enabled, tr!("Enable MCP server"))
+                .changed()
+                && d.mcp_enabled
+                && d.mcp_token.is_empty()
+            {
+                d.mcp_token = openhlsw::httplog::new_token();
+            }
+            ui.add_enabled_ui(d.mcp_enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(tr!("TCP Port:"));
+                    ui.add(DragValue::new(&mut d.mcp_port).range(1024..=65535));
+                });
+                ui.checkbox(&mut d.mcp_allow_rcon, tr!("Allow RCON commands"));
+                ui.label(
+                    RichText::new(tr!(
+                        "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down."
+                    ))
+                    .color(p.weak_text),
+                );
+            });
+            if let Some(msg) = self.mcp_status.as_ref() {
+                ui.add_space(4.0);
+                ui.label(RichText::new(msg).color(p.link));
+            }
+        });
+        group_box(ui, p, tr!("Access"), width, |ui| {
+            ui.add_enabled_ui(d.mcp_enabled, |ui| {
+                let url = openhlsw::mcp::url(d.mcp_port);
+                ui.horizontal(|ui| {
+                    ui.label(tr!("Address:"));
+                    ui.label(RichText::new(&url).monospace());
+                    if ui.button(tr!("Copy")).clicked() {
+                        ui.ctx().copy_text(url.clone());
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr!("Token:"));
+                    ui.label(RichText::new("••••••••••••••••").monospace());
+                    if ui.button(tr!("Copy")).clicked() {
+                        ui.ctx().copy_text(d.mcp_token.clone());
+                    }
+                    if ui
+                        .button(tr!("New token"))
+                        .on_hover_text(tr!("Clients with the old token are locked out."))
+                        .clicked()
+                    {
+                        d.mcp_token = openhlsw::httplog::new_token();
+                    }
+                });
+                ui.label(tr!(
+                    "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect."
+                ));
+                ui.add_space(4.0);
+                if ui.button(tr!("Copy command for Claude Code")).clicked() {
+                    ui.ctx().copy_text(format!(
+                        "claude mcp add --transport http openhlsw {url} --header \"Authorization: Bearer {}\"",
+                        d.mcp_token
+                    ));
+                }
+            });
         });
     }
 

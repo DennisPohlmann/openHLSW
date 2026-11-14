@@ -22,7 +22,7 @@ pub const MAX_BODY: usize = 1 << 20;
 /// Largest request line or header line.
 const MAX_LINE: usize = 8 * 1024;
 /// Most header lines per request.
-const MAX_HEADERS: usize = 64;
+pub(crate) const MAX_HEADERS: usize = 64;
 /// Connections handled at the same time; more are closed right away.
 const MAX_CONNECTIONS: usize = 32;
 /// Most requests on one keep-alive connection before it is closed.
@@ -30,7 +30,7 @@ const MAX_REQUESTS: usize = 10_000;
 /// A request must have arrived in full this long after the connection was opened or the
 /// last answer was sent; else the connection is closed. A total, not per read, so 32
 /// senders trickling one byte at a time cannot hold every connection slot.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A random secret for the log URL (32 hex digits). From the OS-seeded keys of std's
 /// `RandomState`, so it cannot be guessed from outside.
@@ -116,9 +116,9 @@ fn handle_connection(
 
 /// The connection with the [`IDLE_TIMEOUT`] deadline: reads fail once it has passed, an
 /// answer sent (flush) starts it again.
-struct Timed {
-    stream: TcpStream,
-    deadline: Rc<Cell<Instant>>,
+pub(crate) struct Timed {
+    pub(crate) stream: TcpStream,
+    pub(crate) deadline: Rc<Cell<Instant>>,
 }
 
 impl Read for Timed {
@@ -270,7 +270,7 @@ fn parse_target(target: &str, token: &str) -> Option<u64> {
 }
 
 /// One line ending in LF (CR LF), without it. `Ok(None)`: end of stream before any byte.
-fn read_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, u16> {
+pub(crate) fn read_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, u16> {
     let mut buf = Vec::new();
     let n = reader
         .by_ref()
@@ -292,7 +292,7 @@ fn read_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, u16> {
 }
 
 /// A `Transfer-Encoding: chunked` body, at most [`MAX_BODY`] bytes in all.
-fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>, u16> {
+pub(crate) fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>, u16> {
     let mut body = Vec::new();
     loop {
         let line = read_line(reader)?.ok_or(400u16)?;

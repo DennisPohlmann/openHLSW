@@ -119,7 +119,8 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   position, size and maximized or not ("Restore" gives the normal size and place you last
   chose; a window on a monitor that is gone is centered on the main one). Maximized and
   normal window each remember their own panel layout, saved right after you drag a border.
-- Settings like HLSW: My Games, Startup, Connecting, Rcon, Connections, Sounds, Misc.
+- Settings like HLSW: My Games, Startup, Connecting, Rcon, Connections, Sounds, Misc; plus
+  MCP for AI clients (off by default, see below).
 - Sharp text: ClearType-like sub-pixel text on Windows, Linux and macOS (automatically off
   on high-resolution screens), any installed font (shown in its own look), text size 10–16 px
   (12 px by default).
@@ -210,10 +211,24 @@ services are gone), Metamod plugin management.
   forwards the TCP port too; without UPnP forward TCP and UDP by hand, and let the TCP port
   through a local firewall (`sudo ufw allow 27500/tcp`). The lines show up in the Console
   and Chat tabs and in the saved logs like those of other Source servers.
+- **MCP server for AI clients** (Settings → MCP, off by default): with **Enable MCP server**
+  on, AI clients that speak the Model Context Protocol (for example Claude Code) can
+  read the server list (`list_servers`) and one server's info, players and rules
+  (`get_server`, asked fresh from the server). It listens on `http://127.0.0.1:48700/mcp`
+  (port adjustable; Streamable HTTP, answers as JSON) on this computer only, and every
+  request needs the token from the tab as `Authorization: Bearer <token>`; requests with a
+  foreign `Host` or `Origin` (web pages) are refused. **Copy command for Claude Code** puts
+  `claude mcp add --transport http openhlsw <address> --header "Authorization: Bearer <token>"`
+  on the clipboard; **New token** locks out clients with the old one. Only with **Allow RCON
+  commands** ticked (off by default) there is a third tool, `rcon_command`: it runs any
+  command on servers whose RCON password is set in openHLSW, through the same connection
+  as the console, and the command and answer show up in that server's console. Server
+  names, player names and RCON answers come from the servers: the AI client is told to
+  treat them as data. The console tool `openhlsw-tui` has no MCP server.
 - **Settings** are stored in `config.json` in `%APPDATA%\openHLSW` (Windows),
   `~/.config/openHLSW` (Linux, FreeBSD) or `~/Library/Application Support/openHLSW` (macOS).
-  Saved RCON passwords are stored there as plain text, as is the console history (without
-  commands that may carry a secret).
+  Saved RCON passwords are stored there as plain text, as is the MCP token and the console
+  history (without commands that may carry a secret).
 
 ## Building
 
@@ -278,12 +293,14 @@ src/
   history.rs                                 RCON console history (GUI and console tool)
   upnp.rs                                    port forwarding in the router (UPnP IGD)
   httplog.rs                                 HTTP log receiver (Counter-Strike 2)
+  mcp.rs                                     MCP server for AI clients (HTTP, JSON-RPC)
   serverlog.rs                               server log: UDP listener, UPnP forwarding,
                                              logaddress_add, chat lines (GUI and console tool)
   query/                                     the other query protocols (GameSpy 1, Quake,
                                              Unreal, TeamSpeak, Minecraft, SA-MP, …)
   worker.rs                                  background threads (queries, RCON, log listener)
   app.rs, settings.rs, native_window.rs      user interface and dialogs
+  app/mcp_tools.rs                           the MCP server's tools (server list, RCON)
   theme.rs, toolbar_icons.rs, typeahead.rs   look, fonts, toolbar icons, dropdown search
   games.rs, game_icons.rs, flags.rs          game list, icons, country flags
   filter.rs, iddb.rs, discover.rs            filter, Global ID Database, Steam favorites / LAN

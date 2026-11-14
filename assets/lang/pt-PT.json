@@ -655,5 +655,21 @@
  "How to add game servers: ports, query port, RCON and server log": "Como adicionar servidores de jogo: portas, porta de consulta, RCON e registo do servidor",
  "Game port: {port}": "Porta de jogo: {port}",
  "Query port: {port}": "Porta de consulta: {port}",
- "Query port: game port + {offset}": "Porta de consulta: porta de jogo + {offset}"
+ "Query port: game port + {offset}": "Porta de consulta: porta de jogo + {offset}",
+ "MCP server (Model Context Protocol)": "Servidor MCP (Model Context Protocol)",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "Permite que clientes de IA como o Claude leiam a lista de servidores, os detalhes, os jogadores e as regras.",
+ "Enable MCP server": "Ativar servidor MCP",
+ "TCP Port:": "Porta TCP:",
+ "Allow RCON commands": "Permitir comandos RCON",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "O cliente de IA pode então executar qualquer comando em servidores com palavra-passe RCON guardada, incluindo expulsar, banir ou desligar.",
+ "Access": "Acesso",
+ "Address:": "Endereço:",
+ "Token:": "Token:",
+ "New token": "Novo token",
+ "Clients with the old token are locked out.": "Os clientes com o token antigo ficam bloqueados.",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "Os clientes enviam o token no cabeçalho HTTP \"Authorization: Bearer <token>\". Só programas neste computador se podem ligar.",
+ "Copy command for Claude Code": "Copiar comando para o Claude Code",
+ "MCP server running on {url}": "Servidor MCP ativo em {url}",
+ "MCP server: port {port}: {e}": "Servidor MCP: porta {port}: {e}",
+ "*** Command from an MCP client:": "*** Comando de um cliente MCP:"
 }

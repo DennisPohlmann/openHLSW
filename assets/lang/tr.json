@@ -660,5 +660,21 @@
  "How to add game servers: ports, query port, RCON and server log": "Oyun sunucuları nasıl eklenir: portlar, sorgu portu, RCON ve sunucu günlüğü",
  "Game port: {port}": "Oyun portu: {port}",
  "Query port: {port}": "Sorgu portu: {port}",
- "Query port: game port + {offset}": "Sorgu portu: oyun portu + {offset}"
+ "Query port: game port + {offset}": "Sorgu portu: oyun portu + {offset}",
+ "MCP server (Model Context Protocol)": "MCP sunucusu (Model Context Protocol)",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "Claude gibi yapay zekâ istemcilerinin sunucu listesini, sunucu ayrıntılarını, oyuncuları ve kuralları okumasını sağlar.",
+ "Enable MCP server": "MCP sunucusunu etkinleştir",
+ "TCP Port:": "TCP portu:",
+ "Allow RCON commands": "RCON komutlarına izin ver",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "Yapay zekâ istemcisi bu durumda RCON parolası kayıtlı sunucularda her komutu çalıştırabilir; atma, yasaklama veya kapatma dahil.",
+ "Access": "Erişim",
+ "Address:": "Adres:",
+ "Token:": "Belirteç:",
+ "New token": "Yeni belirteç",
+ "Clients with the old token are locked out.": "Eski belirteci kullanan istemciler dışarıda kalır.",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "İstemciler belirteci \"Authorization: Bearer <token>\" HTTP başlığıyla gönderir. Yalnızca bu bilgisayardaki programlar bağlanabilir.",
+ "Copy command for Claude Code": "Claude Code için komutu kopyala",
+ "MCP server running on {url}": "MCP sunucusu çalışıyor: {url}",
+ "MCP server: port {port}: {e}": "MCP sunucusu: port {port}: {e}",
+ "*** Command from an MCP client:": "*** Bir MCP istemcisinden komut:"
 }

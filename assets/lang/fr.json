@@ -643,5 +643,21 @@
  "How to add game servers: ports, query port, RCON and server log": "Ajouter des serveurs de jeu : ports, port de requête, RCON et log du serveur",
  "Game port: {port}": "Port de jeu : {port}",
  "Query port: {port}": "Port de requête : {port}",
- "Query port: game port + {offset}": "Port de requête : port de jeu + {offset}"
+ "Query port: game port + {offset}": "Port de requête : port de jeu + {offset}",
+ "MCP server (Model Context Protocol)": "Serveur MCP (Model Context Protocol)",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "Permet aux clients d'IA comme Claude de lire la liste des serveurs, leurs détails, les joueurs et les règles.",
+ "Enable MCP server": "Activer le serveur MCP",
+ "TCP Port:": "Port TCP :",
+ "Allow RCON commands": "Autoriser les commandes RCON",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "Le client d'IA peut alors exécuter n'importe quelle commande sur les serveurs dont le mot de passe RCON est enregistré, y compris expulser, bannir ou arrêter.",
+ "Access": "Accès",
+ "Address:": "Adresse :",
+ "Token:": "Jeton :",
+ "New token": "Nouveau jeton",
+ "Clients with the old token are locked out.": "Les clients avec l'ancien jeton sont bloqués.",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "Les clients envoient le jeton dans l'en-tête HTTP \"Authorization: Bearer <token>\". Seuls les programmes de cet ordinateur peuvent se connecter.",
+ "Copy command for Claude Code": "Copier la commande pour Claude Code",
+ "MCP server running on {url}": "Serveur MCP actif sur {url}",
+ "MCP server: port {port}: {e}": "Serveur MCP : port {port} : {e}",
+ "*** Command from an MCP client:": "*** Commande d'un client MCP :"
 }

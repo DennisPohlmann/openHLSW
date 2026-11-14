@@ -651,5 +651,21 @@
  "How to add game servers: ports, query port, RCON and server log": "Ako pridať herné servery: porty, dopytovací port, RCON a log servera",
  "Game port: {port}": "Herný port: {port}",
  "Query port: {port}": "Dopytovací port: {port}",
- "Query port: game port + {offset}": "Dopytovací port: herný port + {offset}"
+ "Query port: game port + {offset}": "Dopytovací port: herný port + {offset}",
+ "MCP server (Model Context Protocol)": "Server MCP (Model Context Protocol)",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "Umožní klientom AI, ako je Claude, čítať zoznam serverov, podrobnosti serverov, hráčov a pravidlá.",
+ "Enable MCP server": "Zapnúť server MCP",
+ "TCP Port:": "Port TCP:",
+ "Allow RCON commands": "Povoliť príkazy RCON",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "Klient AI potom môže na serveroch s uloženým heslom RCON spustiť akýkoľvek príkaz, aj vyhodiť, zabanovať alebo vypnúť.",
+ "Access": "Prístup",
+ "Address:": "Adresa:",
+ "Token:": "Token:",
+ "New token": "Nový token",
+ "Clients with the old token are locked out.": "Klienti so starým tokenom budú odpojení.",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "Klienti posielajú token v hlavičke HTTP \"Authorization: Bearer <token>\". Pripojiť sa môžu len programy na tomto počítači.",
+ "Copy command for Claude Code": "Kopírovať príkaz pre Claude Code",
+ "MCP server running on {url}": "Server MCP beží na {url}",
+ "MCP server: port {port}: {e}": "Server MCP: port {port}: {e}",
+ "*** Command from an MCP client:": "*** Príkaz od klienta MCP:"
 }

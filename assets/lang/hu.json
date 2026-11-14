@@ -662,5 +662,21 @@
  "How to add game servers: ports, query port, RCON and server log": "Játékszerverek hozzáadása: portok, lekérdezési port, RCON és szervernapló",
  "Game port: {port}": "Játékport: {port}",
  "Query port: {port}": "Lekérdezési port: {port}",
- "Query port: game port + {offset}": "Lekérdezési port: játékport + {offset}"
+ "Query port: game port + {offset}": "Lekérdezési port: játékport + {offset}",
+ "MCP server (Model Context Protocol)": "MCP-szerver (Model Context Protocol)",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "Lehetővé teszi, hogy az MI-kliensek, például a Claude, olvassák a szerverlistát, a szerverek adatait, a játékosokat és a szabályokat.",
+ "Enable MCP server": "MCP-szerver bekapcsolása",
+ "TCP Port:": "TCP-port:",
+ "Allow RCON commands": "RCON-parancsok engedélyezése",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "Az MI-kliens ekkor bármilyen parancsot futtathat a mentett RCON-jelszavú szervereken, kirúgást, kitiltást vagy leállítást is.",
+ "Access": "Hozzáférés",
+ "Address:": "Cím:",
+ "Token:": "Token:",
+ "New token": "Új token",
+ "Clients with the old token are locked out.": "A régi tokent használó kliensek kizáródnak.",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "A kliensek a tokent a(z) \"Authorization: Bearer <token>\" HTTP-fejlécben küldik. Csak ezen a számítógépen futó programok csatlakozhatnak.",
+ "Copy command for Claude Code": "Parancs másolása a Claude Code-hoz",
+ "MCP server running on {url}": "Az MCP-szerver fut: {url}",
+ "MCP server: port {port}: {e}": "MCP-szerver: {port}. port: {e}",
+ "*** Command from an MCP client:": "*** Parancs egy MCP-klienstől:"
 }

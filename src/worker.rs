@@ -427,6 +427,12 @@ pub enum RconRequest {
         command: String,
         tag: RconTag,
     },
+    /// Runs a command for the MCP server: the answer (or why it failed) goes to `reply`,
+    /// command and answer to the console.
+    ExecReply {
+        command: String,
+        reply: Sender<Result<String, String>>,
+    },
     /// `logaddress_add <our ip>:<port>` + `log on`; with `http_path` (Counter-Strike 2)
     /// `logaddress_add_http "http://<our ip>:<port><http_path>"` instead.
     StartLog {
@@ -457,6 +463,7 @@ impl RconHandle {
                     goldsrc: false,
                     conn: None,
                     rejected: false,
+                    last_error: Default::default(),
                 }
                 .run(rx)
             })
@@ -485,6 +492,8 @@ struct RconWorker {
     /// The server refused the password: no more automatic logins with it (servers ban
     /// addresses after a few failed RCON logins) until Test is clicked or the password changes.
     rejected: bool,
+    /// The last error sent to the console, for the answer to an MCP client.
+    last_error: std::cell::Cell<Option<String>>,
 }
 
 enum Conn {
@@ -503,6 +512,9 @@ impl Conn {
 
 impl RconWorker {
     fn emit(&self, event: RconEvent) {
+        if let RconEvent::Error(msg) = &event {
+            self.last_error.set(Some(msg.clone()));
+        }
         self.n.send(Event::Rcon { id: self.id, event });
     }
 
@@ -537,6 +549,21 @@ impl RconWorker {
                     if let Some(text) = self.exec(&command) {
                         self.emit(RconEvent::Output { tag, text });
                     }
+                }
+                RconRequest::ExecReply { command, reply } => {
+                    self.last_error.take();
+                    let answer = self.exec(&command);
+                    if let Some(answer) = &answer {
+                        self.emit(RconEvent::Sent {
+                            command: command.clone(),
+                            answer: answer.clone(),
+                        });
+                    }
+                    let _ = reply.send(answer.ok_or_else(|| {
+                        self.last_error
+                            .take()
+                            .unwrap_or_else(|| "RCON failed".to_string())
+                    }));
                 }
                 RconRequest::StartLog {
                     internet,

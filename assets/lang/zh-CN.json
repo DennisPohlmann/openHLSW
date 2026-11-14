@@ -672,5 +672,21 @@
  "How to add game servers: ports, query port, RCON and server log": "如何添加游戏服务器：端口、查询端口、RCON 和服务器日志",
  "Game port: {port}": "游戏端口：{port}",
  "Query port: {port}": "查询端口：{port}",
- "Query port: game port + {offset}": "查询端口：游戏端口 + {offset}"
+ "Query port: game port + {offset}": "查询端口：游戏端口 + {offset}",
+ "MCP server (Model Context Protocol)": "MCP 服务器（Model Context Protocol）",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "允许 Claude 等 AI 客户端读取服务器列表、服务器详情、玩家和规则。",
+ "Enable MCP server": "启用 MCP 服务器",
+ "TCP Port:": "TCP 端口：",
+ "Allow RCON commands": "允许 RCON 命令",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "AI 客户端随后可以在已保存 RCON 密码的服务器上执行任何命令，包括踢人、封禁或关闭服务器。",
+ "Access": "访问",
+ "Address:": "地址：",
+ "Token:": "令牌：",
+ "New token": "新令牌",
+ "Clients with the old token are locked out.": "使用旧令牌的客户端将无法访问。",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "客户端通过 HTTP 头 \"Authorization: Bearer <token>\" 发送令牌。只有本机上的程序可以连接。",
+ "Copy command for Claude Code": "复制 Claude Code 命令",
+ "MCP server running on {url}": "MCP 服务器运行于 {url}",
+ "MCP server: port {port}: {e}": "MCP 服务器：端口 {port}：{e}",
+ "*** Command from an MCP client:": "*** 来自 MCP 客户端的命令："
 }

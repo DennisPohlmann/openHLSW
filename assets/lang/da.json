@@ -632,5 +632,21 @@
  "How to add game servers: ports, query port, RCON and server log": "Sådan tilføjer du spilservere: porte, forespørgselsport, RCON og serverlog",
  "Game port: {port}": "Spilport: {port}",
  "Query port: {port}": "Forespørgselsport: {port}",
- "Query port: game port + {offset}": "Forespørgselsport: spilport + {offset}"
+ "Query port: game port + {offset}": "Forespørgselsport: spilport + {offset}",
+ "MCP server (Model Context Protocol)": "MCP-server (Model Context Protocol)",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "Lader AI-klienter som Claude læse serverlisten, serverdetaljer, spillere og regler.",
+ "Enable MCP server": "Aktivér MCP-server",
+ "TCP Port:": "TCP-port:",
+ "Allow RCON commands": "Tillad RCON-kommandoer",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "AI-klienten kan så køre enhver kommando på servere med gemt RCON-adgangskode, også kicke, banne eller lukke ned.",
+ "Access": "Adgang",
+ "Address:": "Adresse:",
+ "Token:": "Token:",
+ "New token": "Nyt token",
+ "Clients with the old token are locked out.": "Klienter med det gamle token bliver låst ude.",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "Klienter sender tokenet som HTTP-header \"Authorization: Bearer <token>\". Kun programmer på denne computer kan forbinde.",
+ "Copy command for Claude Code": "Kopiér kommando til Claude Code",
+ "MCP server running on {url}": "MCP-server kører på {url}",
+ "MCP server: port {port}: {e}": "MCP-server: port {port}: {e}",
+ "*** Command from an MCP client:": "*** Kommando fra en MCP-klient:"
 }

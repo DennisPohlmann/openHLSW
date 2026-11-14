@@ -12,6 +12,8 @@
 //! └ status bar ───────────────────────────────────────────────────┘
 //! ```
 
+mod mcp_tools;
+
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -1679,6 +1681,9 @@ pub struct OpenHlswApp {
     iddb_editor: Option<IdDbEditor>,
     /// Running LAN search.
     lan_search: Option<Receiver<std::io::Result<Vec<SocketAddr>>>>,
+    /// The MCP server for AI clients while it is switched on (Settings → MCP), or why
+    /// it could not start.
+    mcp: Option<Result<openhlsw::mcp::McpServer, String>>,
 }
 
 /// Find bar of the Rcon console.
@@ -1869,6 +1874,7 @@ impl OpenHlswApp {
             iddb_saved: Instant::now(),
             iddb_editor: None,
             lan_search: None,
+            mcp: None,
             find: None,
         };
 
@@ -2321,6 +2327,33 @@ impl OpenHlswApp {
     }
 
     /// Text for Settings → Connections about the forwarding in the router.
+    /// Starts the MCP server when it is switched on and not running yet, stops it when
+    /// it was switched off. A failed start is not retried until the settings change.
+    fn update_mcp(&mut self) {
+        if !self.settings.mcp_enabled {
+            self.mcp = None;
+            return;
+        }
+        if self.mcp.is_some() {
+            return;
+        }
+        if self.settings.mcp_token.is_empty() {
+            self.settings.mcp_token = openhlsw::httplog::new_token();
+            self.save_config();
+        }
+        self.mcp = Some(mcp_tools::start(self));
+    }
+
+    fn mcp_status(&self) -> Option<String> {
+        Some(match self.mcp.as_ref()? {
+            Ok(server) => tr!(
+                "MCP server running on {url}",
+                url = openhlsw::mcp::url(server.addr().port())
+            ),
+            Err(e) => e.clone(),
+        })
+    }
+
     fn port_mapping_status(&self) -> Option<String> {
         if !self.settings.upnp {
             return None;
@@ -3186,6 +3219,7 @@ impl OpenHlswApp {
 
     fn tick(&mut self, ctx: &egui::Context) {
         self.check_log_arrival();
+        self.update_mcp();
         if let Some(rx) = &self.lan_search
             && let Ok(result) = rx.try_recv()
         {
@@ -4309,6 +4343,15 @@ impl OpenHlswApp {
                 let port_changed = new.fixed_log_port != self.settings.fixed_log_port
                     || new.fixed_log_port && new.log_port != self.settings.log_port;
                 let upnp_changed = new.upnp != self.settings.upnp;
+                if (new.mcp_enabled, new.mcp_port, &new.mcp_token)
+                    != (
+                        self.settings.mcp_enabled,
+                        self.settings.mcp_port,
+                        &self.settings.mcp_token,
+                    )
+                {
+                    self.mcp = None; // stopped; update_mcp starts it again if still on
+                }
                 self.settings = new;
                 if let Some(dialog) = &mut self.settings_dialog {
                     dialog.draft = self.settings.clone();
@@ -7947,8 +7990,10 @@ impl OpenHlswApp {
         self.trace_window(ctx);
         self.console_window(ctx, actions);
         let upnp_status = self.port_mapping_status();
+        let mcp_status = self.mcp_status();
         if let Some(dialog) = &mut self.settings_dialog {
             dialog.upnp_status = upnp_status;
+            dialog.mcp_status = mcp_status;
             let p = self.settings.theme.palette();
             let addresses: Vec<String> =
                 self.servers.iter().map(|s| s.address.to_string()).collect();

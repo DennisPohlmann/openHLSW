@@ -672,5 +672,21 @@
  "How to add game servers: ports, query port, RCON and server log": "如何新增遊戲伺服器：連接埠、查詢連接埠、RCON 與伺服器記錄",
  "Game port: {port}": "遊戲連接埠：{port}",
  "Query port: {port}": "查詢連接埠：{port}",
- "Query port: game port + {offset}": "查詢連接埠：遊戲連接埠 + {offset}"
+ "Query port: game port + {offset}": "查詢連接埠：遊戲連接埠 + {offset}",
+ "MCP server (Model Context Protocol)": "MCP 伺服器（Model Context Protocol）",
+ "Lets AI clients such as Claude read the server list, server details, players and rules.": "允許 Claude 等 AI 用戶端讀取伺服器清單、伺服器詳細資料、玩家與規則。",
+ "Enable MCP server": "啟用 MCP 伺服器",
+ "TCP Port:": "TCP 連接埠：",
+ "Allow RCON commands": "允許 RCON 指令",
+ "The AI client can then run any command on servers with a saved RCON password, also kick, ban or shut down.": "AI 用戶端隨後可以在已儲存 RCON 密碼的伺服器上執行任何指令，包括踢人、封鎖或關閉伺服器。",
+ "Access": "存取",
+ "Address:": "位址：",
+ "Token:": "權杖：",
+ "New token": "新權杖",
+ "Clients with the old token are locked out.": "使用舊權杖的用戶端將無法存取。",
+ "Clients send the token as HTTP header \"Authorization: Bearer <token>\". Only programs on this computer can connect.": "用戶端透過 HTTP 標頭 \"Authorization: Bearer <token>\" 傳送權杖。只有本機上的程式可以連線。",
+ "Copy command for Claude Code": "複製 Claude Code 指令",
+ "MCP server running on {url}": "MCP 伺服器執行於 {url}",
+ "MCP server: port {port}: {e}": "MCP 伺服器：連接埠 {port}：{e}",
+ "*** Command from an MCP client:": "*** 來自 MCP 用戶端的指令："
 }
