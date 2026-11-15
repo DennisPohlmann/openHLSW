@@ -157,7 +157,7 @@ impl Protocol {
 
     /// Whether the protocol is answered over TCP (slower, and some servers limit how often
     /// they may be asked, so answers are kept a little longer).
-    fn is_tcp(self) -> bool {
+    pub fn is_tcp(self) -> bool {
         matches!(
             self,
             Protocol::Frostbite
