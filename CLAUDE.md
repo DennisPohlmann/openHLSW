@@ -25,6 +25,12 @@ tag-triggered workflow. A macOS job without a runner is re-run automatically
 (`retry-macos.yml`); re-running a release run uploads only missing packages. Dependabot (`.github/dependabot.yml`) suggests
 crate and GitHub Actions updates; egui updates stay manual.
 
+Before every release (standing rule from Dennis): first check and update the
+dependencies and push that update; then review the whole documentation
+(README, docs/, CONTRIBUTING, SECURITY, ACCESSIBILITY, issue templates,
+packaging descriptions) against the code, update it and push. Only then make
+the release.
+
 ## Security is part of every change (mandatory)
 
 1. **Every change:** before you call a change done, commit it or open a PR,

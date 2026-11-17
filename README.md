@@ -61,6 +61,11 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   `IP:gameport:queryport`. Game list like HLSW's (Auto detect, not detectable games, all
   games): Auto detect finds Valve, GameSpy 1 and GameSpy 2 servers; for the other games
   choose the game, the usual port and query port are filled in.
+- **New server...** (button next to Add, menu Server list, Ctrl+N) adds a server step by
+  step: choose the game first (type to search, the arrow keys switch the game), then host,
+  game port, query port, RCON password and options, comment and start parameters. Each
+  field says whether it is required or optional, and each game shows what it needs (query,
+  transport, ports, auto detection, RCON, server log) right in the window.
 - Import Steam favorites, search the LAN, Multi Server Insert, filter, find (Ctrl+F / F3).
 - Export one server list (chosen in a dropdown) or all as JSON or CSV with the fields you choose (game,
   comment, parameters, RCON options; the RCON password only when ticked, it is off by
@@ -119,8 +124,9 @@ Layout, menus, toolbar and keyboard shortcuts like HLSW 1.4; skin White or Black
   position, size and maximized or not ("Restore" gives the normal size and place you last
   chose; a window on a monitor that is gone is centered on the main one). Maximized and
   normal window each remember their own panel layout, saved right after you drag a border.
-- Settings like HLSW: My Games, Startup, Connecting, Rcon, Connections, Sounds, Misc; plus
-  MCP for AI clients (off by default, see below).
+- Settings like HLSW: My Games, Startup, Connecting, Rcon, Connections, Plugins (empty,
+  HLSW plugins are not supported), Sounds, Misc; plus MCP for AI clients (off by default,
+  see below).
 - Sharp text: ClearType-like sub-pixel text on Windows, Linux and macOS (automatically off
   on high-resolution screens), any installed font (shown in its own look), text size 10–16 px
   (12 px by default).
@@ -171,7 +177,8 @@ services are gone), Metamod plugin management.
 - **Other games**: Valve, GameSpy 1 and GameSpy 2 / 3 servers are detected automatically;
   GameSpy servers with an own query port are entered as `IP:gameport:queryport`. For all
   other games choose the game in the game list next to the address field before adding: its
-  usual port and query port are filled in. After adding or deleting a server the list goes
+  usual port and query port are filled in. **New server...** (Ctrl+N) does the same step
+  by step and says for the chosen game which ports, RCON and server log it has. After adding or deleting a server the list goes
   back to "Auto detect". These servers have no RCON; Battlefield 2 / 2142 are joined
   directly on Connect. Ports, query ports, RCON and server log of every game:
   [docs/games.md](docs/games.md) (also **? → Game servers: ports and RCON** and the **?**
@@ -290,6 +297,7 @@ cargo run   # then add 127.0.0.1:27015, RCON password "secret"
 ```
 src/
   address.rs, a2s.rs, gamespy2.rs, rcon.rs   addresses, Valve / GameSpy 2 queries, RCON
+  rcon_text.rs, steamid.rs                   RCON answers (ban and map lists), Steam IDs
   history.rs                                 RCON console history (GUI and console tool)
   upnp.rs                                    port forwarding in the router (UPnP IGD)
   httplog.rs                                 HTTP log receiver (Counter-Strike 2)
@@ -308,6 +316,7 @@ src/
   update.rs                                  update check (latest GitHub release)
   geo.rs, trace.rs, stats.rs                 location, Trace Route, traffic counters
   i18n.rs, config.rs                         languages, settings file
+  win_icon.rs                                program icon on the window (Windows)
   server_io.rs                               server list export / import (JSON, CSV, text)
   bin/openhlsw-cli.rs                        command line tool
   bin/openhlsw-tui/                          console tool (htop-like terminal UI, ratatui)

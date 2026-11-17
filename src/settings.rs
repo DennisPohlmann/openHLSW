@@ -1,5 +1,5 @@
 //! Program settings and the HLSW-style "Settings" dialog
-//! (My Games, Startup, Connecting, Rcon, Connections, Plugins, Sounds, Misc).
+//! (My Games, Startup, Connecting, Rcon, Connections, Plugins, Sounds, MCP, Misc).
 
 use std::collections::BTreeMap;
 

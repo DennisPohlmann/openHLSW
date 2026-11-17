@@ -28,8 +28,9 @@ cargo test
 Linux architectures and FreeBSD, like CI does; `git config core.hooksPath tools/hooks`
 runs it before every push.
 
-`tools/fake_srcds.py` simulates a Source, GoldSrc or GameSpy 2 server, so you can
-test queries, RCON and the server log without a real server.
+`tools/fake_srcds.py` simulates a Source, GoldSrc (`--goldsrc`), Counter-Strike 2
+(`--cs2`, log over HTTP) or GameSpy 2 (`--gamespy2`) server, so you can test queries,
+RCON and the server log without a real server.
 
 CI builds and checks every pull request on all systems.
 

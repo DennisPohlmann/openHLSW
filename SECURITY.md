@@ -32,10 +32,13 @@ there unless you prefer not to be.
 ## Scope
 
 openHLSW talks to game servers it does not control, so answers from servers
-(queries, RCON, server log over UDP) are untrusted input. Problems such as
-crashes, hangs or excessive memory use caused by such answers, leaked RCON
-passwords (in files, logs or exports), or unsafe handling of imported files are
-in scope.
+(queries, RCON, server log over UDP, the HTTP log of Counter-Strike 2 on a TCP
+port) are untrusted input. Problems such as crashes, hangs or excessive memory
+use caused by such answers, leaked RCON passwords or the MCP token (in files,
+logs or exports), unsafe handling of imported files, or ways around the checks
+of the built-in MCP server (token, `Host` / `Origin`, the switch for RCON
+commands) are in scope. This covers `openhlsw`, the console tool `openhlsw-tui`
+and `openhlsw-cli`.
 
 Out of scope: problems of the game servers themselves, of the services openHLSW
 uses (for example ip-api.com for locations) and attacks that need full access to

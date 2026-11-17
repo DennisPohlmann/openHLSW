@@ -17,6 +17,10 @@ works today, what does not yet, and how to report a barrier.
   move to the end of the list; ping values are shown as numbers next to the
   colored graph.
 - **Languages**: 18 languages, the system language by default.
+- **Terminal**: the console tool `openhlsw-tui` (in every package) offers the
+  server list, players, rules and RCON as text in the terminal, used with the
+  keyboard only (F1 shows the keys). It has not been tested with screen readers
+  yet.
 
 ## Known limitations
 
@@ -26,6 +30,8 @@ works today, what does not yet, and how to report a barrier.
 - System settings for high contrast, larger text or reduced motion are not
   picked up automatically.
 - Some actions are only in right-click menus.
+- Marking several players by dragging a rectangle needs a mouse; Ctrl / Shift +
+  click and Ctrl+A mark several players too.
 
 ## Reporting a barrier
 

@@ -31,6 +31,13 @@ its own query port and you do not give one, openHLSW adds it (fixed port such as
 Battlefield 2, or game port + offset such as + 19238 for ARK). You can always override it
 with `ip:gameport:queryport`.
 
+**New server...** (button next to **Add**, menu *Server list*, Ctrl+N) does all of this
+step by step: choose the game first (type to search, the arrow keys switch the game), then
+host, game port, query port, RCON password and options, comment and start parameters. The
+window marks every field as required or optional and shows for the chosen game how
+openHLSW queries it, which ports it uses, whether it is detected automatically and whether
+it has RCON and a server log.
+
 ## 2. Ports and the firewall of the game server
 
 openHLSW only **sends** queries; it needs nothing opened on your side for the server list.

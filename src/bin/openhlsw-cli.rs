@@ -19,7 +19,10 @@ const TIMEOUT: Duration = Duration::from_secs(3);
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(address) = args.first().and_then(|a| ServerAddress::parse(a)) else {
-        eprintln!("usage: openhlsw-cli <host:port> [rcon-password command...]");
+        eprintln!(
+            "usage: openhlsw-cli <host:port[:queryport]> [rcon-password|- command...]\n\
+             (with -, the RCON password comes from $OPENHLSW_RCON_PASSWORD)"
+        );
         return ExitCode::from(2);
     };
     let gamespy = address.query_port.is_some();
