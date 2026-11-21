@@ -140,11 +140,15 @@ pub fn stock_maps(app_id: u32, folder: &str) -> &'static [&'static str] {
     }
 }
 
-/// `maps *` output: every token ending in ".bsp", without path and extension.
+/// `maps *` output: every token ending in ".bsp" (any case: srcds prints the real file
+/// name, say "de_Foo.BSP"), without path and extension.
 pub fn parse_map_list(text: &str) -> Vec<String> {
     let mut maps: Vec<String> = text
         .split_whitespace()
-        .filter_map(|t| t.strip_suffix(".bsp"))
+        .filter_map(|t| {
+            let (name, ext) = t.split_at_checked(t.len().checked_sub(4)?)?;
+            ext.eq_ignore_ascii_case(".bsp").then_some(name)
+        })
         .map(|t| t.rsplit(['/', '\\']).next().unwrap_or(t).to_string())
         .filter(|m| !m.is_empty() && !m.contains(['*', '?']))
         .collect();
@@ -188,4 +192,20 @@ pub fn map_matches(pattern: &str, name: &str) -> bool {
         }
     }
     pat[pi..].iter().all(|&c| c == '*')
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_list_keeps_every_bsp() {
+        // CS:S answer with a newly uploaded map whose extension is upper case.
+        let text = "-------------\nDir:  maps/*.bsp\nPENDING:   (fs) de_dust2.bsp\r\n\
+                    PENDING:   (fs) de_NewMap.BSP\nPENDING:   (fs) cs_office.bsp\n\
+                    PENDING:   (fs) de_x.bsp.bz2\n";
+        assert_eq!(parse_map_list(text), vec!["cs_office", "de_dust2", "de_NewMap"]);
+        assert!(parse_map_list("é.bs bsp .bsp").is_empty());
+    }
 }
