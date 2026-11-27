@@ -166,7 +166,7 @@ struct Server {
     resolved: Option<SocketAddr>,
     /// Last answer, or when the server was added / the program started.
     last_ok: Instant,
-    last_seen: Option<chrono::DateTime<chrono::Local>>,
+    last_seen: Option<jiff::ZonedDateTime>,
     /// When we last joined this server via Connect (saved in the config).
     last_connected: Option<String>,
     /// Last A2S challenge the server accepted (reused to save a round trip).
@@ -235,7 +235,8 @@ enum LineKind {
 }
 
 struct ConsoleLine {
-    time: chrono::DateTime<chrono::Local>,
+    /// Local wall-clock time when the line arrived.
+    time: jiff::civil::DateTime,
     kind: LineKind,
     automatic: bool,
     text: String,
@@ -685,7 +686,7 @@ impl Server {
     }
 
     fn console_add(&mut self, kind: LineKind, text: &str, automatic: bool) {
-        let time = chrono::Local::now();
+        let time = jiff::ZonedDateTime::now().datetime();
         for line in text.trim_end_matches(['\n', '\r']).split('\n') {
             self.console.push_back(ConsoleLine {
                 time,
@@ -2048,8 +2049,8 @@ impl OpenHlswApp {
             server.last_seen = saved
                 .last_seen
                 .as_deref()
-                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                .map(|t| t.with_timezone(&chrono::Local));
+                .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+                .map(|t| t.to_zoned_datetime(jiff::tz::TimeZone::system()));
             server.console_cache = self.settings.console_cache.max(1);
             (
                 server.hide_password,
@@ -2114,7 +2115,10 @@ impl OpenHlswApp {
             params: s.params.clone(),
             last_connected: s.last_connected.clone(),
             info: s.info.clone(),
-            last_seen: s.last_seen.map(|t| t.to_rfc3339()),
+            last_seen: s
+                .last_seen
+                .as_ref()
+                .map(|t| t.timestamp().display_with_offset(t.offset()).to_string()),
             hide_rcon_password: Some(s.hide_password),
             auto_update_status: Some(s.auto_update_status),
             status_interval: Some(s.status_interval),
@@ -2729,7 +2733,7 @@ impl OpenHlswApp {
 
     /// After starting the game: connect log, "Execute applications", "On Connection".
     fn connected(&mut self, id: ServerId, addr: &str, host: &str, port: &str, ctx: &egui::Context) {
-        let now = chrono::Local::now().format("%d.%m.%Y %H:%M:%S").to_string();
+        let now = jiff::ZonedDateTime::now().strftime("%d.%m.%Y %H:%M:%S").to_string();
         if let Some(s) = self.server_mut(id) {
             s.last_connected = Some(now.clone());
             let name = s.info.as_ref().map(|i| i.name.clone()).unwrap_or_default();
@@ -3005,7 +3009,7 @@ impl OpenHlswApp {
                             s.push_ping(Some(ping));
                             s.rate_factor = (s.rate_factor + 0.02).min(1.0);
                             s.state = QueryState::Online;
-                            s.last_seen = Some(chrono::Local::now());
+                            s.last_seen = Some(jiff::ZonedDateTime::now());
                         }
                         Err(e) => {
                             s.query_failed(e.unreachable); // the retry
@@ -4300,7 +4304,7 @@ impl OpenHlswApp {
                     // Show the message right away: the server log may not reach us (no Get
                     // Log, firewall, NAT). If it does, its echo only confirms this line.
                     s.chat.push(ChatLine {
-                        time: chrono::Local::now().naive_local(),
+                        time: jiff::ZonedDateTime::now().datetime(),
                         name: "Console".into(),
                         team: String::new(),
                         team_only: false,
@@ -6210,16 +6214,16 @@ impl OpenHlswApp {
             .filter(|l| o.show_empty || !l.text.trim().is_empty())
             .map(|l| {
                 let time = if o.show_date {
-                    l.time.format("%d.%m.%Y %H:%M:%S")
+                    l.time.strftime("%d.%m.%Y %H:%M:%S")
                 } else {
-                    l.time.format("%H:%M:%S")
+                    l.time.strftime("%H:%M:%S")
                 };
                 let mut text = match l.kind {
                     LineKind::Log if o.translate_log => translate_log(&l.text),
-                    LineKind::Log => strip_log_stamp(&l.text, l.time.naive_local()).to_string(),
+                    LineKind::Log => strip_log_stamp(&l.text, l.time).to_string(),
                     // The answer to `log on` and the like carries log lines ("L 10/29/2026 - ...").
                     LineKind::Response if l.text.starts_with("L ") => {
-                        strip_log_stamp(&l.text, l.time.naive_local()).to_string()
+                        strip_log_stamp(&l.text, l.time).to_string()
                     }
                     LineKind::Note => format!("openHLSW NOTE: {}", l.text),
                     _ => l.text.clone(),
@@ -7105,7 +7109,7 @@ impl OpenHlswApp {
                             row.col(|ui| {
                                 ui.label(
                                     c.time
-                                        .format(if show_date {
+                                        .strftime(if show_date {
                                             "%d.%m.%Y %H:%M:%S"
                                         } else {
                                             "%H:%M:%S"
@@ -9606,8 +9610,8 @@ fn info_panel(
                                     );
                                 }
                             }
-                            if let Some(t) = s.last_seen {
-                                let ago = (chrono::Local::now() - t).num_seconds().max(0);
+                            if let Some(t) = &s.last_seen {
+                                let ago = t.timestamp().duration_until(jiff::Timestamp::now()).as_secs().max(0);
                                 row(ui, &mut copy, tr!("Last Seen"), text(tr!("{ago} s ago", ago = ago)));
                             }
                             if let Some(c) = &s.last_connected {
@@ -12463,9 +12467,9 @@ fn translate_log(line: &str) -> String {
 /// Drops the date/time prefix of a log line when it says the same as the console's own
 /// time column (within a minute), so date and time show only once. A server clock in
 /// another time zone or far off keeps its prefix: that time is not shown anywhere else.
-fn strip_log_stamp(line: &str, received: chrono::NaiveDateTime) -> &str {
+fn strip_log_stamp(line: &str, received: jiff::civil::DateTime) -> &str {
     match parse_log_stamp(line) {
-        Some((time, rest)) if (time - received).num_seconds().abs() <= 60 => rest,
+        Some((time, rest)) if received.duration_until(time).as_secs().abs() <= 60 => rest,
         _ => line,
     }
 }
@@ -13655,13 +13659,23 @@ mod tests {
     }
 
     #[test]
+    fn reads_last_seen_written_by_older_versions() {
+        // Older versions saved "Last Seen" with chrono's to_rfc3339 (nanoseconds, offset).
+        let t: jiff::Timestamp = "2026-11-27T11:56:21.123456789+01:00".parse().unwrap();
+        let z = t.to_zoned_datetime(jiff::tz::TimeZone::fixed(jiff::tz::offset(1)));
+        let saved = z.timestamp().display_with_offset(z.offset()).to_string();
+        assert_eq!(saved, "2026-11-27T11:56:21.123456789+01:00");
+        assert_eq!(saved.parse::<jiff::Timestamp>().unwrap(), t);
+    }
+
+    #[test]
     fn parses_chat() {
         let c = parse_chat_line(
             r#"10/18/2026 - 19:22:33: "B<o>b<2><STEAM_1:0:1><CT>" say_team "rush b""#,
         )
         .unwrap();
         assert_eq!(
-            (c.time.to_string().as_str(), c.name.as_str(), c.team.as_str()),
+            (c.time.strftime("%Y-%m-%d %H:%M:%S").to_string().as_str(), c.name.as_str(), c.team.as_str()),
             ("2026-10-18 19:22:33", "B<o>b", "CT")
         );
         assert!(c.team_only);
@@ -13823,7 +13837,7 @@ mod tests {
 
     #[test]
     fn log_stamp_parse_and_strip() {
-        let at = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+        let at = |s: &str| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", s).unwrap();
         let line = r#"10/29/2026 - 09:19:46: "Bob<2><STEAM_1:0:1><CT>" say "hi""#;
         let rest = r#""Bob<2><STEAM_1:0:1><CT>" say "hi""#;
         let stamp = at("2026-10-29 09:19:46");

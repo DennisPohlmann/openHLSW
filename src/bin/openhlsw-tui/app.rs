@@ -1316,7 +1316,7 @@ impl App {
         let Some(chat) = serverlog::parse_chat_line(&line) else {
             return;
         };
-        let time = chat.time.format("%H:%M:%S").to_string();
+        let time = chat.time.strftime("%H:%M:%S").to_string();
         // Our own message is shown right away when sent; the log repeats it as "Console".
         if chat.name == "Console"
             && let Some(own) = r
@@ -1712,7 +1712,7 @@ impl App {
                 if let Some(s) = self.current_mut() {
                     s.rcon.chat_scroll = 0;
                     s.rcon.chat.push_back(ChatLine {
-                        time: chrono::Local::now().format("%H:%M:%S").to_string(),
+                        time: jiff::ZonedDateTime::now().strftime("%H:%M:%S").to_string(),
                         name: "Console".into(),
                         text: clean(&text),
                         own: true,

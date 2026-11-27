@@ -301,7 +301,7 @@ pub fn public_ip_lookup() -> std::io::Result<IpAddr> {
 #[derive(Clone)]
 pub struct ChatLine {
     /// From the server log's own stamp (when it has one), else when it arrived.
-    pub time: chrono::NaiveDateTime,
+    pub time: jiff::civil::DateTime,
     pub name: String,
     pub team: String,
     pub team_only: bool,
@@ -312,12 +312,12 @@ pub struct ChatLine {
 
 /// Splits a server log line into its date/time prefix and the rest:
 /// "[L ]MM/DD/YYYY - HH:MM:SS: rest". None if the line has no valid prefix.
-pub fn parse_log_stamp(line: &str) -> Option<(chrono::NaiveDateTime, &str)> {
+pub fn parse_log_stamp(line: &str) -> Option<(jiff::civil::DateTime, &str)> {
     let line = line.strip_prefix("L ").unwrap_or(line);
     // The prefix has a fixed width: "10/29/2026 - 09:19:46" is 21 bytes, then ": ".
     let stamp = line.get(..21)?;
     let rest = line.get(21..)?.strip_prefix(": ")?;
-    let time = chrono::NaiveDateTime::parse_from_str(stamp, "%m/%d/%Y - %H:%M:%S").ok()?;
+    let time = jiff::civil::DateTime::strptime("%m/%d/%Y - %H:%M:%S", stamp).ok()?;
     Some((time, rest))
 }
 
@@ -325,7 +325,7 @@ pub fn parse_log_stamp(line: &str) -> Option<(chrono::NaiveDateTime, &str)> {
 pub fn parse_chat_line(line: &str) -> Option<ChatLine> {
     let (time, rest) = match parse_log_stamp(line) {
         Some(stamped) => stamped,
-        None => (chrono::Local::now().naive_local(), line.split_once(": ")?.1),
+        None => (jiff::ZonedDateTime::now().datetime(), line.split_once(": ")?.1),
     };
     // HLDS logs `rcon say` as: Server say "text"
     if let Some(text) = rest.strip_prefix("Server say \"") {

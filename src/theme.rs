@@ -864,49 +864,94 @@ pub fn font_preview(
 /// White text with the coverage as alpha (tinted when drawn); `None` if the font has none of
 /// the letters.
 fn rasterize(data: &FontData, text: &str, em_px: f32) -> Option<egui::ColorImage> {
-    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
-    let font = FontRef::try_from_slice_and_index((*data.font).as_ref(), data.index).ok()?;
-    let units_per_em = font.units_per_em()?;
-    let scale = PxScale::from(em_px * font.height_unscaled() / units_per_em);
-    let scaled = font.as_scaled(scale);
-    if text.chars().all(|c| font.glyph_id(c).0 == 0) {
+    use skrifa::MetadataProvider as _;
+    use skrifa::instance::{LocationRef, Size};
+    use skrifa::outline::{DrawSettings, OutlinePen};
+    use vello_cpu::{color, kurbo};
+
+    /// Collects a glyph outline into a `kurbo` path at (`x`, `y`), Y pointing down.
+    struct Pen<'a> {
+        path: &'a mut kurbo::BezPath,
+        x: f64,
+        y: f64,
+    }
+    impl Pen<'_> {
+        fn p(&self, x: f32, y: f32) -> (f64, f64) {
+            (self.x + f64::from(x), self.y - f64::from(y))
+        }
+    }
+    impl OutlinePen for Pen<'_> {
+        fn move_to(&mut self, x: f32, y: f32) {
+            let p = self.p(x, y);
+            self.path.move_to(p);
+        }
+        fn line_to(&mut self, x: f32, y: f32) {
+            let p = self.p(x, y);
+            self.path.line_to(p);
+        }
+        fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+            let (c, p) = (self.p(cx0, cy0), self.p(x, y));
+            self.path.quad_to(c, p);
+        }
+        fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+            let (c0, c1, p) = (self.p(cx0, cy0), self.p(cx1, cy1), self.p(x, y));
+            self.path.curve_to(c0, c1, p);
+        }
+        fn close(&mut self) {
+            self.path.close_path();
+        }
+    }
+
+    let font = skrifa::FontRef::from_index((*data.font).as_ref(), data.index).ok()?;
+    let size = Size::new(em_px);
+    let location = LocationRef::default();
+    let charmap = font.charmap();
+    if text
+        .chars()
+        .all(|c| charmap.map(c).is_none_or(|g| g.to_u32() == 0))
+    {
         return None;
     }
-    let (ascent, descent) = (scaled.ascent(), scaled.descent());
-    let mut glyphs = Vec::new();
-    let mut x = 1.0;
-    let mut previous = None;
+    let metrics = font.metrics(size, location);
+    let glyph_metrics = font.glyph_metrics(size, location);
+    let outlines = font.outline_glyphs();
+    let (ascent, descent) = (metrics.ascent, metrics.descent);
+    let baseline = f64::from(ascent.ceil() + 1.0);
+    let mut path = kurbo::BezPath::new();
+    let mut x = 1.0f32;
     for c in text.chars() {
-        let id = font.glyph_id(c);
-        if let Some(p) = previous {
-            x += scaled.kern(p, id);
+        let id = charmap.map(c).unwrap_or_default();
+        if let Some(outline) = outlines.get(id) {
+            let mut pen = Pen {
+                path: &mut path,
+                x: f64::from(x),
+                y: baseline,
+            };
+            // A broken glyph only leaves a gap in the preview.
+            let _ = outline.draw(DrawSettings::unhinted(size, location), &mut pen);
         }
-        glyphs.push(id.with_scale_and_position(scale, point(x, ascent.ceil() + 1.0)));
-        x += scaled.h_advance(id);
-        previous = Some(id);
+        x += glyph_metrics.advance_width(id).unwrap_or(0.0);
     }
-    let (w, h) = (x.ceil() as usize + 2, (ascent.ceil() - descent.floor()) as usize + 2);
+    let (w, h) = (
+        x.ceil() as usize + 2,
+        (ascent.ceil() - descent.floor()) as usize + 2,
+    );
     if w > 4000 || h > 400 {
         return None;
     }
-    let mut alpha = vec![0u8; w * h];
-    for glyph in glyphs {
-        let Some(outline) = font.outline_glyph(glyph) else {
-            continue;
-        };
-        let bounds = outline.px_bounds();
-        outline.draw(|gx, gy, coverage| {
-            let px = bounds.min.x as i64 + i64::from(gx);
-            let py = bounds.min.y as i64 + i64::from(gy);
-            if (0..w as i64).contains(&px) && (0..h as i64).contains(&py) {
-                let a = &mut alpha[py as usize * w + px as usize];
-                *a = (*a).max((coverage.clamp(0.0, 1.0) * 255.0).round() as u8);
-            }
-        });
-    }
-    let pixels = alpha
-        .into_iter()
-        .map(egui::Color32::from_white_alpha)
+    let (w16, h16) = (w as u16, h as u16);
+    let mut ctx = vello_cpu::RenderContext::new(w16, h16);
+    ctx.set_paint(color::OpaqueColor::<color::Srgb>::WHITE);
+    ctx.fill_path(&path);
+    let mut pixmap = vello_cpu::Pixmap::new(w16, h16);
+    ctx.render(&mut pixmap, &mut vello_cpu::Resources::new());
+    // White, premultiplied: the alpha channel is the coverage.
+    let pixels = pixmap
+        .data_as_u8_slice()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|px| egui::Color32::from_white_alpha(px[3]))
         .collect();
     Some(egui::ColorImage::new([w, h], pixels))
 }
